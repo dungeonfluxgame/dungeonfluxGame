@@ -25,7 +25,7 @@ const PRIVATE_TAG: &str = "private";
 /// Who made the memory.
 const CREATED_BY: &str = "perceive";
 /// The most thoughts the next perception is reminded of.
-pub(super) const REMINDED_OF: usize = 3;
+pub(super) const REMINDED_OF: usize = 6;
 
 /// Gives each memory made in this process its own id.
 static NEXT_THOUGHT: AtomicU64 = AtomicU64::new(0);

@@ -31,6 +31,15 @@ pub enum SheetView {
 }
 
 impl SheetView {
+    /// The view's name in a log line.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Front => "front",
+            Self::ThreeQuarter => "three_quarter",
+            Self::FullLength => "full_length",
+        }
+    }
+
     const fn index(self) -> u32 {
         match self {
             Self::Front => 0,

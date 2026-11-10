@@ -364,17 +364,7 @@ fn rebuild_toolbar(document: &Document, page: &mut Page, app: &App) -> Result<()
     Ok(())
 }
 
-/// Whether the person asked for reduced motion. A scene then changes with a cut: a copy that is
-/// never shown would never finish an animation, and so would never be taken away.
-fn reduced_motion() -> Result<bool, JsValue> {
-    let query = web_sys::window()
-        .ok_or_else(|| JsValue::from_str("the page has no window"))?
-        .match_media("(prefers-reduced-motion: reduce)")?;
-    Ok(query.is_some_and(|query| query.matches()))
-}
-
-/// Rebuilds the devices, leaving the old ones with `leaving` unless the person asked for reduced
-/// motion. Returns the transition drawn.
+/// Rebuilds the devices, leaving the old ones with `leaving`. Returns the transition drawn.
 fn rebuild_devices(
     document: &Document,
     page: &mut Page,
@@ -382,7 +372,6 @@ fn rebuild_devices(
     leaving: Option<Transition>,
 ) -> Result<Option<Transition>, JsValue> {
     view::plate_fade::reset();
-    let leaving = if reduced_motion()? { None } else { leaving };
     let copy = leaving
         .map(|transition| leaving_copy(&page.devices, transition))
         .transpose()?;
@@ -411,9 +400,7 @@ fn redraw_parts(
             let built = build_part(document, part, fixture, app)?;
             match part {
                 // A new plate fades in over the old one (`view::plate_fade`).
-                Part::TvBackdrop => {
-                    view::plate_fade::swap(slot, built, app.controls.transition, reduced_motion()?)?
-                }
+                Part::TvBackdrop => view::plate_fade::swap(slot, built, app.controls.transition)?,
                 // A speaker's card or a close-up's title card that goes or is replaced fades out
                 // (`view::overlays`).
                 Part::TvPanels => fill(slot, view::overlays::carry_over(document, slot, built)?)?,

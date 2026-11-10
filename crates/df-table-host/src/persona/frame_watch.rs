@@ -68,7 +68,9 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 use super::converse::{Speaker, speakers_of};
-use super::declare::{DECLARE_PREFIX, NO_DUPLICATES, WatchDeclared, declared_scene, held_by};
+use super::declare::{
+    DECLARE_PREFIX, NO_DUPLICATES, WatchDeclared, declared_scene, held_by, plan_base,
+};
 use super::frame::{
     DeclaredTiming, FrameAsk, FrameConfig, FrameJudgement, FrameMoment, FrameReason, FrameReply,
     FrameRequest, FrameScheduleRequest, FrameTimingReply, FrameTimingRequest, PERSONA_FRAME,
@@ -76,9 +78,9 @@ use super::frame::{
 };
 use super::plate::{
     Captioned, InsertRequest, Painting, PlateFailure, RoomTurn, SharedScreen, Shown,
-    begin_declaration, claim_after_insert, fit_pictures, image_limits, inventory_sheets,
-    items_that_fit, make_frame, make_insert, plate_request, put_caption_back, put_title_back,
-    reference_sheet_name, show_with_cast, start_spinner,
+    begin_declaration, claim_after_insert, figures_in, fit_pictures, image_limits,
+    inventory_sheets, items_that_fit, make_frame, make_insert, plate_request, put_caption_back,
+    put_title_back, reference_sheet_name, show_with_cast, start_spinner,
 };
 use super::request::{BackfillRequest, Backfilled, CoverageRequest, Covered, PersonaReply};
 use super::routes::path as persona_path;
@@ -1001,13 +1003,28 @@ impl FrameWatch {
         let name = format!("{}-{number}", self.options.name);
         let waiting = begin_declaration(&self.screen, number, &name);
         let superseded = self.rooms_in_flight();
-        let base = (!self.newest_picture.is_empty()).then(|| self.newest_picture.clone());
+        // An edit keeps what the picture on screen shows: one that holds more figures than the
+        // scene's cast would carry the extra ones into the action, so it is painted anew from the
+        // place's words instead.
+        let on_screen = (!self.newest_picture.is_empty()).then(|| self.newest_picture.clone());
+        let figures = match &on_screen {
+            Some(picture) => figures_in(port, picture).await,
+            None => None,
+        };
+        let plan = plan_base(on_screen.is_some(), figures, self.characters.len());
+        let base = on_screen.filter(|_| plan.edit);
+        let scene_words = if plan.edit {
+            judgement.next_picture.clone()
+        } else {
+            let place = self.options.scene.as_deref().unwrap_or(&self.picture);
+            format!("{place} {}", judgement.next_picture)
+        };
         let style = BriefStyle::default();
         let prompt = room_prompt(
             &style,
             base.as_ref().map(|_| judgement.edit_rule.as_str()),
             &judgement.shot_look,
-            &judgement.next_picture,
+            &scene_words,
         );
         // The speaker's sheet comes first, so the backend's room for pictures never loses it.
         let mut characters = self.characters.clone();
@@ -1042,6 +1059,14 @@ impl FrameWatch {
                 || "painted anew".to_owned(),
                 |base| format!("editing {base}")
             )
+        ));
+        transcript.push(format!(
+            "  declared plate base={} reason={} ({} figure(s) in the picture on screen, {} in the \
+             cast)",
+            plan.way(),
+            plan.reason,
+            figures.map_or_else(|| "unread".to_owned(), |found| found.to_string()),
+            self.characters.len()
         ));
         if self.in_flight.is_empty() && self.every().is_zero() {
             match start_spinner(port).await {
@@ -1102,6 +1127,8 @@ impl FrameWatch {
                         superseded: superseded_count,
                         queue_wait_ms: saturating_millis(took.saturating_sub(made_for)),
                         made_ms: saturating_millis(made_for),
+                        base: plan.way().to_owned(),
+                        reason: plan.reason.to_owned(),
                     };
                     mark(
                         port,
@@ -1121,7 +1148,7 @@ impl FrameWatch {
             }
         });
         // The newest picture shows the declared action; the talk before it is behind it.
-        self.picture = judgement.next_picture;
+        self.picture = scene_words;
         let cleared = self.since.len();
         self.since.clear();
         for judging in &mut self.judging {

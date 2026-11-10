@@ -4,13 +4,14 @@
 use std::path::{Path, PathBuf};
 
 use df_content::world_bible::is_valid_id;
-use df_imagery::gallery::{GallerySpec, compose_gallery, gallery_grid};
+use df_imagery::gallery::{GalleryError, GallerySpec, GalleryTile, compose_gallery};
+use df_imagery::picture_check::measure_picture;
 use df_playground::kit::ledger::{Ledger, LedgerItem, LedgerKind};
 
 use super::limits::{DEFAULT_PAGE, MAXIMUM_PAGE};
 use super::request::{
     CaptureRequest, ComposeRequest, Deleted, GetQuery, History, HistoryEntry, HistoryQuery,
-    ListQuery, MemoryError, MemoryPage, OwnerList, ReferencesRequest,
+    InspectQuery, Inspected, ListQuery, MemoryError, MemoryPage, OwnerList, ReferencesRequest,
 };
 use super::store::{GallerySidecar, read_book, read_index, transact, write_sidecar};
 use super::{
@@ -224,15 +225,28 @@ pub(super) struct Prepared {
     pub sheet: Vec<u8>,
 }
 
-fn spec_of(request: &ComposeRequest) -> GallerySpec {
+/// The layout a compose asks for: tiles in the shape of the pictures unless both sides of a tile
+/// are given (one side alone is an invalid layout).
+fn spec_of(request: &ComposeRequest) -> Result<GallerySpec, MemoryError> {
     let default = GallerySpec::default();
-    GallerySpec {
+    let tile = match (request.tile_width_px, request.tile_height_px) {
+        (None, None) => default.tile,
+        (Some(width_px), Some(height_px)) => GalleryTile::Fixed {
+            width_px,
+            height_px,
+        },
+        _ => {
+            return Err(MemoryError::Gallery {
+                cause: GalleryError::InvalidSpec,
+            });
+        }
+    };
+    Ok(GallerySpec {
         columns: request.columns,
-        tile_width_px: request.tile_width_px.unwrap_or(default.tile_width_px),
-        tile_height_px: request.tile_height_px.unwrap_or(default.tile_height_px),
+        tile,
         gap_px: request.gap_px.unwrap_or(default.gap_px),
         background: request.background.unwrap_or(default.background),
-    }
+    })
 }
 
 /// Tiles the primary pictures of the selected memories, in `seq` order, into one sheet, and names
@@ -258,9 +272,7 @@ pub(super) fn prepare_compose(
     if shown.is_empty() {
         return Err(MemoryError::NothingToCompose);
     }
-    let spec = spec_of(request);
-    let (columns, rows) =
-        gallery_grid(shown.len(), &spec).map_err(|cause| MemoryError::Gallery { cause })?;
+    let spec = spec_of(request)?;
     let mut bytes: Vec<Vec<u8>> = Vec::with_capacity(shown.len());
     for (_, picture) in &shown {
         let read = std::fs::read(paths.media.join(picture)).map_err(|error| {
@@ -271,7 +283,7 @@ pub(super) fn prepare_compose(
         })?;
         bytes.push(read);
     }
-    let sheet = compose_gallery(&bytes, &spec).map_err(|cause| MemoryError::Gallery { cause })?;
+    let gallery = compose_gallery(&bytes, &spec).map_err(|cause| MemoryError::Gallery { cause })?;
     let name = match &request.name {
         Some(name) => name.clone(),
         None => {
@@ -294,9 +306,9 @@ pub(super) fn prepare_compose(
             .iter()
             .map(|(_, picture)| (*picture).to_owned())
             .collect(),
-        columns,
-        rows,
-        sheet,
+        columns: gallery.layout.columns,
+        rows: gallery.layout.rows,
+        sheet: gallery.png,
     })
 }
 
@@ -315,6 +327,28 @@ pub(super) fn keep_members(directory: &Path, prepared: &Prepared) -> Result<(), 
             rows: prepared.rows,
         },
     )
+}
+
+/// Whether the picture `query.picture` of the media library is near blank (see
+/// `df_imagery::picture_check`), with what was measured.
+pub(super) fn inspect(media: &Path, query: &InspectQuery) -> Result<Inspected, MemoryError> {
+    check_picture_name(&query.picture)?;
+    check_in_library(media, std::slice::from_ref(&query.picture))?;
+    let bytes = std::fs::read(media.join(&query.picture)).map_err(|error| {
+        MemoryError::PictureUnreadable {
+            picture: query.picture.clone(),
+            cause: IoCause::from_kind(error.kind()),
+        }
+    })?;
+    let stats = measure_picture(&bytes).map_err(|_| MemoryError::PictureUndecodable {
+        picture: query.picture.clone(),
+    })?;
+    Ok(Inspected {
+        picture: query.picture.clone(),
+        blank: stats.is_near_blank(),
+        luminance_deviation: stats.luminance_deviation,
+        edge_energy: stats.edge_energy,
+    })
 }
 
 /// The memory lines the host's log still holds (`WORLD memory_put`, `memory_deleted` and

@@ -925,69 +925,6 @@ async fn a_new_thing_the_character_notices_becomes_a_thing_of_the_place_and_is_o
 }
 
 #[tokio::test]
-async fn a_new_thing_that_is_taken_or_not_usable_is_refused_and_adds_nothing() {
-    let bad_thing = |cause: PerceiveCause| matches!(cause, PerceiveCause::BadNewThing { .. });
-    // An id the place already has, a word that is no id, and an id twice in one answer.
-    assert!(bad_thing(
-        thing_cause_of(wall_answer("milestone"), &[CHARACTER]).await
-    ));
-    assert!(bad_thing(
-        thing_cause_of(wall_answer("Not An Id"), &[CHARACTER]).await
-    ));
-    let mut twice = wall_answer("wall-a");
-    twice["sees"] = json!([
-        {"what": "a wall", "region": null, "item": null, "salience": 80},
-        {"what": "a gate", "region": null, "item": null, "salience": 70}
-    ]);
-    twice["new_things"] = json!([
-        {"see": 0, "id": "same", "name": "wall", "look": "Stone.", "attended": false},
-        {"see": 1, "id": "same", "name": "gate", "look": "Wood.", "attended": false}
-    ]);
-    assert!(bad_thing(thing_cause_of(twice, &[CHARACTER]).await));
-    // A sees entry that is not there, a blank look, and attention that names something else.
-    let mut missing = wall_answer("wall-a");
-    missing["new_things"][0]["see"] = json!(4);
-    assert!(bad_thing(thing_cause_of(missing, &[CHARACTER]).await));
-    let mut blank = wall_answer("wall-a");
-    blank["new_things"][0]["look"] = json!("  ");
-    assert!(bad_thing(thing_cause_of(blank, &[CHARACTER]).await));
-    let mut busy = wall_answer("wall-a");
-    busy["attention"] = json!({"region": region_of(CHARACTER), "item": null});
-    assert!(bad_thing(thing_cause_of(busy, &[CHARACTER]).await));
-    // An unknown region is refused as before, whatever else the answer holds.
-    let mut unknown = wall_answer("wall-a");
-    unknown["sees"][0]["region"] = json!("rffffffff");
-    assert_eq!(
-        thing_cause_of(unknown, &[CHARACTER]).await,
-        PerceiveCause::UnknownRegion {
-            id: "rffffffff".to_owned()
-        }
-    );
-    // Nothing was added by a refused answer.
-    let host = host_of(
-        &[CHARACTER],
-        vec![wall_answer("milestone"), wall_answer("milestone")],
-    )
-    .await;
-    designed_road(&host);
-    refused(perceive(&host, json!({"who": CHARACTER})).await);
-    assert_eq!(ids_here(&host), ["milestone"]);
-    assert!(host.lines_starting_with("WORLD thing_added").is_empty());
-}
-
-#[tokio::test]
-async fn a_person_is_never_offered_as_a_thing() {
-    // A sees entry with a region is a person of the scan; it cannot become a thing.
-    let mut person = wall_answer("wren-thing");
-    person["sees"][0]["region"] = json!(region_of("wren"));
-    person["new_things"][0]["attended"] = json!(false);
-    assert_eq!(
-        thing_cause_of(person, &[CHARACTER, "wren"]).await,
-        PerceiveCause::NewThingForPerson { see: 0 }
-    );
-}
-
-#[tokio::test]
 async fn a_place_that_cannot_take_things_is_left_alone_and_the_proposal_is_reported_unadded() {
     // The active place is one of the bible's: the host never writes it.
     let host = host_of(&[CHARACTER], vec![wall_answer("old-wall")]).await;
@@ -1038,4 +975,259 @@ async fn the_world_refuses_a_thing_twice_and_adds_all_or_none() {
             .is_err()
     );
     assert_eq!(ids_here(&host), ["milestone", "wall"]);
+}
+
+#[tokio::test]
+async fn an_entry_may_name_the_new_thing_proposed_for_it_as_its_item_and_its_attention() {
+    // The natural answer: the entry names the thing it proposes, and attention is on it.
+    let mut said = wall_answer("old-wall");
+    said["sees"][0]["item"] = json!("old-wall");
+    said["attention"] = json!({"region": null, "item": "old-wall"});
+    said["new_things"][0]["attended"] = json!(false);
+    let host = host_of(&[CHARACTER], vec![said]).await;
+    designed_road(&host);
+    let seen = done(perceive(&host, json!({"who": CHARACTER})).await);
+    assert_eq!(host.calls(), 1, "no retry");
+    assert!(seen.new_things[0].added);
+    assert_eq!(seen.sees[0].item.as_deref(), Some("old-wall"));
+    assert_eq!(
+        seen.attention,
+        Attended::Item {
+            id: "old-wall".to_owned()
+        }
+    );
+    assert_eq!(ids_here(&host), ["milestone", "old-wall"]);
+}
+
+#[tokio::test]
+async fn an_entry_that_names_the_place_thing_it_proposes_again_adds_nothing_and_is_not_refused() {
+    // The model names the existing handcart and proposes it too: it is already there.
+    let mut said = wall_answer("milestone");
+    said["sees"][0]["item"] = json!("milestone");
+    said["new_things"][0]["attended"] = json!(false);
+    let host = host_of(&[CHARACTER], vec![said]).await;
+    designed_road(&host);
+    let seen = done(perceive(&host, json!({"who": CHARACTER})).await);
+    assert_eq!(host.calls(), 1, "no retry");
+    assert!(seen.new_things.is_empty());
+    assert_eq!(seen.sees[0].item.as_deref(), Some("milestone"));
+    assert_eq!(ids_here(&host), ["milestone"]);
+    assert!(host.lines_starting_with("WORLD thing_added").is_empty());
+}
+
+#[tokio::test]
+async fn a_thing_that_could_not_be_added_leaves_no_item_the_place_does_not_have() {
+    let mut said = wall_answer("old-wall");
+    said["sees"][0]["item"] = json!("old-wall");
+    said["attention"] = json!({"region": null, "item": "old-wall"});
+    said["new_things"][0]["attended"] = json!(false);
+    let host = host_of(&[CHARACTER], vec![said]).await;
+    // No active place: nothing can be added.
+    let seen = done(perceive(&host, json!({"who": CHARACTER})).await);
+    assert!(!seen.new_things[0].added);
+    assert_eq!(seen.sees[0].item, None);
+    assert_eq!(seen.attention, Attended::None);
+}
+
+#[tokio::test]
+async fn the_facts_carry_the_last_six_thoughts_and_the_instruction_asks_for_what_is_new() {
+    let answers: Vec<Value> = (0..8)
+        .map(|number| answer(CHARACTER, &format!("Thought number {number}.")))
+        .collect();
+    let host = host_of(&[CHARACTER], answers).await;
+    for _ in 0..8 {
+        done(perceive(&host, json!({"who": CHARACTER})).await);
+    }
+    let earlier = host.facts_of(7)["now"]["earlier_thoughts"].clone();
+    let earlier: Vec<&str> = earlier
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|thought| thought.as_str().unwrap().split('\n').next().unwrap())
+        .collect();
+    assert_eq!(
+        earlier,
+        [
+            "Thought number 1.",
+            "Thought number 2.",
+            "Thought number 3.",
+            "Thought number 4.",
+            "Thought number 5.",
+            "Thought number 6."
+        ]
+    );
+    let instruction = host.instructions_of(7);
+    assert!(
+        instruction.contains(
+            "say what is NEW in this picture compared with them; never reuse their wording, \
+             their opening words or their sentence shape, and begin differently each time"
+        ),
+        "{instruction}"
+    );
+}
+
+/// Runs `said` in a host with a designed road and answers what the perception came to.
+async fn perceived_with(cast: &[&str], said: Value) -> (ScriptedHost, Perceived) {
+    let host = host_of(cast, vec![said]).await;
+    designed_road(&host);
+    let seen = done(perceive(&host, json!({"who": CHARACTER})).await);
+    assert_eq!(host.calls(), 1, "a bad proposal costs no retry");
+    (host, seen)
+}
+
+#[tokio::test]
+async fn a_proposal_for_a_person_is_dropped_and_the_rest_of_the_answer_is_kept() {
+    // The sees entry has a region, so it is a person; the sight and thought stay.
+    let mut said = wall_answer("wren-thing");
+    said["sees"][0]["region"] = json!(region_of("wren"));
+    said["sees"][0]["item"] = json!("wren-thing");
+    said["attention"] = json!({"region": null, "item": "wren-thing"});
+    said["new_things"][0]["attended"] = json!(false);
+    let (host, seen) = perceived_with(&[CHARACTER, "wren"], said).await;
+    assert_eq!(seen.thinking_about, "That wall wants painting.");
+    assert_eq!(seen.sees.len(), 1);
+    assert_eq!(seen.sees[0].region, Some(region_of("wren")));
+    // The provisional item and attention that pointed at the dropped thing are cleared.
+    assert_eq!(seen.sees[0].item, None);
+    assert_eq!(seen.attention, Attended::None);
+    assert_eq!(seen.new_things.len(), 1);
+    assert!(!seen.new_things[0].added);
+    let why = seen.new_things[0].why_not.as_deref().unwrap();
+    assert!(
+        why.contains("is a person") && why.contains("remove its new_things entry"),
+        "{why}"
+    );
+    assert_eq!(ids_here(&host), ["milestone"]);
+    assert_eq!(
+        host.lines_starting_with("PERSONA thing_unadded"),
+        ["PERSONA thing_unadded who=innkeeper error=new_thing_for_person"]
+    );
+    assert!(seen.thought.is_some());
+}
+
+#[tokio::test]
+async fn a_bad_proposal_is_dropped_with_what_to_change_and_the_answer_is_kept() {
+    let case = |edit: &dyn Fn(&mut Value)| {
+        let mut said = wall_answer("wall-a");
+        edit(&mut said);
+        said
+    };
+    // (the answer, the key it is left out for, words its reason holds)
+    let cases = [
+        (
+            case(&|said| said["new_things"][0]["id"] = json!("milestone")),
+            "bad_new_thing",
+            "choose a different id",
+        ),
+        (
+            case(&|said| said["new_things"][0]["id"] = json!("Not An Id")),
+            "bad_new_thing",
+            "is not an id",
+        ),
+        (
+            case(&|said| said["sees"][0]["item"] = json!("milestone")),
+            "bad_new_thing",
+            "set the sees entry's item to null",
+        ),
+        (
+            case(&|said| said["new_things"][0]["see"] = json!(4)),
+            "bad_new_thing",
+            "which is not there",
+        ),
+        (
+            case(&|said| said["new_things"][0]["look"] = json!("  ")),
+            "bad_new_thing",
+            "needs a name and a look",
+        ),
+        (
+            case(&|said| {
+                said["attention"] = json!({"region": region_of(CHARACTER), "item": null});
+            }),
+            "bad_new_thing",
+            "only one new thing may be attended to",
+        ),
+    ];
+    for (said, key, words) in cases {
+        let (host, seen) = perceived_with(&[CHARACTER], said).await;
+        assert_eq!(seen.thinking_about, "That wall wants painting.");
+        assert_eq!(seen.sees.len(), 1);
+        assert!(!seen.new_things[0].added);
+        let why = seen.new_things[0].why_not.as_deref().unwrap();
+        assert!(why.contains(words), "{words} in {why}");
+        assert_eq!(
+            host.lines_starting_with("PERSONA thing_unadded"),
+            [format!("PERSONA thing_unadded who=innkeeper error={key}")]
+        );
+        assert_eq!(ids_here(&host), ["milestone"], "{words}");
+        assert!(host.lines_starting_with("WORLD thing_added").is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_good_proposal_next_to_a_bad_one_is_still_added() {
+    let mut said = wall_answer("old-wall");
+    said["sees"] = json!([
+        {"what": "an old pale wall", "region": null, "item": null, "salience": 80},
+        {"what": "a gate", "region": null, "item": null, "salience": 60}
+    ]);
+    said["new_things"] = json!([
+        {"see": 0, "id": "old-wall", "name": "old wall", "look": "Pale stone.", "attended": true},
+        {"see": 1, "id": "milestone", "name": "gate", "look": "Oak.", "attended": false}
+    ]);
+    let (host, seen) = perceived_with(&[CHARACTER], said).await;
+    assert_eq!(seen.new_things.len(), 2);
+    let bad = seen
+        .new_things
+        .iter()
+        .find(|thing| thing.id == "milestone")
+        .unwrap();
+    let good = seen
+        .new_things
+        .iter()
+        .find(|thing| thing.id == "old-wall")
+        .unwrap();
+    assert!(good.added && !bad.added);
+    assert_eq!(seen.sees[0].item.as_deref(), Some("old-wall"));
+    assert_eq!(seen.sees[1].item, None);
+    assert_eq!(
+        seen.attention,
+        Attended::Item {
+            id: "old-wall".to_owned()
+        }
+    );
+    assert_eq!(ids_here(&host), ["milestone", "old-wall"]);
+    assert_eq!(host.lines_starting_with("PERSONA thing_unadded").len(), 1);
+    assert_eq!(host.lines_starting_with("WORLD thing_added").len(), 1);
+}
+
+#[tokio::test]
+async fn a_bad_core_still_asks_again_with_the_reason_whatever_the_proposals_hold() {
+    // An unknown item in sees is the core of the answer: refused, asked once more with why.
+    let mut core = wall_answer("old-wall");
+    core["sees"][0]["item"] = json!("lute");
+    let host = host_of(&[CHARACTER], vec![core, wall_answer("old-wall")]).await;
+    designed_road(&host);
+    let seen = done(perceive(&host, json!({"who": CHARACTER})).await);
+    assert_eq!(host.calls(), 2);
+    let reason = host.facts_of(1)["now"]["retry_reason"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(reason.contains("lute"), "{reason}");
+    assert!(seen.new_things[0].added);
+    // And if it stays bad, the whole answer is refused and nothing is added.
+    let mut stays = wall_answer("old-wall");
+    stays["sees"][0]["region"] = json!("rffffffff");
+    assert_eq!(
+        thing_cause_of(stays, &[CHARACTER]).await,
+        PerceiveCause::UnknownRegion {
+            id: "rffffffff".to_owned()
+        }
+    );
+    let mut empty = wall_answer("old-wall");
+    empty["thinking_about"] = json!(" ");
+    assert_eq!(
+        thing_cause_of(empty, &[CHARACTER]).await,
+        PerceiveCause::EmptyThought
+    );
 }

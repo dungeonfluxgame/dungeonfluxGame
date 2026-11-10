@@ -874,3 +874,33 @@ async fn an_edit_is_shown_the_front_view_of_a_multi_view_sheet_and_a_fresh_pictu
         ["IMAGEGEN sheet_view job=1 name=hall picture=ref-wide.png view=front"]
     );
 }
+
+#[tokio::test]
+async fn an_emergency_picture_painted_anew_is_shown_the_full_length_view_of_a_sheet() {
+    use super::model::Priority;
+    let rig = Rig::new().await;
+    std::fs::create_dir_all(rig.media()).expect("makes the library");
+    std::fs::write(
+        rig.media().join("ref-wide.png"),
+        flat_png(9, 3, [200, 10, 10]),
+    )
+    .expect("writes");
+    let backend = FakeBackend::new(Script::Picture(picture()));
+    let generator = rig.generator(Arc::clone(&backend));
+    let people = ["ref-wide.png".to_owned()];
+    let request = request("door")
+        .following(&people)
+        .expect("a request")
+        .prioritised(Priority::Emergency);
+    rig.run_to_end(&generator, request).await.expect("stored");
+    assert_eq!(size_of_png(&backend.asked()[0].0.references[0]), (3, 3));
+    let views: Vec<String> = rig
+        .lines()
+        .into_iter()
+        .filter(|line| line.starts_with("IMAGEGEN sheet_view "))
+        .collect();
+    assert_eq!(
+        views,
+        ["IMAGEGEN sheet_view job=1 name=door picture=ref-wide.png view=full_length"]
+    );
+}

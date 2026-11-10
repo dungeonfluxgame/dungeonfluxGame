@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::memory::cli::{MemoryCommand, parse as parse_memory};
 use super::memory::request::{
-    Composed, Deleted, History, MemoryError, MemoryPage, MemoryReply, OwnerList,
+    Composed, Deleted, History, Inspected, MemoryError, MemoryPage, MemoryReply, OwnerList,
 };
 use super::memory::routes::path;
 use super::memory::{
@@ -48,11 +48,16 @@ fn chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
 
 /// A real PNG of one colour, stored without compression, so a test needs no encoder.
 fn solid_png(width: u32, height: u32, color: [u8; 3]) -> Vec<u8> {
+    png_from(width, height, |_, _| color)
+}
+
+/// A real PNG whose pixel at (x, y) is `pixel(x, y)`, stored without compression.
+fn png_from(width: u32, height: u32, pixel: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
     let mut raw = Vec::new();
-    for _ in 0..height {
+    for y in 0..height {
         raw.extend_from_slice(&[0]);
-        for _ in 0..width {
-            raw.extend_from_slice(&color);
+        for x in 0..width {
+            raw.extend_from_slice(&pixel(x, y));
         }
     }
     let mut zlib = vec![0x78, 0x01];
@@ -84,6 +89,12 @@ fn picture_in(host: &Running, name: &str, color: [u8; 3]) {
     let directory = host.playground_path("assets/media");
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::write(directory.join(name), solid_png(64, 36, color)).unwrap();
+}
+
+fn picture_sized(host: &Running, name: &str, size: (u32, u32), color: [u8; 3]) {
+    let directory = host.playground_path("assets/media");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join(name), solid_png(size.0, size.1, color)).unwrap();
 }
 
 fn draft(owner: &str, id: &str, kind: &str, pictures: &[&str]) -> MemoryDraft {
@@ -671,6 +682,11 @@ async fn the_stored_shape_is_a_book_for_each_owner_an_index_and_a_sidecar_for_ea
 async fn every_route_refuses_with_a_typed_error_and_changes_nothing() {
     let host = host().await;
     picture_in(&host, "a.png", [10, 10, 10]);
+    std::fs::write(
+        host.playground_path("assets/media/bad.png"),
+        b"not a picture",
+    )
+    .unwrap();
     capture(&host, "danny", "scene", "a.png", "first").await;
     let root = host.playground_path("assets/world/memory");
     let before = snapshot(&root);
@@ -817,6 +833,19 @@ async fn every_route_refuses_with_a_typed_error_and_changes_nothing() {
 
     let queries = [
         (
+            format!("{}?picture=gone.png", path::MEMORY_INSPECT),
+            "unknown_picture",
+        ),
+        (
+            format!("{}?picture=a.txt", path::MEMORY_INSPECT),
+            "invalid_picture",
+        ),
+        (
+            format!("{}?picture=bad.png", path::MEMORY_INSPECT),
+            "picture_undecodable",
+        ),
+        (path::MEMORY_INSPECT.to_owned(), "invalid_query"),
+        (
             format!("{}?owner=danny&id=ghost", path::MEMORY_GET),
             "unknown_memory",
         ),
@@ -887,7 +916,7 @@ async fn every_route_refuses_with_a_typed_error_and_changes_nothing() {
         .count();
     assert_eq!(
         refused,
-        15 + 6 + 4 + 6 + 8 + 14,
+        15 + 6 + 4 + 6 + 8 + 14 + 4,
         "every refusal is one line"
     );
 }
@@ -987,6 +1016,60 @@ async fn references_answer_the_pictures_for_a_plate_within_the_budget() {
 fn png_size(bytes: &[u8]) -> (u32, u32) {
     let read = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
     (read(16), read(20))
+}
+
+#[tokio::test]
+async fn an_inspect_tells_a_blank_board_from_a_painting() {
+    let host = host().await;
+    let directory = host.playground_path("assets/media");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("blank.png"),
+        solid_png(160, 90, [232, 224, 196]),
+    )
+    .unwrap();
+    let painted = png_from(160, 90, |x, y| {
+        if y < 45 {
+            [150, 170, 200]
+        } else if x < 80 {
+            [90, 80, 50]
+        } else {
+            [60, 90, 40]
+        }
+    });
+    std::fs::write(directory.join("painted.png"), painted).unwrap();
+    let blank: Inspected = done(
+        read(
+            &host,
+            &format!("{}?picture=blank.png", path::MEMORY_INSPECT),
+        )
+        .await,
+    );
+    assert!(blank.blank, "{blank:?}");
+    let painted: Inspected = done(
+        read(
+            &host,
+            &format!("{}?picture=painted.png", path::MEMORY_INSPECT),
+        )
+        .await,
+    );
+    assert!(!painted.blank, "{painted:?}");
+    assert!(painted.luminance_deviation > blank.luminance_deviation);
+}
+
+#[tokio::test]
+async fn compose_follows_the_shape_of_square_paintings() {
+    let host = host().await;
+    for number in 1..=20_u8 {
+        let name = format!("sq-{number:02}.png");
+        picture_sized(&host, &name, (50, 50), [number * 10, 90, 90]);
+        capture(&host, "danny", "artwork", &name, "square").await;
+    }
+    let composed: Composed =
+        done(post(&host, path::MEMORY_COMPOSE, json!({"owner": "danny"})).await);
+    assert_eq!((composed.columns, composed.rows), (5, 4));
+    let sheet = std::fs::read(host.playground_path("assets/media/gallery-danny-1.png")).unwrap();
+    assert_eq!(png_size(&sheet), (5 * 448 + 6 * 12, 4 * 448 + 5 * 12));
 }
 
 #[tokio::test]
@@ -1325,6 +1408,12 @@ fn the_verbs_read_their_words() {
         other => panic!("{other:?}"),
     }
     assert_eq!(
+        parse("inspect plate.png").unwrap(),
+        MemoryCommand::Inspect {
+            picture: "plate.png".into()
+        }
+    );
+    assert_eq!(
         parse("history danny limit=3").unwrap(),
         MemoryCommand::History {
             owner: Some("danny".into()),
@@ -1424,6 +1513,7 @@ fn every_error_has_its_own_key_a_sentence_and_a_status() {
             picture: text(),
             cause: IoCause::Other,
         },
+        MemoryError::PictureUndecodable { picture: text() },
         MemoryError::PictureNotStored { detail: text() },
         MemoryError::StoreUnreadable {
             cause: IoCause::Other,

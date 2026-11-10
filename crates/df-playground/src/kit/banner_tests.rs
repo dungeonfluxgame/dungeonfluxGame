@@ -2,7 +2,7 @@
 
 use crate::home::glyph::HomeIcon;
 use crate::kit::PanelTone;
-use crate::kit::banner::{Banner, BannerPlace};
+use crate::kit::banner::{Banner, BannerPlace, TURN_MS, turn_delay_ms};
 use crate::kit::kit_tests::assert_css_words_are_serde_names;
 use crate::lobby::model::SceneTitle;
 use crate::overlay::Glyph;
@@ -41,4 +41,19 @@ fn a_blank_title_is_not_drawn_and_the_keys_are_serde_names() {
         &[BannerPlace::Header, BannerPlace::TopCenter],
         BannerPlace::key,
     );
+}
+
+#[test]
+fn rings_drawn_at_different_times_stay_at_the_angle_the_page_clock_gives() {
+    let angle_at = |now: u64, drawn_at: u64| (now - drawn_at + drawn_at % TURN_MS) % TURN_MS;
+    assert_eq!(turn_delay_ms(1_700), "-500ms");
+    assert_eq!(angle_at(9_999, 1_700), angle_at(9_999, 6_700));
+    assert_eq!(angle_at(9_999, 1_700), 9_999 % TURN_MS);
+}
+
+#[test]
+fn the_turn_time_is_the_one_in_the_style_sheet() {
+    assert_eq!(TURN_MS, 1_200);
+    let css = include_str!("../../../../assets/playground/kit.css");
+    assert!(css.contains("animation: kit-turn 1.2s linear infinite;"));
 }

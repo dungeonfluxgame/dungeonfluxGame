@@ -41,7 +41,10 @@
 #
 # Free roam (`@roam <id>`): one character and nobody answering. `@inventory <items.json>` sets what
 # they hold at the start (`world inventory set <id> character <items.json>`); `@move <way>` lines are the moves in order and
-# `@way <way> <situation>` says what each kind of move is. Before each move the character says
+# `@way <way> <situation>` says what each kind of move is; `@way_arrival <way> <situation>` says what
+# they do on arriving by that kind of move, in place of the declaration and the study painting (a
+# trade: `[trade NN] <line>`, judged against what they hold, then `gained: ..` or `no gain recorded`).
+# Other kinds of move are as described below. Before each move the character says
 # where they go next toward `@roam_goal` (`move act ... plate=NAME`: Jev reads the move, the place
 # is designed and painted, and it becomes the active place with the things in sight there); then a
 # frame watch of the new plate starts and they say one line toward `@roam_look` (`persona say`),
@@ -83,7 +86,10 @@
 # board, pigments, oil and rags are used up) used up the inventory item `@roam_art_board`; if it
 # did not, the log says `not painted` and why. The move's plate is edited into a study of the
 # place (`@roam_art_look` is its look statement and `{thing}` in `@roam_art_title` the thing
-# studied, the board item's reference sheet is followed too), stored as `item-<owner>-<@roam_art_item>_NN.png`, kept as
+# studied; the plate is its only reference, the board is described in words), stored as
+# `item-<owner>-<@roam_art_item>_NN.png`, checked for blankness (`world memory inspect`; a blank
+# study is made once more with `@roam_art_retry` added, and if still blank is removed and the log
+# says `study blank, not stored`; the board is used up either way), kept as
 # a memory of the art kind linked to its item and place, and added to what they hold as a kept item
 # `<@roam_art_item>_NN`, `[memory NN] painted ..`. `@roam_show <situation>` (last in the file) ends
 # the day: a move to where the work is shown, every memory of the art kind composed into one gallery
@@ -121,6 +127,7 @@ ROAM_GOAL=""
 ROAM_LOOK=""
 ROAM_PAINT=""
 ROAM_PAINTED=""
+ART_RETRY=""
 ROAM_DECLARE=""
 ROAM_DECLARE_HOLD=""
 SCENE_KIND=""
@@ -135,7 +142,7 @@ ROAM_SHOW_SAY=""
 ROAM_PERCEIVE=""
 MIND=""
 MOVES=()
-declare -A PLACE_PLATE PLACE_KEEPER PLACE_KEEPER_SITUATION PLACE_SITUATION PLACE_SCENE WAY
+declare -A PLACE_PLATE PLACE_KEEPER PLACE_KEEPER_SITUATION PLACE_SITUATION PLACE_SCENE WAY ARRIVAL
 while IFS= read -r setting; do
   value=${setting#* }
   case "$setting" in
@@ -160,6 +167,7 @@ while IFS= read -r setting; do
     '@roam_look '*) ROAM_LOOK=$value ;;
     '@roam_paint '*) ROAM_PAINT=$value ;;
     '@roam_painted '*) ROAM_PAINTED=$value ;;
+    '@roam_art_retry '*) ART_RETRY=$value ;;
     '@roam_declare '*) ROAM_DECLARE=$value ;;
     '@roam_declare_hold '*) ROAM_DECLARE_HOLD=$value ;;
     '@roam_perceive '*) ROAM_PERCEIVE=$value ;;
@@ -173,6 +181,7 @@ while IFS= read -r setting; do
     '@roam_show_look '*) ROAM_SHOW_LOOK=$value ;;
     '@roam_show_say '*) ROAM_SHOW_SAY=$value ;;
     '@way '*) WAY[${value%% *}]=${value#* } ;;
+    '@way_arrival '*) ARRIVAL[${value%% *}]=${value#* } ;;
     '@move '*) MOVES+=("$value") ;;
   esac
 done < <(grep '^@' "$BEATS")
@@ -811,14 +820,14 @@ item_count() {
 # per-line judge reads it against what they really hold). The study is made only when that used up
 # the item of `@roam_art_board` (its count is below $6, what they held before the paint lines), so
 # the board becomes the painting; otherwise the log says why. The move's plate is then edited into
-# the study (after the board's sheet when the library holds it), stored as
+# the study (that plate is its only reference), stored as
 # `item-<owner>-<item>.png`, kept as a memory of kind `@roam_art_kind` linked to its item and place,
 # and added to what they hold as a kept item.
 # Arguments: move number, plate, place id, thing name, thing look, the board count before, place name,
 # the line said before.
 roam_paint_study() {
   [ -z "$ART_KIND" ] && return
-  local number=$1 id file prompt title board made stored kept done_line done_out now
+  local number=$1 id file prompt title request try seen made stored kept done_line done_out now
   if [ -n "$ROAM_PAINTED" ]; then
     done_out=$(timeout $HUNG $D dev --port $P persona say "$ROAM" speak=true \
       "recent=$ROAM: $8" "intent=$ROAM_PAINTED" "You are at $7.$MIND" 2>&1)
@@ -836,23 +845,40 @@ roam_paint_study() {
   file="item-$ROAM-$id"
   title=${ART_TITLE//\{thing\}/$4}
   prompt="$ART_LOOK The subject of the study: $5"
-  board=""
-  if [ -n "$ART_BOARD" ] && library_holds "item-$ROAM-$ART_BOARD.png"; then
-    board="item-$ROAM-$ART_BOARD.png"
-  fi
-  made=$(timeout $HUNG $D dev --port $P media generate "$prompt" "as=$file" purpose=plate \
-    "base=$2.png" ${board:+"refs=$board"} wait=true look=none 2>&1)
-  stored=$(stored_file "$made")
-  if [ -z "$stored" ]; then
-    printf '[memory %02d] not painted: %s\n' "$number" "$(printf '%s\n' "$made" | head -1)"
-    return
-  fi
+  # The plate is the reference for the place; the board is only described in words (a board's sheet
+  # as a reference made the model paint just the board). A study the host finds near blank is made
+  # once more with `@roam_art_retry` added to the request, and kept out of the memories if still blank.
+  request=$prompt
+  try=1
+  while :; do
+    made=$(timeout $HUNG $D dev --port $P media generate "$request" "as=$file" purpose=plate \
+      "base=$2.png" wait=true look=none 2>&1)
+    stored=$(stored_file "$made")
+    if [ -z "$stored" ]; then
+      printf '[memory %02d] not painted: %s\n' "$number" "$(printf '%s\n' "$made" | head -1)"
+      return
+    fi
+    seen=$($D dev --port $P world memory inspect "$stored" 2>&1 | head -1)
+    case "$seen" in
+      'inspect: '*) ;;
+      *) printf '[memory %02d] study not checked for blankness: %s\n' "$number" "$seen" ;;
+    esac
+    [ "$(field_of "$seen" blank)" = true ] || break
+    if [ "$try" -ge 2 ]; then
+      printf '[memory %02d] study blank, not stored (%s)\n' "$number" "$seen"
+      $D dev --port $P media remove "$stored" >/dev/null 2>&1
+      return
+    fi
+    printf '[memory %02d] study blank (%s), made once more\n' "$number" "$seen"
+    request="$prompt $ART_RETRY"
+    try=2
+  done
   kept=$($D dev --port $P world memory capture "$ROAM" "$ART_KIND" "$stored" "$title" "id=$id" \
     "place=$3" "description=$prompt" "link=item:$id" "link=place:$3" by=runner 2>&1 | head -1)
   case "$kept" in
     'ok memory='*)
       printf '[memory %02d] painted %s seq=%s picture=%s after=%s plate=%s (%s)\n' "$number" \
-        "$(field_of "$kept" memory)" "$(field_of "$kept" seq)" "$stored" "${board:--}" "$2.png" "$title" ;;
+        "$(field_of "$kept" memory)" "$(field_of "$kept" seq)" "$stored" "-" "$2.png" "$title" ;;
     *) printf '[memory %02d] painted %s but not kept as a memory: %s\n' "$number" "$stored" "$kept" ;;
   esac
   $D dev --port $P world inventory add "$ROAM" "$id" 1 "name=$title" "look=$prompt" use=kept \
@@ -863,7 +889,7 @@ roam_paint_study() {
 # put behind the scene with the traveller located in it, and the traveller says a line.
 roam_show() { # move number, plate, place name, line said when moving
   [ -z "$ART_KIND" ] && return
-  local composed gallery count refs shown line made
+  local composed gallery count refs shown line made scan region
   composed=$($D dev --port $P world memory compose "$ROAM" "kind=$ART_KIND" 2>&1 | head -1)
   gallery=$(field_of "$composed" picture)
   if [ -z "$gallery" ]; then
@@ -882,9 +908,16 @@ roam_show() { # move number, plate, place name, line said when moving
     return
   fi
   printf '[show] plate %s after %s\n' "$shown" "$refs"
-  $D dev --port $P media locate "$shown" masks=1 2>&1 | head -1 | sed 's/^/       ~ /'
-  $D dev --port $P media locate label "$shown" 1 "$ROAM" "${ROAM^}" 2>&1 | head -1 |
-    sed 's/^/       ~ /'
+  scan=$($D dev --port $P media locate "$shown" masks=1 2>&1)
+  printf '%s\n' "$scan" | head -3 | sed 's/^/       ~ /'
+  # Regions are numbered from 0: the traveller is the first region the scan reports.
+  region=$(printf '%s\n' "$scan" | sed -n 's/^ *\([0-9][0-9]*\): .*/\1/p' | head -1)
+  if [ -n "$region" ]; then
+    $D dev --port $P media locate label "$shown" "$region" "$ROAM" "${ROAM^}" 2>&1 | head -1 |
+      sed 's/^/       ~ /'
+  else
+    printf '[show] no person found in %s to name\n' "$shown"
+  fi
   $D dev --port $P scene image tv-backdrop "$shown" 2>&1 | head -1 | sed 's/^/       ~ /'
   line=$(timeout $HUNG $D dev --port $P persona say "$ROAM" speak=true "recent=$ROAM: $4" \
     "intent=$ROAM_SHOW_SAY" "You are at $3." 2>&1)
@@ -990,6 +1023,34 @@ roam_declared_plate() { # after-sequence, frames name, move number
   printf '[declare %02d] no emergency plate within %s s\n' "$number" "$HUNG"
 }
 
+# The items whose counts rose between two `held_counts` snapshots, as `<id> <before>-><after>`
+# separated by commas, or nothing.
+held_gains() { # before, after
+  local item count was gains=""
+  while IFS== read -r item count; do
+    [ -z "$item" ] && continue
+    was=$(printf '%s\n' "$1" | sed -n "s/^$item=//p" | head -1)
+    [ "${count:-0}" -gt "${was:-0}" ] && gains="${gains:+$gains, }$item ${was:-0}->$count"
+  done <<< "$2"
+  printf '%s\n' "$gains"
+}
+# Free roam: the arrival step of a kind of move that has one (`@way_arrival`). The character says one
+# line toward the situation (`persona say`), the per-line judge applies what it trades to what they
+# really hold, and the log says what rose, or that nothing did.
+roam_trade() { # move number, the line before it, the place, the situation
+  local before after out line gained
+  before=$(held_counts)
+  out=$(timeout $HUNG $D dev --port $P persona say "$ROAM" speak=true "recent=$ROAM: $2" \
+    "intent=$4" "You are at $3.$MIND" 2>&1)
+  line=$(printf '%s\n' "$out" | sed -n '1s/.*says: //p')
+  printf '[trade %02d] %s\n' "$1" "${line:-<no line: $(printf '%s\n' "$out" | head -1)>}"
+  roam_inventory "$line" "$out"
+  after=$(held_counts)
+  gained=$(held_gains "$before" "$after")
+  printf '[trade %02d] changes: %s; gained: %s\n' "$1" "$(held_diff "$before" "$after")" \
+    "${gained:-no gain recorded}"
+}
+
 # Free roam: the `@move` lines in order. Each move is said by the roaming character toward the goal
 # and the way's situation (where they are, where they have been and what they hold now), run as a
 # move with a plate of its own, and the close look at the new place waited out before the next.
@@ -1068,7 +1129,10 @@ play_roam() {
       thing_look=$(printf '%s\n' "$out" | sed -n 's/^elements: //p' | head -1)
     fi
     board_at=$(item_count "$ART_BOARD")
-    if [ -n "$ROAM_DECLARE" ]; then
+    if [ -n "${ARRIVAL[$way]:-}" ]; then
+      # This kind of move has its own arrival step (a trade at a market), not the declaration.
+      roam_trade "$number" "${line:-$said}" "$place" "${ARRIVAL[$way]}"
+    elif [ -n "$ROAM_DECLARE" ]; then
       # The declaration is the painting line: spoken, judged for the supplies it uses and drawn.
       roam_declare "$number" "${line:-$said}" "$place"
       paint_line=$DECLARED_LINE

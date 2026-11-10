@@ -860,6 +860,14 @@ async fn layout_of(port: u16, picture: &str) -> Result<SceneLayout, PlateFailure
         .map_err(at(PlateStep::Locate))
 }
 
+/// How many figures the stored scan of `picture` found, or none when it has no scan to read.
+pub(super) async fn figures_in(port: u16, picture: &str) -> Option<usize> {
+    show_layout(port, picture)
+        .await
+        .ok()
+        .map(|stored| stored.layout.regions().len())
+}
+
 /// Puts the room `picture` behind the scene with the cast of `cast` (its own scan when it is
 /// `cast`, otherwise as a room that kept the cast before it).
 pub(super) async fn show_with_cast(

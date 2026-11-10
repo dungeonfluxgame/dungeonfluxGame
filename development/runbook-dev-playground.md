@@ -948,6 +948,7 @@ the canonical truth of the world, and a summary or an index of it does not repla
   | `POST /dev/world/memory/delete` | `{owner, id}` | `{memory}` that left |
   | `POST /dev/world/memory/references` | `{owner, filter?, ids?, budget}` | `pictures` (primary pictures that fit `budget`), `memories` (their ids) and `left_out`; newest first for a filter, in the order given for `ids` |
   | `POST /dev/world/memory/compose` | `{owner, filter?, ids?, name?, columns?, tile_width_px?, tile_height_px?, gap_px?, background?}` | the gallery sheet: `{picture, members, pictures, columns, rows}` |
+  | `GET /dev/world/memory/inspect` | `?picture=` | `{picture, blank, luminance_deviation, edge_energy}`: whether the middle of a library picture is near blank (`df_imagery::picture_check`: a flat board with a pale edge) |
   | `GET /dev/world/memory/history` | `?owner=&limit=` | the host's memory lines, oldest first |
 
   `filter` is `{kind?, place?, tag?}` (all that are given must match; none matches every memory).
@@ -956,8 +957,10 @@ the canonical truth of the world, and a summary or an index of it does not repla
   reference: the image budget is 8 pictures on Forge and 5 on Codex. The primary pictures of the
   selected memories, in `seq` order, are tiled into one PNG (`df_imagery::gallery`): every picture is
   scaled to fit its tile whole and centred, tiles fill left to right then down, the columns derive
-  from the count so the sheet is roughly square (448 by 252 tiles, a 12 px gap, mid-grey, unless
-  the request says otherwise), and nothing is drawn on it, no label and no text. The sheet is
+  from the count so the sheet is roughly square. A tile has the shape of the median member
+  picture (square paintings in square tiles, wide ones in 16:9 tiles) with its long side 448 px, a
+  12 px gap, mid-grey, unless the request gives both `tile_width_px` and `tile_height_px` (one
+  alone is `gallery`); nothing is drawn on it, no label and no text. The sheet is
   stored in the media library as a normal picture named `name`, or `gallery-<owner>-<n>` with `n`
   the owner's next gallery number; a memory with no picture is left out of it. Attach the returned
   `picture` as one reference.
@@ -968,7 +971,7 @@ the canonical truth of the world, and a summary or an index of it does not repla
   library), `owner_mismatch`, `duplicate_id`, `duplicate_picture`, `duplicate_tag`, `duplicate_link`,
   `duplicate_selected`, `conflicting_selection`, `empty_title`, `empty_description`, `too_long`,
   `too_many`, `nothing_to_compose`, `gallery` (the sheet cannot be laid out; its `cause` says why),
-  `picture_unreadable`, `picture_not_stored`, `store_unreadable`, `store_invalid`,
+  `picture_unreadable`, `picture_undecodable`, `picture_not_stored`, `store_unreadable`, `store_invalid`,
   `store_unwritable`, `stopped`. Each refusal is one `WORLD refused verb=memory_<verb> error=<key>`
   line.
 - **Audit lines** are ids and counts only (a title and a description are words): `WORLD memory_put
@@ -989,6 +992,7 @@ the canonical truth of the world, and a summary or an index of it does not repla
   $D dev --port 7879 world memory references danny 5 kind=scene      # up to 5 primary pictures, newest first
   $D dev --port 7879 world memory compose danny kind=artwork         # -> gallery-danny-1.png
   $D dev --port 7879 world memory delete danny scene-1               # its picture stays in the library
+  $D dev --port 7879 world memory inspect item-danny-painting_01.png   # blank=true for a blank board
   $D dev --port 7879 world memory history danny limit=10
   ```
 
@@ -1006,17 +1010,28 @@ holds, so the board he painted on, the pigments, the oil and the rags are used u
 easel are kept) and whatever he lacks is not consumed. If that line used up no board
 (`@roam_art_board`) the study is not made and the log says `[memory NN] not painted: no boards was
 used up (had .., have ..)`. The move's plate is then edited into a study of the place, no figures
-painted in (`media generate .. base=<plate> refs=item-danny-boards.png`, the look statement
-`@roam_art_look`, no house look because the house look avoids paintings), stored as `item-danny-painting_NN.png` (so it is the
+painted in (`media generate .. base=<plate>`, the plate its only reference and the board told in
+words: given the board's own sheet as a reference the model often painted just the board; the
+look statement `@roam_art_look`, no house look because the house look avoids paintings). The
+study is then inspected: if it is near blank it is made once more with `@roam_art_retry` added,
+and if it is still blank it is removed and not kept (`[memory NN] study blank, not stored`; the
+board is used up either way). A study that stands is stored as `item-danny-painting_NN.png` (so it is the
 item's reference sheet too), kept as a memory of kind `artwork` (id `painting_NN`, linked to the
 item `painting_NN` and the place) and added to what he holds as a kept item with the same id. That
 is the inventory's add operation with name and look from the memory, not the judged gain of a new
 item. The day ends with `@roam_show`: a move to the centre of town, then `world memory compose
 danny kind=artwork` makes one gallery sheet, the show plate is the move's plate edited after that
-sheet and his character sheet (`@roam_show_look`), located and put behind the scene, and he says a
+sheet and his character sheet (`@roam_show_look`), located (the scan's first region, numbered from 0,
+is named for him with `media locate label`) and put behind the scene, and he says a
 line toward `@roam_show_say`. The log has one `[memory NN]` line for each scene captured and each
 painting kept, and `[show]` lines for the sheet (`composed gallery of N pieces -> <name>`), the show
-plate and his line. The page does not show the memories yet: `list` answers the rows of the kit's
+plate and his line. A kind of move with a `@way_arrival <way> <situation>` line (the market stops of
+`free-roam.beats`) has its own arrival step instead of the declaration and the study: after the look he
+says one line toward the situation (`[trade NN] <line>`), the per-line judge applies the sale of a
+painting (`given_away`, pennies up) and the purchases to what he really holds, and the log adds
+`[trade NN] changes: ..; gained: ..` or `gained: no gain recorded`. The declaration's situation says
+that setting a thing up does not use it up, so only the finishing line uses the board.
+The page does not show the memories yet: `list` answers the rows of the kit's
 list panel (`ledger`, a row per memory with its title and primary picture), the same shape as the
 inventory's.
 
@@ -1059,13 +1074,13 @@ and an owner's call on cost.)
   it is their own mind) and the others' public briefs under the same handles; their state (mood,
   emotions above zero, attention, standings); what they carry (id, name, count, use); the place
   and the things in sight there (with their looks; a stall item's keeper by what the character
-  calls them); their last three thoughts; and the last lines. Names are learned, never given: a name
+  calls them); their last six thoughts (so the shape of any repetition shows); and the last lines. Names are learned, never given: a name
   the character has not learned (nor its id or display name) is not in the facts. A handle that comes
   back in an answer is put as how the person looks (`persona/handles.rs`), or the answer is refused
   (`handle_in_text`).
 - **Bounds** (the facts only; never the answer): 48 regions (the character's own, then the surest;
   the rest as `regions_left_out`), 48 items in sight, 48 kinds carried, 30 lines of the scene
-  (`recent_lines_left_out`), 3 earlier thoughts, 64 characters and at most 8 asked at once in a
+  (`recent_lines_left_out`), 6 earlier thoughts, 64 characters and at most 8 asked at once in a
   scene call (4 when it does not say).
 - **The answer, checked.** `Perceived`: `who`, `mode`, `picture`, `vision`, `viewpoint`
   (`{from: pictured, region}` or `{from: viewer}` for a character who is not in the picture and sees
@@ -1091,24 +1106,33 @@ and an owner's call on cost.)
   viewpoint=pictured|viewer picture=<name>|- leak_suspect=.. retried=.. thought=<memory id>|-
   duration_ms=..`, `PERSONA perceived_scene characters=.. perceived=.. refused=.. parallel=..
   vision=.. picture=.. duration_ms=..`, `PERSONA refused verb=perceive|perceive_scene|thoughts
-  [id=..] error=<key> cause=<kind>`, `PERSONA thing_unadded who=.. error=<key>`, `WORLD thing_added place=.. id=.. via=perceive`, `PERSONA thought_unkept` and `PERSONA thought_unreadable` when
-  the memory store failed (the perception still answers).
+  [id=..] error=<key> cause=<kind>`, `PERSONA thing_unadded who=.. error=<key>`, `WORLD
+  thing_added place=.. id=.. via=perceive`, `PERSONA thought_unkept` and `PERSONA
+  thought_unreadable` when the memory store failed (the perception still answers).
 - **What is seen becomes what a close-up can cut to** (`new_things`). A road or a lane often has
   no designed things, so the frame judge is offered nothing to cut to, though the character sees
   a wall. In the same call the character may propose, as things of the active place, what they
   notice that `items_here` does not list: each is one of their own `sees` entries that has no
-  region and no item (`see` is its index), with an `id` (the id grammar, not one the place or
+  region (`see` is its index; its `item` is null or the new id itself, since the entry names the
+  thing it proposes, and so may `attention`), with an `id` (the id grammar, not one the place or
   what they carry already has, nor another proposal's), a `name`, a `look` (what a camera brought
   up close would show, in neutral words) and `attended` (at most one, and only when `attention`
-  names nothing else). The model decides what strikes the character; there is no salience
-  threshold or count in code. A `sees` entry with a region is a person of the scan and is never a
-  thing (`new_thing_for_person`); a taken or unusable id, a missing `see`, blank words or two
-  attended things are `bad_new_thing`; each refusal is asked once more with the reason. An accepted
-  proposal is written to the active place by `world::add_things` (the designed-place path:
+  names nothing else or that thing). The model decides what strikes the character; there is no
+  salience threshold or count in code. Proposals are an extra of the answer and never cost the
+  sight and thought: each is checked on its own, and a bad one is left out while the rest is kept,
+  with no retry. It is left out when its `sees` entry has a region (a person of the scan, never a
+  thing: `new_thing_for_person`), names a different item, has a taken or malformed id, a missing
+  `see`, blank words, or is a second attended thing (`bad_new_thing`); each leaves one `PERSONA
+  thing_unadded who=.. error=<key>` line and a `new_things` entry with `added: false` and `why_not`
+  (what to change), and an item or attention the answer gave that pointed at it is cleared. A
+  proposal for an entry that already names that very id when the place has it is the thing that is
+  there and is dropped silently. Only a bad core (a region, item or emotion that is not offered, a
+  bad attention or salience, an empty thought) is refused and asked once more with the reason. An
+  accepted proposal is written to the active place by `world::add_things` (the designed-place path:
   `check_place` as `POST /dev/world/arrive` checks, all or none, only for a place designed in play,
   never a bible place), so the next `place_items` offers it to the frame judge: the `sees` entry
   now names it as its `item` (and the attention when it was attended), `Perceived.new_things` lists
-  `{id, name, look, added}`, and the log has `WORLD thing_added place=.. id=.. via=perceive`. A
+  `{id, name, look, added, why_not?}`, and the log has `WORLD thing_added place=.. id=.. via=perceive`. A
   place that cannot take it (none active, or a bible place) leaves everything as it was, reports
   `added: false` and writes `PERSONA thing_unadded`. The runner calls `perceive` before the look
   line, so a thing the character attends to and then looks at closely cuts to an insert as usual.
@@ -1599,9 +1623,21 @@ service never gives an EDIT (a request with a base) a person's whole multi-view 
 picture at least 3:2 wide is cut to its left third, the front view (`df_imagery::sheet_view`, pure
 pixels, unit-tested), in memory for that job, and `IMAGEGEN sheet_view job=.. name=.. picture=..
 view=front` says so; a picture that is not that wide is a single view and goes as it is, and a
-picture painted anew (no base) is still given the whole sheet. This holds for every edit, not only
-declared plates. Not done: a fresh paint instead of an edit when the base holds extra figures (the
-words ask for them to stay small and far), and item sheets, which also show two views side by side.
+picture painted anew (no base) is given the whole sheet, except an emergency one (a declared plate
+painted anew), which gets the full-length third (`view=full_length`). The front crop holds for every
+edit, not only declared plates.
+
+**Extra figures in the base (roam run 4: a market stall).** Even with the cast count and the front
+view, an edit of a base that already holds other people carried one more likeness into the action
+(1 of 6 plates). So before it edits, the watch counts the figures in the base's stored scan
+(`<base>.layout.json` regions) against the cast (`plan_base`): more figures than the cast and it
+does not edit; it paints anew from the place's words (the watch's `scene=`, else the newest
+picture's words) joined to the declared scene, with the cast count statement, the speaker's sheet
+(full-length third) and the items in use. A base holding only the cast is edited, as before; one
+with no scan is edited (nothing says otherwise). The transcript says `declared plate base=edit|fresh
+reason=cast_only|extra_figures|layout_unread|no_base (N figure(s) .., M in the cast)` and the
+`PERSONA declared ..` line ends `.. made_ms=.. base=edit|fresh reason=.. shown_at_ms=..`. Not done:
+item sheets, which also show two views side by side.
 
 **Priority and reordering (`plate.rs`).**
 - A declaration starts at once whatever is being made: it takes a slot even when `parallel` and

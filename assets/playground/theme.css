@@ -488,7 +488,6 @@ body {
   border: 0.2cqw solid #0d1117; background: #8a94a6;
   transition: left 90ms linear, top 90ms linear, transform 90ms linear, width 150ms ease-out, height 150ms ease-out, background-color 200ms;
 }
-@media (prefers-reduced-motion: reduce) { .figure, .figure-label { transition: none; } }
 .figure-circle { border-radius: 50%; }
 .figure-rect { border-radius: 0.5cqw; }
 .figure-label {
@@ -607,9 +606,6 @@ body {
 @keyframes composer-pulse {
   50% { opacity: .35; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .composer[data-state="recording"] .composer-rec-dot { animation: none; }
-}
 .composer-level {
   flex: 0 0 48px;
   height: 6px;
@@ -714,7 +710,6 @@ body {
 .tv-backdrop-incoming { opacity: 0; }
 .tv-backdrop-incoming.tv-backdrop-fading { animation: backdrop-fade-in var(--fade-ms, 700ms) ease-in-out forwards; }
 @keyframes backdrop-fade-in { from { opacity: 0; } to { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .tv-backdrop-incoming.tv-backdrop-fading { animation: none; opacity: 1; } }
 .tv-backdrop-caption { position: absolute; left: 2.4cqw; top: 5.2cqw; font: italic var(--ui-t-small)/1.2 var(--ui-font); color: var(--ui-muted-warm); text-shadow: 0 1px 4px #000; }
 .tv-card {
   position: absolute; left: 50%; top: 33%; transform: translate(-50%, -50%);
@@ -740,11 +735,9 @@ body {
 @keyframes scene-fade-out { from { opacity: 1; } to { opacity: 0; } }
 @keyframes scene-wipe-out { from { clip-path: inset(0 0 0 0); } to { clip-path: inset(0 0 0 100%); } }
 .scene-leaving .figure { transition: none; }
-@media (prefers-reduced-motion: reduce) { .scene-leaving { display: none; } }
 
 /* A card that slides across the shared screen; its start and end come from custom properties */
 @keyframes card-slide { from { left: var(--slide-from); } to { left: var(--slide-to); } }
-@media (prefers-reduced-motion: reduce) { .tv-card { animation: none !important; } }
 
 /* The camera: it moves the backdrop, grid and figures together; the card, caption, status and party
    stay on the screen. A move runs from --cam-from to --cam-to at an even pace. */
@@ -765,7 +758,6 @@ body {
    the camera's counter-scale in `transform` and leaves the tail's tip where it is. */
 @keyframes rp-bubble-in { from { opacity: 0; scale: .6; } to { opacity: 1; scale: 1; } }
 .tv-anchors .rp-bubble:not(.rp-settled) { animation: rp-bubble-in 320ms cubic-bezier(.2, .9, .3, 1.15) both; }
-@media (prefers-reduced-motion: reduce) { .tv-anchors .rp-bubble:not(.rp-settled) { animation: none; } }
 /* A bubble below its character's head hangs from the tail's tip at its top edge (`bubble_place`). */
 .tv-anchors .rp-bubble.rp-above { transform-origin: var(--tail-tip) 0; }
 .tv-anchors .rp-bubble.rp-tail-left { transform-origin: 0 var(--tail-tip-y); }
@@ -782,11 +774,8 @@ body {
 .tv-anchors .rp-outline-shape { position: absolute; inset: 0; background: #fff; -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; }
 @keyframes rp-outline-in { from { opacity: 0; } to { opacity: 1; } }
 .tv-anchors .rp-outline:not(.rp-settled) { animation: rp-outline-in 220ms ease-out both; }
-@media (prefers-reduced-motion: reduce) { .tv-anchors .rp-outline:not(.rp-settled) { animation: none; } }
 /* SAM tags and head dots are labels on the picture: they keep their size while the camera zooms. */
 .sam-tag, .sam-head { scale: calc(1 / var(--cam-scale, 1)); }
-@media (prefers-reduced-motion: reduce) { .tv-world { animation: none !important; transition: none !important; } }
-@media (prefers-reduced-motion: reduce) { .tv-world-top { animation: none !important; transition: none !important; } }
 
 /* A figure with a portrait shows the picture in its outline */
 .figure-portrait { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
@@ -905,10 +894,8 @@ body {
 .rp-tone-thought.rp-above .kit-thought::before { top: -1.3cqw; bottom: auto; }
 .rp-tone-thought.rp-above .kit-thought::after { top: -2.2cqw; bottom: auto; }
 .rp-bubble.rp-settled :is(.kit-pane, .kit-bubble-tab, .kit-halo, .kit-bloom, .kit-thought::before, .kit-thought::after) { animation: none; }
-@media (prefers-reduced-motion: reduce) { .rp-bubble.rp-settled :is(.kit-pane, .kit-bubble-tab, .kit-halo, .kit-bloom, .kit-thought::before, .kit-thought::after) { animation: none; } }
 .rp-marker { position: absolute; transform: translate(-50%, -50%); display: flex; align-items: center; gap: .4cqw; padding: .25cqw .8cqw; font: 600 1.05cqw/1.2 var(--ui-lobby-text); color: #f6efe0; background: linear-gradient(180deg, #1c1824ee, #0e0c14f2); border: .1cqw solid #e4dcf5aa; border-radius: 999px; box-shadow: 0 0 .6cqw #000a; white-space: nowrap; }
 .rp-marker-glyph { width: 1.2cqw; height: 1.2cqw; color: #f1c96a; }
-@media (prefers-reduced-motion: reduce) { .lb-loadbar-fill, .lb-wave { animation: none; } }
 /* The card of a speaker who is not in the picture (`kit::speaker`, drawn by the kit) is a compact lower-third strip of face,
    name and line at the right of the kit's bottom stack, just above the caption bar, so on a close-up all the words stay in
    the lower third and the thing looked at stays clear above them. The stack starts where the party strip ends. It fades in
@@ -921,11 +908,6 @@ body {
 .kit-speaker-out .kit-pane, .kit-speaker-out .kit-halo, .kit-speaker-out .kit-bloom { animation: rp-card-out var(--kit-out-ms) ease-in forwards; }
 .kit-speaker-out .kit-pane::before { display: none; }
 @keyframes rp-card-out { from { opacity: 1; } to { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) {
-  .kit-speaker-out, .kit-tc-out { display: none; }
-  .kit-speaker-settled .kit-pane, .kit-speaker-settled .kit-halo, .kit-speaker-settled .kit-bloom, .kit-tc-settled *, .kit-tc-out * { animation: none; }
-  .kit-tc-out .kit-tc-ground, .kit-tc-out .kit-tc-body { animation: none; }
-}
 /* While a plate change is under way the stage is `tv-fading` (`view::plate_fade`): the bubbles over the figures give way to the
    hidden twin of the speaker's line, the same band, so the plates stay clean; the bubbles come back when the fade ends. */
 .tv-anchors { transition: opacity 300ms ease-in-out; }
@@ -936,7 +918,6 @@ body {
 .tv-stage.tv-fading .kit-speaker-twin .kit-pane { opacity: 1; }
 .tv-stage.tv-fading .kit-speaker-twin .kit-halo { opacity: var(--kit-halo-a); }
 .tv-stage.tv-fading .kit-speaker-twin .kit-bloom { opacity: var(--kit-bloom-a); }
-@media (prefers-reduced-motion: reduce) { .tv-anchors, .tv-stage.tv-fading .kit-speaker-twin, .kit-speaker-twin, .kit-speaker-twin .kit-pane, .kit-speaker-twin .kit-halo, .kit-speaker-twin .kit-bloom { transition: none; } }
 /* === component: close-up title card === */
 /* A clue close-up (`closeup`, `kit::title_card`) after the concept art (01-fullscreen-sword-inspection): the item fills the
    screen, and the lower third carries the kit's title card: a compass-rose ornament, the item's name in gold and its words
@@ -1119,10 +1100,9 @@ body {
 .pl-begin-off { background-image: var(--pl-begin-off); filter: drop-shadow(0 0 .8cqw rgba(127, 160, 255, .4)); }
 .pl-begin-off .pl-begin-label { color: #c7d2e8; text-shadow: 0 .1cqw .4cqw #000b; }
 .pl-begin-off .pl-begin-play { color: #b4c0d8; filter: none; }
-@media (prefers-reduced-motion: reduce) { .pl-party-spinner { animation: none; } .pl-seat { transition: none; } }
 /* === end component: player-lobby === */
 /* === component: player-lobby-flare === */
-/* The lobby's flare: slow dust motes at three depths and small glints that twinkle on the glass edges, drawn after the landing page's. It only decorates: nothing in it is text and nothing moves or hides a component. Everything is transform and opacity on a few pseudo-elements, and `prefers-reduced-motion` turns all of it off. The dust reuses the landing page's keyframes. The places are a fixed random draw (seed 20261103) made by artifacts/tmp/ui-shots/lobby-flare.py. Knobs, live:
+/* The lobby's flare: slow dust motes at three depths and small glints that twinkle on the glass edges, drawn after the landing page's. It only decorates: nothing in it is text and nothing moves or hides a component. Everything is transform and opacity on a few pseudo-elements. The dust reuses the landing page's keyframes. The places are a fixed random draw (seed 20261103) made by artifacts/tmp/ui-shots/lobby-flare.py. Knobs, live:
    --pl-flare-dust      0 to 1, the dust's strength (0 hides it)
    --pl-flare-sparkle   0 to 1, the glints' strength (0 hides them)
    --pl-flare-slow      1 is the set pace; 2 is twice as slow. */
@@ -1406,7 +1386,6 @@ body {
   86.89% { opacity: var(--pl-flare-sparkle); transform: translate(14.93cqw, -1.20cqw) scale(1.24) rotate(55deg); }
   88.72% { opacity: 0; transform: translate(14.93cqw, -1.20cqw) scale(.3) rotate(90deg); }
 }
-@media (prefers-reduced-motion: reduce) { .tv-stage:has(.pl) .tv-world::after, .pl::before, .pl::after, .pl-seat:nth-child(odd) .pl-card::before, .pl-seat:nth-child(even) .pl-card::before, .pl-join::before, .pl-party::before, .pl-begin::before { display: none; animation: none; } }
 /* === end component: player-lobby-flare === */
 /* === component: narration === */
 /* The narrator's box is the kit's (`kit::narration`, renders 02 and 13) in the caption layer: it takes the caption's place in the
@@ -1647,7 +1626,6 @@ body {
 .hm-actions .hm-action-subtitle::before { content: ""; position: absolute; left: 50%; top: -1.3cqw; width: .7cqw; height: .7cqw; margin-left: -.35cqw; transform: rotate(45deg); border: .14cqw solid #f1d9a0; background: #0e1736; }
 .hm-actions .hm-action-off { opacity: .6; filter: saturate(.45); }
 .hm-actions .hm-action.hm-focused { z-index: 2; outline: none; transform: scale(1.04); box-shadow: 0 0 0 .3cqw var(--ui-focus-ring), 0 0 4cqw rgba(255, 216, 119, .7), 0 0 10cqw rgba(255, 184, 76, .32), inset 0 0 2cqw rgba(255, 216, 119, .25); }
-@media (prefers-reduced-motion: reduce) { .hm-actions::before, .hm-actions .hm-action::before { animation: none; } .hm-actions::before { opacity: .7; } }
 /* <<< generated: home-glass */
 
 /* -- top bar: the money pill, the bell and the profile mark, inside the title-safe inset -- */
@@ -1664,7 +1642,7 @@ body {
 /* === end component: home === */
 
 /* === component: home-flare === */
-/* Visual flare of the landing page: an ambient layer of dust motes and random glints along the glass edges. It only decorates: nothing in it is text, and no component is moved or hidden by it. Everything is transform and opacity on a few pseudo-elements, so it costs almost nothing per frame, and `prefers-reduced-motion` turns all of it off. The positions are a fixed random draw (seed 20261102) made by artifacts/tmp/ui-shots/home-min-flare.py; edit the three knobs below live:
+/* Visual flare of the landing page: an ambient layer of dust motes and random glints along the glass edges. It only decorates: nothing in it is text, and no component is moved or hidden by it. Everything is transform and opacity on a few pseudo-elements, so it costs almost nothing per frame. The positions are a fixed random draw (seed 20261102) made by artifacts/tmp/ui-shots/home-min-flare.py; edit the three knobs below live:
    --hm-flare-dust      0 to 1, the dust's strength (0 hides it)
    --hm-flare-sparkle   0 to 1, the glints' strength (0 hides them)
    --hm-flare-slow      1 is the set pace; 2 is twice as slow. */
@@ -2050,7 +2028,6 @@ body {
   93.63% { opacity: 0; transform: translate(0.58cqw, 3.89cqw) scale(.3) rotate(60deg); }
 }
 .hm-slot-actions::before { content: ""; position: absolute; left: -13.5cqw; top: 28.9cqw; width: 54cqw; height: 12.5cqw; z-index: -1; pointer-events: none; border-radius: 50%; background: radial-gradient(ellipse at 50% 50%, rgba(95, 200, 255, .34), rgba(95, 200, 255, 0) 68%); animation: hm-breathe calc(7s * var(--hm-flare-slow, 1)) ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .tv-stage:has(.hm) .tv-world::after, .hm::before, .hm::after, .hm-actions::after, .hm-nav-panel::before, .hm-slot-nav::after, .hm-nav::before, .hm-nav::after, .hc-panel::after, .hm-slot-campaigns::after, .hm-slot-actions::after, .hm-action-face::after { display: none; animation: none; } .hm-slot-actions::before { animation: none; opacity: .6; } }
 /* === end component: home-flare === */
 
 
@@ -2239,15 +2216,6 @@ body {
 .tv-clues { transition: opacity 400ms ease; }
 .tv-clues.clue-hidden { opacity: 0; }
 @keyframes clue-hold { from { outline-color: transparent; } to { outline-color: transparent; } }
-/* Reduced motion: the board cuts between open and shut. The hold is not motion (it changes nothing on screen), so it still
-   runs and still shuts the board. */
-@media (prefers-reduced-motion: reduce) {
-  .tv-clues .kit-clues { transition: none; }
-  .tv-clues.clue-open { animation: clue-hold var(--clue-hold) linear both; }
-  .tv-clues.clue-redrawn .kit-pane, .tv-clues.clue-redrawn .kit-halo, .tv-clues.clue-redrawn .kit-bloom { animation: none; }
-  .tv-clues .kit-note.clue-settled, .tv-clues .kit-note.clue-settled::after { animation: none; }
-  :is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) .kit-note { animation: none; }
-}
 /* === end component: clue-board === */
 
 /* === component: story mark === */
@@ -2263,4 +2231,3 @@ body {
 }
 .tv-story .kit-progress-label { flex-wrap: wrap; justify-content: flex-end; column-gap: .6cqw; text-align: right; text-wrap: balance; }
 .tv-story .kit-progress-track { position: static; transform: none; width: 18cqw; }
-@media (prefers-reduced-motion: reduce) { .tv-story { transition: none; } }

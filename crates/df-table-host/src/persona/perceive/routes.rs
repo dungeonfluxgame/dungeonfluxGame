@@ -33,7 +33,7 @@ use super::super::generate::{load_persona, personas_named, text_request};
 use super::super::judge_route::{ask_request, judge_route};
 use super::super::line::emotion_config;
 use super::super::state::apply_appraisal;
-use super::answer::{OUTPUT_NAME, Proposed, instruction, read_answer, schema};
+use super::answer::{Dropped, OUTPUT_NAME, Proposed, instruction, read_answer, schema};
 use super::facts::{Sight, briefing};
 use super::request::{
     Attended, Mode, NewThing, PerceiveCause, PerceiveRequest, PerceiveRouteError,
@@ -118,16 +118,32 @@ fn record_refused(app: &AppState, verb: &str, who: Option<&str>, error: &Perceiv
 /// Adds the things the answer proposed to the active place, so the next close look can cut to
 /// them, and names each as the `item` of the `sees` entry it came from (and as the attention, when
 /// it is attended to). A place that cannot take them (none active, or one of the bible's) is one
-/// `PERSONA thing_unadded` line, and the proposals are reported as not added.
+/// `PERSONA thing_unadded` line, and the proposals are reported as not added. A proposal the
+/// answer check left out is reported the same way, one `PERSONA thing_unadded who=.. error=<key>`
+/// line each; it never costs the rest of the answer.
 async fn add_new_things(
     app: &AppState,
     who: &str,
     sees: &mut [Seen],
     attention: &mut Attended,
-    proposed: Vec<Proposed>,
+    (proposed, dropped): (Vec<Proposed>, Vec<Dropped>),
 ) -> Vec<NewThing> {
+    let mut reported: Vec<NewThing> = Vec::new();
+    for left_out in dropped {
+        app.record_line(format!(
+            "PERSONA thing_unadded who={who} error={}",
+            left_out.cause.key()
+        ));
+        reported.push(NewThing {
+            id: left_out.id,
+            name: left_out.name,
+            look: left_out.look,
+            added: false,
+            why_not: Some(left_out.cause.to_string()),
+        });
+    }
     if proposed.is_empty() {
-        return Vec::new();
+        return reported;
     }
     let things = proposed.iter().map(|one| one.thing.clone()).collect();
     let added = crate::world::add_things(app, "perceive", things).await;
@@ -137,26 +153,36 @@ async fn add_new_things(
             error.key()
         ));
     }
+    let why_not = added.as_ref().err().map(ToString::to_string);
     let added = added.is_ok();
-    proposed
-        .into_iter()
-        .map(|one| {
-            if added {
-                sees[one.see].item = Some(one.thing.id.clone());
-                if one.attended {
-                    *attention = Attended::Item {
-                        id: one.thing.id.clone(),
-                    };
-                }
+    reported.extend(proposed.into_iter().map(|one| {
+        if added {
+            sees[one.see].item = Some(one.thing.id.clone());
+            if one.attended {
+                *attention = Attended::Item {
+                    id: one.thing.id.clone(),
+                };
             }
-            NewThing {
-                id: one.thing.id,
-                name: one.thing.name,
-                look: one.thing.look,
-                added,
+        } else {
+            // The model may have named it already; it is no item of the place.
+            sees[one.see].item = None;
+            if *attention
+                == (Attended::Item {
+                    id: one.thing.id.clone(),
+                })
+            {
+                *attention = Attended::None;
             }
-        })
-        .collect()
+        }
+        NewThing {
+            id: one.thing.id,
+            name: one.thing.name,
+            look: one.thing.look,
+            added,
+            why_not: why_not.clone(),
+        }
+    }));
+    reported
 }
 
 /// What `who` sees of `screen` and thinks of it, asked of `common.route`. The picture is attached
@@ -229,7 +255,7 @@ async fn look(
         id.as_str(),
         &mut sees,
         &mut attention,
-        checked.new_things,
+        (checked.new_things, checked.dropped),
     )
     .await;
     let mut perceived = Perceived {

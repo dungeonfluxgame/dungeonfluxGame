@@ -530,6 +530,9 @@ pub struct DeclaredTiming {
     pub queue_wait_ms: u64,
     /// How long making it took (generated, scanned and named).
     pub made_ms: u64,
+    /// `edit` of the picture on screen, or `fresh` (painted anew), and why (`BasePlan`).
+    pub base: String,
+    pub reason: String,
 }
 
 /// The body of `POST /dev/persona/frame/timing`: a moment of the frame `frame` (its media name
@@ -1304,12 +1307,14 @@ async fn timing(State(routes): State<Arc<FrameRoutes>>, bytes: Bytes) -> Respons
             if let Some(declared) = &request.declared {
                 routes.app.record_line(format!(
                     "PERSONA declared who={} plate={} superseded={} queue_wait_ms={} \
-                     made_ms={} shown_at_ms={at_ms}",
+                     made_ms={} base={} reason={} shown_at_ms={at_ms}",
                     declared.who,
                     request.frame,
                     declared.superseded,
                     declared.queue_wait_ms,
-                    declared.made_ms
+                    declared.made_ms,
+                    declared.base,
+                    declared.reason
                 ));
             }
             routes.app.announce_change();

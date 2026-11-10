@@ -32,6 +32,8 @@ use super::model::{BackendRequest, GeneratedImage, ImageRequest, Priority};
 use super::request::{
     BackendView, GenerateError, JobState, JobView, PictureCause, Provenance, Sidecar,
 };
+use df_imagery::sheet_view::{SheetView, sheet_view};
+
 use crate::io_cause::IoCause;
 use crate::media_library::{media_directory, store_bytes};
 use crate::state::AppState;
@@ -593,12 +595,13 @@ impl ImageGenerator {
                     cause,
                 }
             })?;
-            // A person's sheet shows several views side by side; an edit of a picture that is
-            // shown the whole sheet can paint each view as another person. It is shown the front
-            // view alone.
-            if request.base().is_some() && index < request.references().len() {
+            // A person's sheet shows several views side by side; a picture that is shown the whole
+            // sheet can paint each view as another person. An edit is shown the front view alone,
+            // and an emergency picture painted anew the full-length one.
+            if let Some(view) = person_view(request).filter(|_| index < request.references().len())
+            {
                 bytes = self
-                    .front_view(app, job, request.name(), reference, bytes)
+                    .person_view(app, job, request.name(), (reference, view), bytes)
                     .await?;
             }
             references.push(bytes);
@@ -683,14 +686,14 @@ impl ImageGenerator {
         Ok((provenance, sidecar))
     }
 
-    /// The front view of the person's sheet `picture` (its `bytes`) when it is a multi-view sheet,
+    /// The `view` of the person's sheet `picture` (its `bytes`) when it is a multi-view sheet,
     /// recorded; the bytes as they are when it has one view.
-    async fn front_view(
+    async fn person_view(
         &self,
         app: &AppState,
         job: u64,
         name: &str,
-        picture: &str,
+        (picture, view): (&str, SheetView),
         bytes: Vec<u8>,
     ) -> Result<Vec<u8>, GenerateError> {
         let unreadable = || GenerateError::ReferenceUnreadable {
@@ -698,24 +701,23 @@ impl ImageGenerator {
             reference: picture.to_owned(),
             cause: IoCause::from_kind(std::io::ErrorKind::InvalidData),
         };
-        let cut = tokio::task::spawn_blocking(move || {
-            df_imagery::sheet_view::sheet_view(&bytes, df_imagery::sheet_view::SheetView::Front)
-                .map(|front| (front, bytes))
-        })
-        .await
-        .map_err(|_| GenerateError::Stopped { job: Some(job) })?
-        .map_err(|_| unreadable())?;
+        let cut =
+            tokio::task::spawn_blocking(move || sheet_view(&bytes, view).map(|cut| (cut, bytes)))
+                .await
+                .map_err(|_| GenerateError::Stopped { job: Some(job) })?
+                .map_err(|_| unreadable())?;
         match cut {
-            (Some(front), _) => {
+            (Some(cut), _) => {
                 app.record_line(
                     ImageGenEvent::SheetView {
                         job,
                         name: name.to_owned(),
                         picture: picture.to_owned(),
+                        view: view.key(),
                     }
                     .line(),
                 );
-                Ok(front)
+                Ok(cut)
             }
             (None, whole) => Ok(whole),
         }
@@ -769,6 +771,17 @@ fn extension_of(mime: &str) -> &'static str {
         "image/webp" => "webp",
         "image/jpeg" => "jpg",
         _ => "png",
+    }
+}
+
+/// The view of a person's multi-view sheet `request` is shown, when it is shown one: an edit the
+/// front view, an emergency picture painted anew (a declared action with no base to edit) the
+/// full-length one; any other picture the whole sheet.
+fn person_view(request: &ImageRequest) -> Option<SheetView> {
+    match (request.base(), request.priority()) {
+        (Some(_), _) => Some(SheetView::Front),
+        (None, Priority::Emergency) => Some(SheetView::FullLength),
+        (None, Priority::Normal) => None,
     }
 }
 

@@ -3864,26 +3864,3 @@
     transform: translateY(.25cqw);
   }
 }
-
-/* Reduced motion: every kit motion becomes one short fade, with no sweep, pulse, travel or
-   loop. `!important` is needed because this one rule must win over every component's own
-   animation shorthand, whatever its specificity. */
-@media (prefers-reduced-motion: reduce) {
-  .kit :not(:has(.kit-pane)),
-  .kit *::before,
-  .kit *::after {
-    animation-name: kit-fade !important;
-    animation-duration: 150ms !important;
-    animation-delay: 0ms !important;
-    animation-iteration-count: 1 !important;
-    transition: none !important;
-  }
-  /* An ancestor of a blurring pane never fades: its opacity would stop the pane's blur (F1). */
-  .kit :has(.kit-pane) {
-    animation: none !important;
-    transition: none !important;
-  }
-  .kit-pane::before {
-    display: none;
-  }
-}

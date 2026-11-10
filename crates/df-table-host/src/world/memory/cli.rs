@@ -6,8 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use super::request::{
-    CaptureRequest, ComposeRequest, Composed, DeleteRequest, Deleted, History, MemoryPage,
-    MemoryReply, OwnerList, ReferencesRequest,
+    CaptureRequest, ComposeRequest, Composed, DeleteRequest, Deleted, History, Inspected,
+    MemoryPage, MemoryReply, OwnerList, ReferencesRequest,
 };
 use super::routes::path;
 use super::{LinkKind, Memory, MemoryDraft, MemoryFilter, MemoryLink, Put, References};
@@ -25,7 +25,7 @@ pub const MEMORY_USAGE: &str = concat!(
     "world memory references <owner> <budget> [kind=<id>] [place=<id>] [tag=<id>] [id=<id>].. | ",
     "world memory compose <owner> [name=<id>] [kind=<id>] [place=<id>] [tag=<id>] [id=<id>].. ",
     "[columns=<n>] [tile=<w>x<h>] [gap=<px>] [background=<rrggbb>] | ",
-    "world memory history [<owner>] [limit=<n>]"
+    "world memory inspect <picture> | world memory history [<owner>] [limit=<n>]"
 );
 
 /// A `world memory` command of the dev CLI.
@@ -51,6 +51,10 @@ pub enum MemoryCommand {
     Capture(CaptureRequest),
     References(ReferencesRequest),
     Compose(ComposeRequest),
+    /// Whether a picture of the media library is near blank.
+    Inspect {
+        picture: String,
+    },
     History {
         owner: Option<String>,
         limit: Option<usize>,
@@ -238,6 +242,9 @@ pub fn parse(words: &[String]) -> Result<MemoryCommand, CommandError> {
                     .transpose()?,
             }))
         }
+        ("inspect", [picture]) => Ok(MemoryCommand::Inspect {
+            picture: picture.clone(),
+        }),
         ("history", tail) => {
             let (owner, options) = match tail.split_first() {
                 Some((first, options)) if !first.contains('=') => (Some(first.clone()), options),
@@ -360,6 +367,13 @@ fn format_composed(composed: &Composed) -> String {
     )
 }
 
+fn format_inspected(inspected: &Inspected) -> String {
+    format!(
+        "inspect: picture={} blank={} luminance_deviation={:.1} edge_energy={:.2}",
+        inspected.picture, inspected.blank, inspected.luminance_deviation, inspected.edge_energy
+    )
+}
+
 fn format_history(history: &History) -> String {
     if history.entries.is_empty() {
         return "no memory changes in the host's log".to_owned();
@@ -448,6 +462,11 @@ pub async fn run(port: u16, command: MemoryCommand) -> Result<String, DevError> 
         MemoryCommand::Compose(request) => {
             let composed: Composed = value(post_json(port, path::MEMORY_COMPOSE, &request).await?)?;
             Ok(format_composed(&composed))
+        }
+        MemoryCommand::Inspect { picture } => {
+            let address = format!("{}?picture={picture}", path::MEMORY_INSPECT);
+            let inspected: Inspected = value(get_json(port, &address).await?)?;
+            Ok(format_inspected(&inspected))
         }
         MemoryCommand::History { owner, limit } => {
             let query = query_of(&[

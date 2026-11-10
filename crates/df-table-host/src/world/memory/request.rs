@@ -138,6 +138,23 @@ pub struct HistoryQuery {
     pub limit: Option<usize>,
 }
 
+/// `GET /dev/world/memory/inspect`: whether a picture of the media library is near blank.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InspectQuery {
+    pub picture: String,
+}
+
+/// What an inspect found: whether the middle of the picture has too little variation of light and
+/// too few edges to show anything (a blank board), and what was measured (0 to 255 scale).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Inspected {
+    pub picture: String,
+    pub blank: bool,
+    pub luminance_deviation: f32,
+    pub edge_energy: f32,
+}
+
 /// How many memories of a kind an owner keeps.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KindCount {
@@ -309,6 +326,10 @@ pub enum MemoryError {
     },
     /// The selection has no memory with a picture to tile.
     NothingToCompose,
+    /// A picture of the library is not one that decodes.
+    PictureUndecodable {
+        picture: String,
+    },
     /// The gallery sheet could not be laid out.
     Gallery {
         cause: GalleryError,
@@ -369,6 +390,7 @@ impl MemoryError {
             Self::TooMany { .. } => "too_many",
             Self::NothingToCompose => "nothing_to_compose",
             Self::Gallery { .. } => "gallery",
+            Self::PictureUndecodable { .. } => "picture_undecodable",
             Self::PictureUnreadable { .. } => "picture_unreadable",
             Self::PictureNotStored { .. } => "picture_not_stored",
             Self::StoreUnreadable { .. } => "store_unreadable",
@@ -471,6 +493,9 @@ impl fmt::Display for MemoryError {
                     "the picture {picture} could not be read: {cause}"
                 )
             }
+            Self::PictureUndecodable { picture } => {
+                write!(formatter, "the picture {picture} does not decode")
+            }
             Self::PictureNotStored { detail } => {
                 write!(formatter, "the gallery sheet could not be stored: {detail}")
             }
@@ -516,9 +541,10 @@ impl RouteError for MemoryError {
             Self::UnknownOwner { .. }
             | Self::UnknownMemory { .. }
             | Self::UnknownPicture { .. } => StatusCode::NOT_FOUND,
-            Self::DuplicateId { .. } | Self::NothingToCompose | Self::Gallery { .. } => {
-                StatusCode::UNPROCESSABLE_ENTITY
-            }
+            Self::DuplicateId { .. }
+            | Self::NothingToCompose
+            | Self::Gallery { .. }
+            | Self::PictureUndecodable { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::InvalidSequence { .. }
             | Self::PictureUnreadable { .. }
             | Self::PictureNotStored { .. }

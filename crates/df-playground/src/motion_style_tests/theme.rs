@@ -1,19 +1,20 @@
-//! The theme's motion: everything that animates or glides is switched off for a person who asked
-//! for reduced motion, and a figure and its label glide together so the label stays upright.
+//! The page's motion: no style sheet honours a reduced-motion setting (the owner's decision, so
+//! every animation and transition runs at full motion whatever the system says), and a figure and
+//! its label glide together so the label stays upright.
 
 const THEME: &str = include_str!("../../../../assets/playground/theme.css");
+const KIT: &str = include_str!("../../../../assets/playground/kit.css");
 
 #[derive(Debug)]
 struct Rule {
     selector: String,
     body: String,
-    reduced_motion: bool,
     keyframes: bool,
 }
 
 /// The rules of a style sheet, with at-rule blocks opened. Enough for this theme, which has no
 /// braces in strings.
-fn rules(css: &str, reduced_motion: bool, keyframes: bool, found: &mut Vec<Rule>) {
+fn rules(css: &str, keyframes: bool, found: &mut Vec<Rule>) {
     let mut rest = css;
     while let Some(open) = rest.find('{') {
         let selector = rest[..open].trim().to_owned();
@@ -35,24 +36,17 @@ fn rules(css: &str, reduced_motion: bool, keyframes: bool, found: &mut Vec<Rule>
         let close = close.expect("balanced braces");
         let body = &rest[open + 1..close];
         if selector.starts_with("@media") {
-            rules(
-                body,
-                reduced_motion || selector.contains("prefers-reduced-motion: reduce"),
-                keyframes,
-                found,
-            );
+            rules(body, keyframes, found);
         } else if selector.starts_with("@keyframes") {
             found.push(Rule {
                 selector,
                 body: body.to_owned(),
-                reduced_motion,
                 keyframes: true,
             });
         } else {
             found.push(Rule {
                 selector,
                 body: body.to_owned(),
-                reduced_motion,
                 keyframes,
             });
         }
@@ -73,21 +67,8 @@ fn theme_rules() -> Vec<Rule> {
         text
     };
     let mut found = Vec::new();
-    rules(&without_comments, false, false, &mut found);
+    rules(&without_comments, false, &mut found);
     found
-}
-
-fn classes(selector: &str) -> Vec<String> {
-    selector
-        .split(|character: char| {
-            !(character.is_ascii_alphanumeric()
-                || character == '-'
-                || character == '.'
-                || character == '_')
-        })
-        .filter(|word| word.starts_with('.'))
-        .map(str::to_owned)
-        .collect()
 }
 
 #[test]
@@ -103,67 +84,16 @@ fn the_theme_has_its_motion_where_the_test_looks() {
             .iter()
             .any(|rule| rule.keyframes && rule.selector.contains("camera-move"))
     );
-    assert!(rules.iter().any(|rule| rule.reduced_motion));
 }
 
 #[test]
-fn every_rule_that_animates_or_glides_has_a_reduced_motion_override() {
-    let rules = theme_rules();
-    let reduced: Vec<String> = rules
-        .iter()
-        .filter(|rule| rule.reduced_motion)
-        .flat_map(|rule| classes(&rule.selector))
-        .collect();
-    let mut checked = Vec::new();
-    for rule in rules
-        .iter()
-        .filter(|rule| !rule.reduced_motion && !rule.keyframes)
-        .filter(|rule| rule.body.contains("animation") || rule.body.contains("transition"))
-    {
-        for class in classes(&rule.selector) {
-            let covered = reduced
-                .iter()
-                .any(|named| class == *named || class.starts_with(&format!("{named}-")));
-            assert!(
-                covered,
-                "{class} animates or glides ({}) but nothing under prefers-reduced-motion names it",
-                rule.selector
-            );
-            checked.push(class);
-        }
-    }
-    for needed in [".figure", ".figure-label", ".scene-leaving"] {
+fn no_style_sheet_of_the_page_honours_a_reduced_motion_setting() {
+    for (name, css) in [("theme.css", THEME), ("kit.css", KIT)] {
         assert!(
-            checked.iter().any(|class| class == needed),
-            "{needed} was not checked"
+            !css.contains("prefers-reduced-motion"),
+            "{name} names prefers-reduced-motion"
         );
     }
-}
-
-#[test]
-fn the_overrides_switch_the_motion_off_and_do_not_just_mention_it() {
-    let rules = theme_rules();
-    let body_for = |selector: &str| -> String {
-        rules
-            .iter()
-            .filter(|rule| {
-                rule.reduced_motion
-                    && classes(&rule.selector)
-                        .iter()
-                        .any(|class| class == selector)
-            })
-            .map(|rule| rule.body.clone())
-            .collect()
-    };
-    assert!(body_for(".figure").contains("transition: none"));
-    assert!(body_for(".figure-label").contains("transition: none"));
-    assert!(body_for(".scene-leaving").contains("display: none"));
-    assert!(body_for(".tv-card").contains("animation: none"));
-    assert!(body_for(".tv-world").contains("animation: none"));
-    assert!(body_for(".tv-world").contains("transition: none"));
-    // The page writes the card's and the world's animation inline, so only an important rule wins.
-    assert!(body_for(".tv-card").contains("!important"));
-    assert!(body_for(".tv-world").contains("!important"));
 }
 
 /// The part of a transition declaration that is about `transform`: `transform 90ms linear`.
@@ -187,7 +117,7 @@ fn a_figure_and_its_label_glide_with_the_same_duration_and_easing_so_the_label_s
     let declared = |selector: &str| {
         rules
             .iter()
-            .find(|rule| !rule.reduced_motion && !rule.keyframes && rule.selector == selector)
+            .find(|rule| !rule.keyframes && rule.selector == selector)
             .map(|rule| transform_transition(&rule.body))
             .unwrap_or_else(|| panic!("no rule for {selector}"))
     };
@@ -198,8 +128,6 @@ fn a_figure_and_its_label_glide_with_the_same_duration_and_easing_so_the_label_s
 fn the_leaving_copy_stops_the_figures_gliding_and_does_not_rely_on_the_page_alone() {
     let rules = theme_rules();
     assert!(rules.iter().any(|rule| {
-        !rule.reduced_motion
-            && rule.selector == ".scene-leaving .figure"
-            && rule.body.contains("transition: none")
+        rule.selector == ".scene-leaving .figure" && rule.body.contains("transition: none")
     }));
 }

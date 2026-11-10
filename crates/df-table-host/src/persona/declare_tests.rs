@@ -13,14 +13,17 @@ use super::cli::{PersonaCommand, parse};
 use super::converse::Speaker;
 use super::declare::{
     DECLARE_INSTRUCTION, DeclaredAction, NO_DUPLICATES, WatchDeclared, check_declared,
-    declared_scene, unheld, watch_input,
+    declared_scene, plan_base, unheld, watch_input,
 };
 use super::fixtures::{CHARACTER, ScriptedHost, innkeeper, line_answer, scripted_host};
-use super::frame::{FrameAsk, FrameConfig, FrameReason};
+use super::frame::{
+    DeclaredTiming, FrameAsk, FrameConfig, FrameMoment, FrameReason, FrameTimingRequest,
+    PERSONA_FRAME_TIMING,
+};
 use super::frame_watch::{WatchInput, room_prompt};
 use super::plate::{
-    RoomTurn, SharedScreen, begin_declaration, claim_declared, claim_room, claim_screen, not_shown,
-    superseded_by,
+    RoomTurn, SharedScreen, begin_declaration, claim_declared, claim_room, claim_screen,
+    figures_in, not_shown, superseded_by,
 };
 use super::request::{PersonaReply, Spoken};
 use super::routes::path as persona_path;
@@ -613,4 +616,103 @@ async fn text_is_spoken_as_written_with_no_model_and_its_items_are_still_checked
         "words or a situation are needed"
     );
     assert_eq!(host.calls(), 0);
+}
+
+// A base that holds more than the cast.
+
+#[test]
+fn a_base_holding_more_figures_than_the_cast_is_painted_anew_and_a_cast_only_base_is_edited() {
+    let plan = |held, figures, cast| {
+        let plan = plan_base(held, figures, cast);
+        (plan.way(), plan.reason)
+    };
+    assert_eq!(plan(true, Some(1), 1), ("edit", "cast_only"));
+    assert_eq!(plan(true, Some(0), 1), ("edit", "cast_only"));
+    assert_eq!(plan(true, Some(4), 1), ("fresh", "extra_figures"));
+    assert_eq!(plan(true, Some(3), 2), ("fresh", "extra_figures"));
+    assert_eq!(plan(true, Some(2), 2), ("edit", "cast_only"));
+    assert_eq!(
+        plan(true, None, 1),
+        ("edit", "layout_unread"),
+        "no scan to say otherwise"
+    );
+    assert_eq!(plan(false, None, 1), ("fresh", "no_base"));
+}
+
+#[tokio::test]
+async fn the_figures_in_a_picture_are_the_regions_of_its_stored_scan() {
+    let host = scripted_host(Vec::new()).await;
+    let layouts = host.running.playground_path("assets/layouts");
+    for (picture, cast) in [
+        ("stall.png", vec!["a", "b", "c", "d"]),
+        ("lane.png", vec!["a"]),
+    ] {
+        // The scan is bound to the picture's bytes (here its own name, as the fixtures do).
+        host.running
+            .write_asset(&format!("media/{picture}"), picture);
+        crate::locate::write_layout(
+            &layouts,
+            picture,
+            &crate::test_support::layout_of_cast(picture, &cast),
+        )
+        .unwrap();
+    }
+    let speaking_cast = 1;
+    let found = figures_in(host.port, "stall.png").await;
+    assert_eq!(found, Some(4));
+    assert!(
+        !plan_base(true, found, speaking_cast).edit,
+        "a market stall goes fresh"
+    );
+    let found = figures_in(host.port, "lane.png").await;
+    assert_eq!(found, Some(1));
+    assert!(
+        plan_base(true, found, speaking_cast).edit,
+        "a lane with only him is edited"
+    );
+    assert_eq!(figures_in(host.port, "unscanned.png").await, None);
+}
+
+#[tokio::test]
+async fn a_declared_plate_logs_how_it_was_made_and_why() {
+    use crate::test_support::{STARTER_FILES, start};
+    let running = start(&STARTER_FILES).await;
+    let timing = FrameTimingRequest {
+        frame: "roam-03-look-2".to_owned(),
+        moment: FrameMoment::Shown,
+        reason: FrameReason::Declared,
+        took_ms: 66_000,
+        declared: Some(DeclaredTiming {
+            who: "danny".to_owned(),
+            superseded: 0,
+            queue_wait_ms: 20,
+            made_ms: 65_980,
+            base: "fresh".to_owned(),
+            reason: "extra_figures".to_owned(),
+        }),
+    };
+    let timed: crate::persona::frame::FrameTimingReply =
+        post_json(running.port, PERSONA_FRAME_TIMING, &timing)
+            .await
+            .unwrap();
+    assert!(matches!(timed, DevReply::Done { .. }));
+    let lines: Vec<String> = running
+        .state
+        .log()
+        .after_sequence(0, usize::MAX)
+        .into_iter()
+        .map(|line| line.text)
+        .filter(|text| text.starts_with("PERSONA"))
+        .collect();
+    let declared = lines
+        .iter()
+        .find(|line| line.starts_with("PERSONA declared "))
+        .unwrap_or_else(|| panic!("{lines:?}"));
+    assert!(
+        declared.starts_with(concat!(
+            "PERSONA declared who=danny plate=roam-03-look-2 superseded=0 queue_wait_ms=20 ",
+            "made_ms=65980 base=fresh reason=extra_figures shown_at_ms="
+        )),
+        "{declared}"
+    );
 }

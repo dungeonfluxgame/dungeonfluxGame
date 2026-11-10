@@ -49,12 +49,13 @@ pub enum ImageGenEvent {
         priority: Priority,
         backend: &'static str,
     },
-    /// A person's sheet showed several views side by side and an edit was given its front view
-    /// alone, so no view is painted as another person.
+    /// A person's sheet showed several views side by side and the picture was given one view of
+    /// it (the front view for an edit), so no view is painted as another person.
     SheetView {
         job: u64,
         name: String,
         picture: String,
+        view: &'static str,
     },
     /// The pictures a job was given to follow, the line after its request: the picture it edits,
     /// the references attached in order, the `maximum` the backend takes, and what its caller left
@@ -257,8 +258,13 @@ impl ImageGenEvent {
                 backend,
                 running
             ),
-            Self::SheetView { job, name, picture } => format!(
-                "IMAGEGEN {verb} job={job} name={} picture={} view=front",
+            Self::SheetView {
+                job,
+                name,
+                picture,
+                view,
+            } => format!(
+                "IMAGEGEN {verb} job={job} name={} picture={} view={view}",
                 plain_word(name),
                 plain_word(picture)
             ),

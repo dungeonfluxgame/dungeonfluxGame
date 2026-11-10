@@ -97,15 +97,10 @@ fn plain(slot: &Element, built: Option<Element>) -> Result<(), JsValue> {
 }
 
 /// Puts `built`, the new plate's frame, in `slot`: faded in over the pictures there
-/// when `transition` fades and `reduced_motion` is not asked for, swapped at once otherwise (also
+/// when `transition` fades, swapped at once otherwise (also
 /// for the first picture, a picture without an image, and a change of caption or turn only).
-pub fn swap(
-    slot: &Element,
-    built: Option<Element>,
-    transition: Transition,
-    reduced_motion: bool,
-) -> Result<(), JsValue> {
-    let duration = crossfade_ms(transition).filter(|_| !reduced_motion);
+pub fn swap(slot: &Element, built: Option<Element>, transition: Transition) -> Result<(), JsValue> {
+    let duration = crossfade_ms(transition);
     let wanted = built.as_ref().map(media_of).transpose()?.flatten();
     let shown = layers(slot);
     let (Some(built), Some(duration), Some(media), false) =

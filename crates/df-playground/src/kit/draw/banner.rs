@@ -3,10 +3,11 @@
 use wasm_bindgen::JsValue;
 use web_sys::{Document, Element};
 
-use crate::dom::{append, element, text_element};
+use crate::dom::{append, element, set_style, text_element};
 use crate::kit::Fill;
-use crate::kit::banner::{Banner, BannerPlace};
+use crate::kit::banner::{Banner, BannerPlace, turn_delay_ms};
 use crate::kit::draw::{Shape, glass, icon};
+use crate::page_log::now_ms;
 
 /// The banner, or `None` when it has no title.
 pub fn draw(document: &Document, banner: &Banner) -> Result<Option<Element>, JsValue> {
@@ -32,12 +33,20 @@ pub fn draw(document: &Document, banner: &Banner) -> Result<Option<Element>, JsV
         append(&pane, &element(document, "span", "kit-inlay")?)?;
     }
     if let Some(which) = banner.icon {
-        let class = if banner.is_working() {
+        let working = banner.is_working();
+        let class = if working {
             "kit-banner-icon kit-turning"
         } else {
             "kit-banner-icon"
         };
-        append(&pane, &icon(document, which, class)?)?;
+        let drawing = icon(document, which, class)?;
+        if working {
+            set_style(
+                &drawing,
+                &format!("animation-delay:{}", turn_delay_ms(now_ms())),
+            )?;
+        }
+        append(&pane, &drawing)?;
     }
     let words = element(document, "span", "kit-banner-words")?;
     if let Some(number) = banner.number_text() {

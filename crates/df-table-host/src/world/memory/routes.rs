@@ -17,12 +17,12 @@ use axum::routing::{get, post};
 use serde::Serialize;
 
 use super::operations::{
-    Paths, capture, delete, get as get_memory, history, keep_members, list, list_owners,
+    Paths, capture, delete, get as get_memory, history, inspect, keep_members, list, list_owners,
     prepare_compose, put, references,
 };
 use super::request::{
-    CaptureRequest, ComposeRequest, Composed, DeleteRequest, GetQuery, HistoryQuery, ListQuery,
-    MemoryError, ReferencesRequest,
+    CaptureRequest, ComposeRequest, Composed, DeleteRequest, GetQuery, HistoryQuery, InspectQuery,
+    ListQuery, MemoryError, ReferencesRequest,
 };
 use super::store::memory_directory;
 use super::{MemoryDraft, Put};
@@ -49,6 +49,8 @@ pub mod path {
     pub const MEMORY_REFERENCES: &str = "/dev/world/memory/references";
     /// Tiles a selection into one gallery sheet picture (POST a `ComposeRequest`).
     pub const MEMORY_COMPOSE: &str = "/dev/world/memory/compose";
+    /// Whether a picture of the media library is near blank (GET with `?picture=`).
+    pub const MEMORY_INSPECT: &str = "/dev/world/memory/inspect";
     /// The memory lines of the host's log (GET with `?owner=&limit=`).
     pub const MEMORY_HISTORY: &str = "/dev/world/memory/history";
 }
@@ -229,6 +231,21 @@ async fn compose(State(app): State<Arc<AppState>>, bytes: Bytes) -> Response {
     answer(&app, "compose", result)
 }
 
+async fn looked_at(
+    State(app): State<Arc<AppState>>,
+    query: Result<Query<InspectQuery>, QueryRejection>,
+) -> Response {
+    let result = async {
+        let Query(query) = query.map_err(|rejection| MemoryError::InvalidQuery {
+            detail: rejection.body_text(),
+        })?;
+        let media = media_directory(app.playground().files());
+        run_blocking(move || inspect(&media, &query), MemoryError::Stopped).await
+    }
+    .await;
+    answer(&app, "inspect", result)
+}
+
 async fn changes(
     State(app): State<Arc<AppState>>,
     query: Result<Query<HistoryQuery>, QueryRejection>,
@@ -253,6 +270,7 @@ pub fn router_with(app: Arc<AppState>) -> Router {
         .route(path::MEMORY_DELETE, post(remove))
         .route(path::MEMORY_REFERENCES, post(attach))
         .route(path::MEMORY_COMPOSE, post(compose))
+        .route(path::MEMORY_INSPECT, get(looked_at))
         .route(path::MEMORY_HISTORY, get(changes))
         .with_state(app)
 }

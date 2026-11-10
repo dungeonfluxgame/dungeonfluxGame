@@ -136,6 +136,10 @@ pub mod gallery;
 #[cfg(test)]
 mod gallery_tests;
 
+pub mod picture_check;
+#[cfg(test)]
+mod picture_check_tests;
+
 pub mod identity_question;
 
 pub mod oneshot_segment;

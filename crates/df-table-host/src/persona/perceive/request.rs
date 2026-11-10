@@ -150,6 +150,9 @@ pub struct NewThing {
     pub look: String,
     /// Whether it is now a thing of the active place, so the next close look can cut to it.
     pub added: bool,
+    /// Why it was left out, and what to change, when it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why_not: Option<String>,
 }
 
 /// What the character now attends to.
@@ -385,7 +388,8 @@ impl fmt::Display for PerceiveCause {
             }
             Self::NewThingForPerson { see } => write!(
                 formatter,
-                "sees entry {see} has a region, so it is a person, and a person is not a thing"
+                "sees entry {see} has a region, so it is a person, and a person is never a thing; \
+                 remove its new_things entry"
             ),
             Self::HandleInText => formatter
                 .write_str("the answer calls someone person-N; say them by how they look instead"),

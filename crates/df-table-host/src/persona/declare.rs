@@ -459,6 +459,37 @@ pub(super) async fn run(port: u16, command: DeclareCommand) -> Result<String, De
     Ok(lines.join("\n"))
 }
 
+/// How a declared plate is made from the picture on screen: an edit of it, or painted anew.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct BasePlan {
+    /// Edit the picture on screen (true), or paint the scene anew (false).
+    pub edit: bool,
+    /// Why, as a closed key for the log: `cast_only`, `extra_figures`, `layout_unread`, `no_base`.
+    pub reason: &'static str,
+}
+
+impl BasePlan {
+    /// `edit` or `fresh`, as the log writes it.
+    pub(super) fn way(self) -> &'static str {
+        if self.edit { "edit" } else { "fresh" }
+    }
+}
+
+/// How a declared plate is made. An edit keeps what the picture on screen shows, so a picture that
+/// holds more figures than the scene's `cast` would carry the extra ones into the action (run 4: a
+/// second likeness of the speaker among the people of a market stall): it is painted anew instead,
+/// from the place's words. `figures` is how many the picture's stored scan found (none when it has
+/// no scan: then it is edited, as before, since nothing says otherwise).
+pub(super) fn plan_base(base_held: bool, figures: Option<usize>, cast: usize) -> BasePlan {
+    let (edit, reason) = match (base_held, figures) {
+        (false, _) => (false, "no_base"),
+        (true, Some(found)) if found > cast => (false, "extra_figures"),
+        (true, Some(_)) => (true, "cast_only"),
+        (true, None) => (true, "layout_unread"),
+    };
+    BasePlan { edit, reason }
+}
+
 /// What a declared plate must not show, in plain neutral words, beside the house look's own: an
 /// edit of a picture that is told about a person can paint them again.
 pub(super) const NO_DUPLICATES: [&str; 3] = ["the same person twice", "clones", "extra people"];
