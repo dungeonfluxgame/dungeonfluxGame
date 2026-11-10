@@ -294,6 +294,23 @@ fn the_dice_are_laid_in_rows_that_fit_the_tray_and_fewer_dice_are_bigger() {
 }
 
 #[test]
+fn a_chip_too_long_for_a_row_is_two_lines_tall_in_the_height_of_the_card() {
+    let mut view = roll(
+        RollKind::AbilityCheck,
+        vec![die(20, 15, DieRole::Test, true)],
+        vec![modifier("Dexterity", 2)],
+        17,
+    );
+    let plain = RollCard::from(&view).height_tenths();
+    view.inspiration_reroll = Some(InspirationReroll { index: 0, was: 4 });
+    let inspired = RollCard::from(&view).height_tenths();
+    assert!(
+        inspired >= plain + 25,
+        "the chip's two lines outweigh the pair's shorter tray: {plain} then {inspired}"
+    );
+}
+
+#[test]
 fn a_pair_is_set_apart_by_a_gap_that_fits_the_tray_and_other_rows_have_none() {
     let pair = TrayGrid::of(2);
     assert!(

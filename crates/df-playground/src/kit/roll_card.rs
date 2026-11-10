@@ -242,8 +242,11 @@ const MARKS_ROW_GAP_TENTHS: u32 = 3;
 /// capitals are spaced, a chip is smaller and padded.
 const MARKS_GAP_TENTHS: u32 = 7;
 const KICKER_CHARACTER_TENTHS: u32 = 17;
-const CHIP_CHARACTER_TENTHS: u32 = 12;
-const CHIP_PADDING_TENTHS: u32 = 21;
+const CHIP_CHARACTER_TENTHS: u32 = 14;
+const CHIP_PADDING_TENTHS: u32 = 25;
+/// A chip's height: its lines of text, and its padding and border.
+const CHIP_LINE_TENTHS: u32 = 20;
+const CHIP_FIXED_TENTHS: u32 = 11;
 const TITLE_FONT_TENTHS: u32 = 29;
 const TITLE_FONT_LONG_TENTHS: u32 = 22;
 /// How many characters of the title fit a line at each size.
@@ -474,31 +477,43 @@ impl RollCard {
         lines
     }
 
-    /// How many rows the kicker and the chips beside it take: they wrap when they do not fit
-    /// one row.
-    fn marks_rows(&self) -> u32 {
+    /// How tall the kicker and the chips beside it are: they wrap when they do not fit one row, a
+    /// row is as tall as its tallest mark, and a chip too long for a row breaks onto lines.
+    fn marks_height_tenths(&self) -> u32 {
         let chips = [
             self.mode_word().map(str::to_owned),
             self.inspiration_word(),
             self.natural_word().map(str::to_owned),
         ];
-        let widths =
-            self.kicker()
-                .map(|kicker| character_count(kicker) * KICKER_CHARACTER_TENTHS)
-                .into_iter()
-                .chain(chips.iter().flatten().map(|chip| {
-                    character_count(chip) * CHIP_CHARACTER_TENTHS + CHIP_PADDING_TENTHS
-                }));
-        let (mut rows, mut used) = (1, 0);
-        for width in widths {
+        let marks = self
+            .kicker()
+            .map(|kicker| {
+                (
+                    character_count(kicker) * KICKER_CHARACTER_TENTHS,
+                    MARKS_ROW_TENTHS,
+                )
+            })
+            .into_iter()
+            .chain(chips.iter().flatten().map(|chip| {
+                let width = character_count(chip) * CHIP_CHARACTER_TENTHS + CHIP_PADDING_TENTHS;
+                let lines = width.div_ceil(CARD_CONTENT_WIDTH_TENTHS);
+                (
+                    width.min(CARD_CONTENT_WIDTH_TENTHS),
+                    lines * CHIP_LINE_TENTHS + CHIP_FIXED_TENTHS,
+                )
+            }));
+        let (mut height, mut row, mut used) = (0, MARKS_ROW_TENTHS, 0);
+        for (width, mark) in marks {
             if used > 0 && used + MARKS_GAP_TENTHS + width > CARD_CONTENT_WIDTH_TENTHS {
-                rows += 1;
+                height += row + MARKS_ROW_GAP_TENTHS;
+                row = MARKS_ROW_TENTHS.max(mark);
                 used = width;
             } else {
                 used += if used > 0 { MARKS_GAP_TENTHS } else { 0 } + width;
+                row = row.max(mark);
             }
         }
-        rows
+        height + row
     }
 
     /// Whether the total has so many characters that it is written smaller, to keep its box
@@ -560,10 +575,7 @@ impl RollCard {
         let title_lines = character_count(self.title())
             .div_ceil(line_characters)
             .clamp(1, 2);
-        let marks_rows = self.marks_rows();
-        let head = marks_rows * MARKS_ROW_TENTHS
-            + (marks_rows - 1) * MARKS_ROW_GAP_TENTHS
-            + title_lines * title_font * 11 / 10;
+        let head = self.marks_height_tenths() + title_lines * title_font * 11 / 10;
         let slots = self.slots();
         let tray = match self.layout() {
             TrayLayout::Dice(grid) => Some(grid.tray_height_tenths()),

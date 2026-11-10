@@ -3955,19 +3955,24 @@
 .kit-roll-title-long {
   font-size: 2.2cqw;
 }
+/* The chips beside the kicker are as large as the call's other words (2cqw, over 3.5 percent of the
+   screen's height); a long one, "Heroic Inspiration, was 4", does not fit a row of the card and
+   breaks onto two lines. */
 .kit-roll-mode {
-  font: 800 1.5cqw/1 var(--kit-body);
-  letter-spacing: .1em;
+  max-width: 100%;
+  text-align: center;
+  font: 800 2cqw/1 var(--kit-body);
+  letter-spacing: .06em;
   text-transform: uppercase;
-  padding: .35cqw .9cqw;
-  border-radius: 99cqw;
+  padding: .4cqw 1.1cqw;
+  border-radius: 1.6cqw;
   border: .14cqw solid currentColor;
 }
 .kit-roll-mode-advantage {
   color: var(--roll-positive);
 }
 .kit-roll-mode-disadvantage {
-  color: var(--roll-negative);
+  color: #ff9674;
 }
 .kit-roll-mode-inspiration {
   color: var(--kit-gold);
@@ -3994,8 +3999,7 @@
 .kit-roll-tray {
   position: relative;
   height: var(--tray-h, 11.5cqw);
-  overflow: hidden;
-  contain: layout paint;
+  contain: layout;
   border-radius: 1.4cqw;
   background:
     radial-gradient(ellipse 55% 75% at 50% 55%, #d9904a30 0, #d9904a00 72%),
@@ -4043,7 +4047,8 @@
   animation: roll-toss calc(var(--roll-tumble) - var(--throw)) cubic-bezier(.12, .6, .25, 1) calc(var(--roll-tumble-at) + var(--throw) - var(--roll-age)) 1 both;
 }
 /* The contact shadow stays on the tray while the die hops above it, and a softer one spreads wide
-   under it. */
+   under it. It is drawn only when the die lies (it would turn with the die in the air, and
+   be a dark slash away from it). */
 .kit-roll-die::after {
   content: "";
   position: absolute;
@@ -4053,6 +4058,7 @@
   height: 18%;
   border-radius: 50%;
   background: radial-gradient(closest-side, #000e 40%, #0000);
+  animation: roll-fade var(--roll-faces) ease calc(var(--roll-faces-at) - var(--roll-faces) - var(--roll-age)) 1 both;
 }
 .kit-roll-hop {
   position: absolute;
@@ -4186,6 +4192,8 @@
 }
 /* A crowd of dice: a cluster that tumbles, and the faces counted beside it. */
 .kit-roll-tray-tally {
+  overflow: hidden;
+  contain: layout paint;
   display: flex;
   align-items: stretch;
   gap: .8cqw;
@@ -4201,9 +4209,15 @@
   align-items: center;
   justify-content: center;
 }
+/* Three cubes lie one above the other inside the tray's rim, and they do not leave it: they
+   come in from the side and hop only a little. */
 .kit-roll-die-decor {
-  --roll-die: calc(var(--cluster) * .8);
-  margin: -1.1cqw 0;
+  --roll-die: calc(var(--cluster) * .64);
+  margin: -1cqw 0;
+}
+.kit-roll-die-decor .kit-roll-hop {
+  --from-y: 0cqw;
+  --hop: -3%;
 }
 .kit-roll-tally {
   position: relative;
@@ -4336,8 +4350,8 @@
 .kit-roll-tone-neutral .kit-roll-wash {
   background: radial-gradient(ellipse 95% 55% at 50% 100%, #bcd3f226, #bcd3f200 75%);
 }
-/* While the dice roll the total's place shows the target, or a dash, dim; it gives way to the
-   total. */
+/* While the dice roll the total's place shows the target, or a dash, at full strength (it is read
+   for over four seconds); it gives way to the total. */
 .kit-roll-pending {
   inset: 0 1cqw;
   display: flex;
@@ -4348,7 +4362,7 @@
   text-wrap: balance;
   font: 700 4.4cqw/1.1 var(--roll-figures);
   color: var(--kit-gold);
-  animation: roll-away var(--roll-sum) ease calc(var(--roll-sum-at) - var(--roll-age)) 1 both;
+  animation: roll-clear var(--roll-sum) ease calc(var(--roll-sum-at) - var(--roll-age)) 1 both;
 }
 .kit-roll-foot {
   display: flex;
@@ -4359,10 +4373,7 @@
 }
 .kit-roll-sum {
   min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: .2cqw .8cqw;
+  text-wrap: balance;
   font: 700 3cqw/1.2 var(--kit-body);
   color: var(--roll-numeral);
   animation: roll-fade var(--roll-sum) ease calc(var(--roll-sum-at) - var(--roll-age)) 1 both;
@@ -4374,6 +4385,7 @@
   display: inline-flex;
   align-items: baseline;
   gap: .6cqw;
+  margin-right: .8cqw;
   white-space: nowrap;
 }
 .kit-roll-number,
@@ -4544,6 +4556,11 @@
   from {
     opacity: .6;
   }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes roll-clear {
   to {
     opacity: 0;
   }
