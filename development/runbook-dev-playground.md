@@ -3256,11 +3256,18 @@ plate reads as an inert target: give a station a plate that shows its opponent; 
 stations now use the ford plate with a bandit and all three rolled on the first ask), and a
 healing roll's flat bonus was unlabelled (the sheet's healing entry now carries a `bonus_label`;
 the hit die says "plus two for Constitution", Second Wind "plus three for class level").
-Open: (1) a natural 1 or 20 has not yet shown its mark on a card (a natural 1 on an ability check
-shows none by rule). (2) The roll card's visual review ran to round 10 in an isolated headless
-Edge with paused animations (rounds 9 and 10 found nothing above polish on the 13 cards; a 20-dice
-roll shows no tumbling dice, a polish item); the display was not looked at on the owner's own
-screen. (3) The toolbar toggles' mouse-click and restart checklist is still owed.
+Final unvoiced run on the last build (48 stations, 3727 s): 48 of 48 rolled, none stuck or
+failed, no first-ask no_check, cards never held too short, a natural 1 mark shown on a card once
+(an attack roll; a natural 20 on an ability check shows none by rule). The flourishes no longer
+repeat the setting image (the ford spray and dusk wind of the earlier run are gone); the model now
+leans on body sensations ("breath" in 11 of 96 DM lines, "pulse" in 7), which is open. The
+toolbar toggles were clicked with real mouse events in a headless Edge: each responded, survived
+a page reload, matched `playground` and `settings.json`; TTS on and off both survive a host
+restart. Open: (1) the body-sensation repetition above; a natural 20 attack mark was not seen live
+(the card gallery shows it). (2) The roll card's visual review ran to round 10 in an isolated
+headless Edge with paused animations (rounds 9 and 10 found nothing above polish on the 13 cards; a
+20-dice roll shows no tumbling dice, a polish item); frames were sent to the owner but the card
+has not been watched moving on the owner's own screen.
 
 **H-1, "the host stops logging" (2026-11-10): CLOSED, not a host defect.** On the live host the log was
 checked read-only after run 9: `latest` did not move for a `GET` and a `world inventory get`
