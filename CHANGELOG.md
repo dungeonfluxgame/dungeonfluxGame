@@ -14,9 +14,9 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
-## 2026-11-10T15:52:29-05:00 to 2026-11-10T18:10:00-05:00
+## 2026-11-10T15:52:29-05:00 to 2026-11-10T21:30:00-05:00
 
-Range: 6daa741190cb62251fd541a566633536647165ac..3ab016db49ece41f40ce0b9380bc2d5d0cdc4f3a (the bookkeeping commit b7558d1e is carried here)
+Range: 6daa741190cb62251fd541a566633536647165ac..a1c1a372ed8561a79f9b3111edec81c7b38371a6 (the bookkeeping commit b7558d1e is carried here)
 
 - b7558d1e - CHANGELOG: record the dice gauntlet commits in six-hour blocks
 - 3af8fa1c - roll card: dice pair gap and a clear strike, strip waits for the exit; healing bonus is named
@@ -24,6 +24,8 @@ Range: 6daa741190cb62251fd541a566633536647165ac..3ab016db49ece41f40ce0b9380bc2d5
 - 62df55d7 - roll card: tally says how many of which die, breakdown digits have headroom, verdict words lifted
 - b0b4e9fb - roll card: a tally tray grows to hold every face, a long sum keeps its ending, a short one stays on a line
 - 3ab016db - gauntlet: ranged stations use the ford plate so the opponent is in sight; runbook state
+- 773813b6 - CHANGELOG: record the roll card and ranged station commits
+- a1c1a372 - runbook: the final gauntlet run, the toggle click check and the open items
 
 ## 2026-11-10T12:06:09-05:00 to 2026-11-10T15:52:29-05:00
 
