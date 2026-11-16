@@ -408,10 +408,10 @@
 .ph-field-message { margin: 0; font: italic var(--ph-t-small)/1.35 var(--ui-font); color: var(--ui-muted-warm); }
 
 /* Numbers: ability scores, the action economy, the hero sheet. */
-.ph-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.ph-stat { --ph-cut: 10px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 6px; text-align: center; }
+.ph-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.ph-stat { --ph-cut: 10px; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; padding: 12px 4px; text-align: center; }
 .ph-stat-value { font: 500 26px/1.1 var(--ui-font); color: var(--ui-text-strong); text-shadow: 0 0 12px #f1d9a066; font-variant-numeric: tabular-nums; }
-.ph-stat-label { font: 500 var(--ph-t-small)/1.2 var(--ui-font); letter-spacing: .06em; text-transform: uppercase; color: var(--ui-tone-narrator); }
+.ph-stat-label { max-width: 100%; font: 500 12px/1.2 var(--ui-font); letter-spacing: .02em; text-transform: uppercase; color: var(--ui-tone-narrator); overflow-wrap: anywhere; }
 .ph-stat-sub { font: italic 13px/1.2 var(--ui-font); color: var(--ui-muted-warm); }
 .ph-stat-spent { opacity: .55; }
 .ph-meter { display: flex; flex-direction: column; gap: 6px; }
@@ -565,3 +565,14 @@
   .ph-screen .composer-field { flex: 1 1 100%; }
   .ph-screen .composer-mic, .ph-screen .composer-send { flex: 1 1 0; }
 }
+
+/* The tab bar's pages. The demo is one phone screen filling the window; on the live phone the
+   open page decides which pieces of the one body show. */
+.ph-demo-root { height: 100dvh; background: var(--ui-ink); }
+.ph-demo-root .ph-screen { height: 100%; }
+.ph-dock { position: relative; z-index: 5; }
+.ph-more-scrim { position: absolute; inset: 0; z-index: 4; background: #05070f73; }
+.ph-more-link { color: var(--ui-text-strong); }
+.ph-live[data-page="story"] [data-part="phone-choices"], .ph-live[data-page="story"] .composer { display: none; }
+.ph-live[data-page="act"] [data-part="phone-image"], .ph-live[data-page="act"] [data-part="phone-narration"], .ph-live[data-page="act"] [data-part="phone-note"] { display: none; }
+.ph-live[data-page="other"] .ph-story, .ph-live[data-page="other"] .composer { display: none; }

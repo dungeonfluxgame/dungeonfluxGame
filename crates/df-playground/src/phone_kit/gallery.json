@@ -260,7 +260,9 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "story",
+          "tab": "story"
         },
         {
           "title": "Suggestions and a typed line",
@@ -350,7 +352,9 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "act",
+          "tab": "act"
         },
         {
           "title": "Listening, the microphone on",
@@ -561,7 +565,9 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "talk",
+          "tab": "talk"
         },
         {
           "title": "Speaking to the whole room",
@@ -704,7 +710,9 @@
                 }
               ]
             }
-          }
+          },
+          "key": "roll",
+          "tab": "roll"
         },
         {
           "title": "With advantage",
@@ -950,19 +958,22 @@
                     "label": "What did you do?",
                     "value": "A soldier who served the crown",
                     "because": "Gives you the Soldier background",
-                    "change": "Change"
+                    "change": "Change",
+                    "action": "page:create-deep"
                   },
                   {
                     "label": "How do you fight?",
                     "value": "Up close, sword and shield",
                     "because": "Gives you the Fighter class",
-                    "change": "Change"
+                    "change": "Change",
+                    "action": "page:create-deep"
                   },
                   {
                     "label": "What do you want?",
                     "value": "To find my missing brother",
                     "because": "Shapes the story, not the numbers",
-                    "change": "Change"
+                    "change": "Change",
+                    "action": "page:create-deep"
                   }
                 ]
               },
@@ -975,16 +986,19 @@
                   },
                   {
                     "label": "Go deeper",
-                    "kind": "secondary"
+                    "kind": "secondary",
+                    "action": "page:create-deep"
                   },
                   {
                     "label": "Review my hero",
-                    "kind": "primary"
+                    "kind": "primary",
+                    "action": "page:create-review"
                   }
                 ]
               }
             ]
-          }
+          },
+          "key": "create"
         },
         {
           "title": "Species, class and background",
@@ -1102,9 +1116,25 @@
                   }
                 ],
                 "small": false
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Next: your numbers",
+                    "kind": "primary",
+                    "action": "page:create-abilities"
+                  },
+                  {
+                    "label": "Back",
+                    "kind": "secondary",
+                    "action": "page:back"
+                  }
+                ]
               }
             ]
-          }
+          },
+          "key": "create-deep"
         },
         {
           "title": "Abilities, skills and languages",
@@ -1208,12 +1238,14 @@
                 "buttons": [
                   {
                     "label": "Review my hero",
-                    "kind": "primary"
+                    "kind": "primary",
+                    "action": "page:create-review"
                   }
                 ]
               }
             ]
-          }
+          },
+          "key": "create-abilities"
         },
         {
           "title": "Review sheet",
@@ -1237,37 +1269,43 @@
                     "label": "Story",
                     "value": "Soldier who wants to find a brother",
                     "because": "From your three story cards",
-                    "change": "Change"
+                    "change": "Change",
+                    "action": "page:create-deep"
                   },
                   {
                     "label": "Species",
                     "value": "Human",
                     "because": "You picked it",
-                    "change": "Change"
+                    "change": "Change",
+                    "action": "page:create-deep"
                   },
                   {
                     "label": "Class",
                     "value": "Fighter, level 1",
                     "because": "How you fight: up close",
-                    "change": "Change"
+                    "change": "Change",
+                    "action": "page:create-deep"
                   },
                   {
                     "label": "Ability scores",
                     "value": "15 13 14 8 12 10",
                     "because": "Standard array, Fighter order",
-                    "change": "Change"
+                    "change": "Change",
+                    "action": "page:create-deep"
                   },
                   {
                     "label": "Skills",
                     "value": "Athletics, Perception",
                     "because": "Soldier and Fighter grant these",
-                    "change": "Change"
+                    "change": "Change",
+                    "action": "page:create-deep"
                   },
                   {
                     "label": "Languages",
                     "value": "Common",
                     "because": "Every hero speaks Common",
-                    "change": "Change"
+                    "change": "Change",
+                    "action": "page:create-deep"
                   }
                 ]
               },
@@ -1281,16 +1319,19 @@
                 "buttons": [
                   {
                     "label": "Lock in this hero",
-                    "kind": "primary"
+                    "kind": "primary",
+                    "action": "page:create-lock"
                   },
                   {
                     "label": "Back",
-                    "kind": "secondary"
+                    "kind": "secondary",
+                    "action": "page:back"
                   }
                 ]
               }
             ]
-          }
+          },
+          "key": "create-review"
         },
         {
           "title": "Lock in",
@@ -1312,9 +1353,25 @@
                 "kind": "notice",
                 "tone": "good",
                 "text": "You can join the table now. Your picture arrives when it is ready."
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Meet the table",
+                    "kind": "primary",
+                    "action": "page:story"
+                  },
+                  {
+                    "label": "Start over",
+                    "kind": "secondary",
+                    "action": "page:create"
+                  }
+                ]
               }
             ]
-          }
+          },
+          "key": "create-lock"
         }
       ]
     },
@@ -1496,9 +1553,25 @@
                     "selected": false
                   }
                 ]
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Add details",
+                    "kind": "primary",
+                    "action": "page:studio-details"
+                  },
+                  {
+                    "label": "Leave the studio",
+                    "kind": "secondary",
+                    "action": "page:create-review"
+                  }
+                ]
               }
             ]
-          }
+          },
+          "key": "studio"
         },
         {
           "title": "Details in your words",
@@ -1549,16 +1622,19 @@
                 "buttons": [
                   {
                     "label": "Refine",
-                    "kind": "primary"
+                    "kind": "primary",
+                    "action": "page:studio-gen"
                   },
                   {
                     "label": "Start again",
-                    "kind": "danger"
+                    "kind": "danger",
+                    "action": "page:studio"
                   }
                 ]
               }
             ]
-          }
+          },
+          "key": "studio-details"
         },
         {
           "title": "Generating",
@@ -1595,6 +1671,11 @@
                 ]
               }
             ]
+          },
+          "key": "studio-gen",
+          "auto": {
+            "page": "studio-compare",
+            "after_ms": 2600
           }
         },
         {
@@ -1618,11 +1699,13 @@
                 "buttons": [
                   {
                     "label": "Keep it",
-                    "kind": "primary"
+                    "kind": "primary",
+                    "action": "page:studio"
                   },
                   {
                     "label": "Keep old",
-                    "kind": "secondary"
+                    "kind": "secondary",
+                    "action": "page:studio"
                   }
                 ]
               },
@@ -1647,9 +1730,20 @@
                     "picture": "chip-cam.webp"
                   }
                 ]
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Sample: the picture fails",
+                    "kind": "secondary",
+                    "action": "page:studio-fail"
+                  }
+                ]
               }
             ]
-          }
+          },
+          "key": "studio-compare"
         },
         {
           "title": "It could not be made",
@@ -1677,16 +1771,19 @@
                 "buttons": [
                   {
                     "label": "Try again",
-                    "kind": "primary"
+                    "kind": "primary",
+                    "action": "page:studio-gen"
                   },
                   {
                     "label": "Start again",
-                    "kind": "danger"
+                    "kind": "danger",
+                    "action": "page:studio"
                   }
                 ]
               }
             ]
-          }
+          },
+          "key": "studio-fail"
         }
       ]
     },
@@ -1721,40 +1818,56 @@
                     "sub": "Two-handed",
                     "glyph": "sword",
                     "rarity": "rare",
-                    "selected": true
+                    "selected": true,
+                    "action": "page:bag-item"
                   },
                   {
                     "title": "Shield",
                     "sub": "+2 AC",
                     "glyph": "shield",
-                    "rarity": "uncommon"
+                    "rarity": "uncommon",
+                    "action": "page:bag-item"
                   },
                   {
                     "title": "Healing potion",
                     "sub": "x2",
                     "glyph": "plus",
-                    "rarity": "common"
+                    "rarity": "common",
+                    "action": "page:bag-item"
                   },
                   {
                     "title": "Rope",
                     "sub": "50 ft",
                     "glyph": "hammer",
-                    "rarity": "common"
+                    "rarity": "common",
+                    "action": "page:bag-item"
                   },
                   {
                     "title": "Old letter",
                     "sub": "Sealed",
                     "picture": "letter.png",
-                    "rarity": "uncommon"
+                    "rarity": "uncommon",
+                    "action": "page:bag-item"
                   },
                   {
                     "title": "Sun amulet",
                     "sub": "Warm to hold",
                     "glyph": "sun",
-                    "rarity": "legendary"
+                    "rarity": "legendary",
+                    "action": "page:bag-item"
                   }
                 ],
                 "small": true
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Visit the keeper",
+                    "kind": "secondary",
+                    "action": "page:bag-trade"
+                  }
+                ]
               }
             ],
             "tabs": {
@@ -1771,7 +1884,9 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "bag",
+          "tab": "inventory"
         },
         {
           "title": "One item",
@@ -1799,7 +1914,8 @@
                 "buttons": [
                   {
                     "label": "Look closer",
-                    "kind": "primary"
+                    "kind": "primary",
+                    "action": "page:look-bag"
                   },
                   {
                     "label": "Use",
@@ -1812,6 +1928,16 @@
                   {
                     "label": "Drop",
                     "kind": "danger"
+                  }
+                ]
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Back to the bag",
+                    "kind": "secondary",
+                    "action": "page:bag"
                   }
                 ]
               }
@@ -1830,7 +1956,9 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "bag-item",
+          "tab": "inventory"
         },
         {
           "title": "Trading with a keeper",
@@ -1877,6 +2005,16 @@
                 "kind": "notice",
                 "tone": "warn",
                 "text": "You cannot afford the Steel helm yet: 40 gp is more than your purse after the whetstone."
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Back to the bag",
+                    "kind": "secondary",
+                    "action": "page:bag"
+                  }
+                ]
               }
             ],
             "tabs": {
@@ -1893,7 +2031,9 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "bag-trade",
+          "tab": "inventory"
         },
         {
           "title": "Look closer",
@@ -1926,7 +2066,8 @@
                 "buttons": [
                   {
                     "label": "Back to the bag",
-                    "kind": "secondary"
+                    "kind": "secondary",
+                    "action": "page:bag"
                   }
                 ]
               }
@@ -1945,7 +2086,9 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "look-bag",
+          "tab": "inventory"
         }
       ]
     },
@@ -1982,7 +2125,8 @@
                     "mark": {
                       "text": "Seen",
                       "tone": "neutral"
-                    }
+                    },
+                    "action": "page:clue-look"
                   },
                   {
                     "title": "Old map",
@@ -1991,7 +2135,8 @@
                     "mark": {
                       "text": "Worked out",
                       "tone": "good"
-                    }
+                    },
+                    "action": "page:clue-look"
                   },
                   {
                     "title": "Grey cloak thread",
@@ -2000,7 +2145,8 @@
                     "mark": {
                       "text": "Seen",
                       "tone": "neutral"
-                    }
+                    },
+                    "action": "page:clue-look"
                   },
                   {
                     "title": "Bridge mark",
@@ -2009,7 +2155,8 @@
                     "mark": {
                       "text": "Worked out",
                       "tone": "good"
-                    }
+                    },
+                    "action": "page:clue-look"
                   }
                 ],
                 "small": false
@@ -2031,7 +2178,8 @@
                   },
                   {
                     "label": "Look closer",
-                    "kind": "secondary"
+                    "kind": "secondary",
+                    "action": "page:clue-look"
                   }
                 ]
               }
@@ -2050,7 +2198,9 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "clues",
+          "tab": "clues"
         },
         {
           "title": "Looking closer at a clue",
@@ -2076,6 +2226,16 @@
                 "kind": "notice",
                 "tone": "good",
                 "text": "Worked out: the gate is the Keldmere bridge gate."
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Back to the clues",
+                    "kind": "secondary",
+                    "action": "page:clues"
+                  }
+                ]
               }
             ],
             "tabs": {
@@ -2092,7 +2252,9 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "clue-look",
+          "tab": "clues"
         },
         {
           "title": "The map",
@@ -2130,14 +2292,16 @@
                     "x": 78,
                     "y": 30,
                     "plate": "home-hall-plate.webp",
-                    "state": "unvisited"
+                    "state": "unvisited",
+                    "action": "page:map-refused"
                   },
                   {
                     "name": "The Old Bridge",
                     "x": 24,
                     "y": 28,
                     "plate": "garrick-shop-plate.webp",
-                    "state": "unvisited"
+                    "state": "unvisited",
+                    "action": "page:map-refused"
                   }
                 ],
                 "ways": [
@@ -2176,7 +2340,9 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "map",
+          "tab": "map"
         },
         {
           "title": "A tap that is refused",
@@ -2228,11 +2394,13 @@
                 "buttons": [
                   {
                     "label": "Talk to the guards",
-                    "kind": "secondary"
+                    "kind": "secondary",
+                    "action": "page:map"
                   },
                   {
                     "label": "Look for another way",
-                    "kind": "secondary"
+                    "kind": "secondary",
+                    "action": "page:map"
                   }
                 ]
               }
@@ -2251,7 +2419,9 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "map-refused",
+          "tab": "map"
         }
       ]
     },
@@ -2394,7 +2564,9 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "hero",
+          "tab": "hero"
         },
         {
           "title": "The notebook",
@@ -2505,7 +2677,9 @@
               "text": "The man in grey is called Dain Rusk.",
               "keep_label": "Keep"
             }
-          }
+          },
+          "key": "notes",
+          "tab": "notebook"
         },
         {
           "title": "Kept pop-ups waiting",
@@ -2564,7 +2738,9 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "notes-recent",
+          "tab": "notebook"
         }
       ]
     },
@@ -2586,6 +2762,32 @@
               }
             },
             "blocks": [
+              {
+                "kind": "chips",
+                "label": "Battle pages",
+                "chips": [
+                  {
+                    "text": "Grid",
+                    "selected": true,
+                    "action": "page:battle"
+                  },
+                  {
+                    "text": "Actions",
+                    "selected": false,
+                    "action": "page:battle-actions"
+                  },
+                  {
+                    "text": "Reaction",
+                    "selected": false,
+                    "action": "page:battle-react"
+                  },
+                  {
+                    "text": "My state",
+                    "selected": false,
+                    "action": "page:battle-state"
+                  }
+                ]
+              },
               {
                 "kind": "strip",
                 "label": "Round 2 · turn order",
@@ -2760,6 +2962,16 @@
                     "kind": "secondary"
                   }
                 ]
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Leave battle",
+                    "kind": "secondary",
+                    "action": "page:act"
+                  }
+                ]
               }
             ],
             "tabs": {
@@ -2776,7 +2988,8 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "battle"
         },
         {
           "title": "What I can do",
@@ -2792,6 +3005,32 @@
               }
             },
             "blocks": [
+              {
+                "kind": "chips",
+                "label": "Battle pages",
+                "chips": [
+                  {
+                    "text": "Grid",
+                    "selected": false,
+                    "action": "page:battle"
+                  },
+                  {
+                    "text": "Actions",
+                    "selected": true,
+                    "action": "page:battle-actions"
+                  },
+                  {
+                    "text": "Reaction",
+                    "selected": false,
+                    "action": "page:battle-react"
+                  },
+                  {
+                    "text": "My state",
+                    "selected": false,
+                    "action": "page:battle-state"
+                  }
+                ]
+              },
               {
                 "kind": "stats",
                 "stats": [
@@ -2815,6 +3054,16 @@
                   {
                     "label": "Round",
                     "value": "2"
+                  }
+                ]
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Leave battle",
+                    "kind": "secondary",
+                    "action": "page:act"
                   }
                 ]
               }
@@ -2899,7 +3148,8 @@
                 ]
               }
             }
-          }
+          },
+          "key": "battle-actions"
         },
         {
           "title": "A reaction",
@@ -2915,6 +3165,32 @@
               }
             },
             "blocks": [
+              {
+                "kind": "chips",
+                "label": "Battle pages",
+                "chips": [
+                  {
+                    "text": "Grid",
+                    "selected": false,
+                    "action": "page:battle"
+                  },
+                  {
+                    "text": "Actions",
+                    "selected": false,
+                    "action": "page:battle-actions"
+                  },
+                  {
+                    "text": "Reaction",
+                    "selected": true,
+                    "action": "page:battle-react"
+                  },
+                  {
+                    "text": "My state",
+                    "selected": false,
+                    "action": "page:battle-state"
+                  }
+                ]
+              },
               {
                 "kind": "notice",
                 "tone": "accent",
@@ -2938,6 +3214,16 @@
                     "kind": "secondary"
                   }
                 ]
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Leave battle",
+                    "kind": "secondary",
+                    "action": "page:act"
+                  }
+                ]
               }
             ],
             "tabs": {
@@ -2954,7 +3240,8 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "battle-react"
         },
         {
           "title": "My state and the foes",
@@ -2970,6 +3257,32 @@
               }
             },
             "blocks": [
+              {
+                "kind": "chips",
+                "label": "Battle pages",
+                "chips": [
+                  {
+                    "text": "Grid",
+                    "selected": false,
+                    "action": "page:battle"
+                  },
+                  {
+                    "text": "Actions",
+                    "selected": false,
+                    "action": "page:battle-actions"
+                  },
+                  {
+                    "text": "Reaction",
+                    "selected": false,
+                    "action": "page:battle-react"
+                  },
+                  {
+                    "text": "My state",
+                    "selected": true,
+                    "action": "page:battle-state"
+                  }
+                ]
+              },
               {
                 "kind": "stats",
                 "stats": [
@@ -3037,6 +3350,16 @@
                     }
                   }
                 ]
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Leave battle",
+                    "kind": "secondary",
+                    "action": "page:act"
+                  }
+                ]
               }
             ],
             "tabs": {
@@ -3053,7 +3376,8 @@
                 "notebook"
               ]
             }
-          }
+          },
+          "key": "battle-state"
         }
       ]
     }

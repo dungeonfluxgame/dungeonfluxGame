@@ -5,11 +5,12 @@ use crate::phone_kit::shell::{HpBar, TabBadge, TabBar, TabKey};
 
 fn bar(active: TabKey, tabs: &[TabKey]) -> TabBar {
     TabBar {
-        active,
+        active: Some(active),
         tabs: tabs.to_vec(),
         badges: Vec::new(),
         more_open: false,
         working: Vec::new(),
+        links: Vec::new(),
     }
 }
 

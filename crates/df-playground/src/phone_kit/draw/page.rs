@@ -4,7 +4,7 @@
 use wasm_bindgen::JsValue;
 use web_sys::{Document, Element};
 
-use crate::dom::{append, element, set_style, text_element};
+use crate::dom::{append, element, set_action, set_style, text_element};
 use crate::kit::Rarity;
 use crate::overlay::Glyph;
 use crate::phone_kit::draw::{glyph, shell};
@@ -74,6 +74,9 @@ fn card(document: &Document, card: &PickCard, small: bool) -> Result<Element, Js
     class.push_str(&rarity_class(card.rarity));
     let button = element(document, "button", &class)?;
     button.set_attribute("type", "button")?;
+    if let Some(action) = &card.action {
+        set_action(&button, action)?;
+    }
     append(
         &button,
         &art(
@@ -137,6 +140,9 @@ fn row(document: &Document, row: &Row) -> Result<Element, JsValue> {
             change,
         )?;
         button.set_attribute("type", "button")?;
+        if let Some(action) = &row.action {
+            set_action(&button, action)?;
+        }
         append(&line, &button)?;
     }
     Ok(line)
@@ -150,6 +156,9 @@ fn chip(document: &Document, chip: &Chip) -> Result<Element, JsValue> {
     };
     let button = text_element(document, "button", class, &chip.text)?;
     button.set_attribute("type", "button")?;
+    if let Some(action) = &chip.action {
+        set_action(&button, action)?;
+    }
     if chip.removable {
         append(
             &button,
@@ -453,6 +462,9 @@ fn map(document: &Document, nodes: &[MapNode], ways: &[MapWay]) -> Result<Elemen
             &format!("ph-node ph-node-{}", place.state.key()),
         )?;
         node.set_attribute("type", "button")?;
+        if let Some(action) = &place.action {
+            set_action(&node, action)?;
+        }
         set_style(
             &node,
             &format!("left:{}%;top:{}%", place.x.min(100), place.y.min(100)),

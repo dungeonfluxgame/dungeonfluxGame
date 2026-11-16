@@ -72,11 +72,74 @@ fn the_boards_cover_the_shell_and_the_three_panels() {
     for screen in screens {
         if let Some(tabs) = &screen.panels.tabs {
             assert!(
-                tabs.tabs.contains(&tabs.active),
+                tabs.active.is_none_or(|active| tabs.tabs.contains(&active)),
                 "{} lacks its open tab",
                 screen.title
             );
             assert!(tabs.tabs.iter().all(|tab| TabKey::ALL.contains(tab)));
         }
+    }
+}
+
+#[test]
+fn every_page_key_is_unique_and_every_action_leads_to_a_page() {
+    use crate::phone_kit::nav::NavAction;
+    use crate::phone_kit::page::Block;
+
+    let gallery = PhoneGallery::read().expect("reads");
+    let screens: Vec<_> = gallery
+        .boards
+        .iter()
+        .flat_map(|board| &board.screens)
+        .collect();
+    let keys: Vec<&str> = screens
+        .iter()
+        .filter_map(|screen| screen.key.as_deref())
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), keys.len(), "a page key is used twice");
+    let mut actions: Vec<&str> = Vec::new();
+    for screen in &screens {
+        if let Some(auto) = &screen.auto {
+            assert!(keys.contains(&auto.page.as_str()), "{}", auto.page);
+        }
+        for block in &screen.panels.blocks {
+            match block {
+                Block::Buttons { buttons } => {
+                    actions.extend(buttons.iter().filter_map(|b| b.action.as_deref()));
+                }
+                Block::Cards { cards, .. } => {
+                    actions.extend(cards.iter().filter_map(|c| c.action.as_deref()));
+                }
+                Block::Chips { chips, .. } => {
+                    actions.extend(chips.iter().filter_map(|c| c.action.as_deref()));
+                }
+                Block::Rows { rows } => {
+                    actions.extend(rows.iter().filter_map(|r| r.action.as_deref()));
+                }
+                Block::Map { nodes, .. } => {
+                    actions.extend(nodes.iter().filter_map(|n| n.action.as_deref()));
+                }
+                _ => {}
+            }
+        }
+    }
+    for action in actions {
+        match NavAction::parse(action) {
+            Some(NavAction::Go(page)) => {
+                assert!(keys.contains(&page.as_str()), "{action} goes nowhere");
+            }
+            Some(_) => {}
+            None => panic!("{action} is not a navigation"),
+        }
+    }
+    for tab in TabKey::ALL {
+        assert!(
+            keys.contains(&tab.page_key()),
+            "{} has no page",
+            tab.label()
+        );
     }
 }

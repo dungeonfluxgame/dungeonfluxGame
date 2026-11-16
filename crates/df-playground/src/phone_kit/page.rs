@@ -39,6 +39,9 @@ pub struct PickCard {
     /// Greyed out, with the reason in `sub`.
     #[serde(default)]
     pub off: bool,
+    /// What a tap asks for (`nav::page_action`), when the card goes somewhere.
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
 /// One line of a list: a label with its value, the reason for it and a way to change it.
@@ -57,6 +60,9 @@ pub struct Row {
     pub mark: Option<Mark>,
     #[serde(default)]
     pub picture: Option<String>,
+    /// What a tap on the change button asks for.
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -67,6 +73,8 @@ pub struct Chip {
     /// Drawn with a remove mark, for a detail the player may take out.
     #[serde(default)]
     pub removable: bool,
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -142,6 +150,8 @@ pub struct MapNode {
     pub plate: Option<String>,
     #[serde(default)]
     pub state: NodeState,
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
 /// A way between two places, named by their names.

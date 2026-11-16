@@ -126,6 +126,21 @@ impl TabKey {
     }
 
     /// The word that ends the CSS class, the same as the serde name.
+    /// The page the tab opens, in the words of `nav::page_action`.
+    pub fn page_key(self) -> &'static str {
+        match self {
+            Self::Story => "story",
+            Self::Act => "act",
+            Self::Talk => "talk",
+            Self::Roll => "roll",
+            Self::Inventory => "bag",
+            Self::Clues => "clues",
+            Self::Map => "map",
+            Self::Hero => "hero",
+            Self::Notebook => "notes",
+        }
+    }
+
     pub fn key(self) -> &'static str {
         match self {
             Self::Story => "story",
@@ -145,7 +160,9 @@ impl TabKey {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TabBar {
-    pub active: TabKey,
+    /// The panel that is open; none when the page open is not one of the bar's (the creator, a
+    /// fight), which lights "more".
+    pub active: Option<TabKey>,
     /// The panels the bar offers, in order.
     pub tabs: Vec<TabKey>,
     /// A count on a tab: a roll waiting, a new note.
@@ -157,6 +174,17 @@ pub struct TabBar {
     /// The panels that work now; the others are drawn dimmed and do nothing. Empty means all.
     #[serde(default)]
     pub working: Vec<TabKey>,
+    /// Pages the "more" sheet lists after the panels that do not fit.
+    #[serde(default)]
+    pub links: Vec<MoreLink>,
+}
+
+/// A page the "more" sheet reaches that is not one of the bar's panels.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MoreLink {
+    pub label: String,
+    /// What a tap asks for (`nav::page_action`).
+    pub action: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,8 +215,10 @@ impl TabBar {
         let on_bar = PHONE_TAB_SLOTS - 1;
         let mut bar: Vec<TabKey> = self.tabs[..on_bar].to_vec();
         let mut more: Vec<TabKey> = self.tabs[on_bar..].to_vec();
-        if let Some(position) = more.iter().position(|tab| *tab == self.active) {
-            let displaced = std::mem::replace(&mut bar[on_bar - 1], self.active);
+        if let Some(active) = self.active
+            && let Some(position) = more.iter().position(|tab| *tab == active)
+        {
+            let displaced = std::mem::replace(&mut bar[on_bar - 1], active);
             more.remove(position);
             more.insert(0, displaced);
         }

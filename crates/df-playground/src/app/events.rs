@@ -97,6 +97,9 @@ pub fn on_click(event: &Event) {
     let Some((_, action)) = action else {
         return;
     };
+    if crate::phone_kit::draw::nav::on_action(&action) {
+        return;
+    }
     if voice::on_action(&action) {
         return;
     }

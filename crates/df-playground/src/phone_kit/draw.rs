@@ -20,6 +20,7 @@ use crate::phone_kit::shell::{PhoneHeader, Pill, TabKey};
 pub mod act;
 #[cfg(debug_assertions)]
 pub mod gallery;
+pub mod nav;
 pub mod page;
 pub mod roll;
 pub mod shell;
@@ -86,7 +87,33 @@ pub fn set_scene(screen: &Element, media: Option<&str>) -> Result<(), JsValue> {
 /// open panel of the tab bar decides whether the story (narration and note) or the actions (the
 /// choices) are drawn; a screen without a bar draws both.
 pub fn screen(document: &Document, panels: &PhonePanels) -> Result<Element, JsValue> {
-    let open = panels.tabs.as_ref().map(|tabs| tabs.active);
+    let body = body(document, panels)?;
+    let dock = element(document, "div", "ph-dock")?;
+    if let Some(sample) = &panels.composer {
+        append(
+            &dock,
+            &crate::view::composer::build(document, &sample.view(), &sample.text)?,
+        )?;
+    }
+    if let Some(tabs) = &panels.tabs {
+        append(&dock, &shell::tab_bar(document, tabs)?)?;
+    }
+    let screen = regions(
+        document,
+        "",
+        panels.link_down,
+        panels.header.as_ref(),
+        panels.status.as_ref(),
+        &body,
+        &dock,
+    )?;
+    set_scene(&screen, panels.scene.as_deref())?;
+    Ok(screen)
+}
+
+/// The scrolling body of a screen: every piece `panels` names, in the order of a phone.
+pub fn body(document: &Document, panels: &PhonePanels) -> Result<Element, JsValue> {
+    let open = panels.tabs.as_ref().and_then(|tabs| tabs.active);
     let story = open.is_none_or(|tab| tab == TabKey::Story);
     let actions = open.is_none_or(|tab| tab == TabKey::Act);
     let body = element(document, "main", "ph-body")?;
@@ -137,25 +164,5 @@ pub fn screen(document: &Document, panels: &PhonePanels) -> Result<Element, JsVa
     if let Some(loading) = &panels.loading {
         append(&body, &shell::loading(document, loading)?)?;
     }
-    let dock = element(document, "div", "ph-dock")?;
-    if let Some(sample) = &panels.composer {
-        append(
-            &dock,
-            &crate::view::composer::build(document, &sample.view(), &sample.text)?,
-        )?;
-    }
-    if let Some(tabs) = &panels.tabs {
-        append(&dock, &shell::tab_bar(document, tabs)?)?;
-    }
-    let screen = regions(
-        document,
-        "",
-        panels.link_down,
-        panels.header.as_ref(),
-        panels.status.as_ref(),
-        &body,
-        &dock,
-    )?;
-    set_scene(&screen, panels.scene.as_deref())?;
-    Ok(screen)
+    Ok(body)
 }

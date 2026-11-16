@@ -12,6 +12,7 @@ pub mod act;
 #[cfg(debug_assertions)]
 pub mod gallery;
 pub mod glyph;
+pub mod nav;
 pub mod page;
 pub mod roll;
 pub mod shell;
@@ -25,6 +26,8 @@ mod act_tests;
 #[cfg(all(test, debug_assertions))]
 mod gallery_tests;
 #[cfg(test)]
+mod nav_tests;
+#[cfg(test)]
 mod page_tests;
 #[cfg(test)]
 mod roll_tests;
@@ -37,7 +40,7 @@ use crate::phone_kit::act::{ActPanel, ComposerSample};
 use crate::phone_kit::page::Block;
 use crate::phone_kit::roll::RollPanel;
 use crate::phone_kit::shell::{
-    ButtonSpec, EmptyState, HpBar, LoadingState, PhoneHeader, Pill, TabBar, Toast,
+    ButtonSpec, EmptyState, HpBar, LoadingState, PhoneHeader, Pill, TabBar, TabKey, Toast,
 };
 use crate::phone_kit::talk::TalkPanel;
 
@@ -68,10 +71,26 @@ pub struct PhonePanels {
     pub tabs: Option<TabBar>,
 }
 
+/// A page that follows another after a time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutoNext {
+    pub page: String,
+    pub after_ms: u32,
+}
+
 /// One phone screen of a board, with the name of its state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PhoneScreen {
     pub title: String,
+    /// The page's name in the demo's navigation (`nav::page_action`).
+    #[serde(default)]
+    pub key: Option<String>,
+    /// The panel of the tab bar this page belongs to, which lights its tab.
+    #[serde(default)]
+    pub tab: Option<TabKey>,
+    /// A sample state that gives way to another page by itself, such as a picture being made.
+    #[serde(default)]
+    pub auto: Option<AutoNext>,
     pub panels: PhonePanels,
 }

@@ -108,6 +108,19 @@ fn draw_phone_gallery(
     document: &web_sys::Document,
     root: &web_sys::Element,
 ) -> Result<bool, JsValue> {
+    // The demo is one clickable phone screen: its taps are page navigation, through the page's one
+    // click routing.
+    if let Some(demo) = crate::phone_kit::draw::nav::demo_page(document)? {
+        append(root, &demo)?;
+        let click = Closure::<dyn FnMut(Event)>::new(|event: Event| {
+            if let Some((_, action)) = events::action_of(&event) {
+                crate::phone_kit::draw::nav::on_action(&action);
+            }
+        });
+        root.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+        return Ok(true);
+    }
     let board = match crate::phone_kit::draw::gallery::page(document)? {
         Some(page) => Some(page),
         None => crate::view::seat::gallery_page(document)?,

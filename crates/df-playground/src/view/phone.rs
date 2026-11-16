@@ -20,8 +20,9 @@ use crate::dom::{append, element, picture, text_element};
 use crate::draw_plan::Part;
 use crate::fixture::{Choice, PhoneScene, Status};
 use crate::phone_kit::act::ActChoices;
+use crate::phone_kit::draw::nav::{live_tabs, paint_live};
 use crate::phone_kit::draw::{act as kit_act, set_scene, shell as kit_shell};
-use crate::phone_kit::shell::{PhoneHeader, Pill, PillTone, TabBar, TabKey};
+use crate::phone_kit::shell::{PhoneHeader, Pill, PillTone};
 use crate::role::PageRole;
 use crate::view::tv::slot;
 
@@ -126,17 +127,6 @@ pub struct PhoneShell {
     pub slots: Vec<(Part, Element)>,
 }
 
-/// The panels a real phone offers; only Act works until the others are built.
-fn player_tabs() -> TabBar {
-    TabBar {
-        active: TabKey::Act,
-        tabs: TabKey::ALL.to_vec(),
-        badges: Vec::new(),
-        more_open: false,
-        working: vec![TabKey::Act],
-    }
-}
-
 /// A real phone's shell: the header and status, one scrolling story (picture, narration, note and
 /// choices together), and a dock low on the screen for the composer and the tab bar.
 fn player_shell(document: &Document) -> Result<PhoneShell, JsValue> {
@@ -157,9 +147,14 @@ fn player_shell(document: &Document) -> Result<PhoneShell, JsValue> {
         }
         slots.push((part, holder));
     }
-    append(&dock, &kit_shell::tab_bar(document, &player_tabs())?)?;
+    append(&dock, &kit_shell::tab_bar(document, &live_tabs())?)?;
+    // A page of the bar other than Story and Act is a sample page, drawn here while it is open.
+    let sample = element(document, "main", "ph-body ph-sample")?;
+    sample.set_attribute("hidden", "")?;
     append(&screen, &story)?;
+    append(&screen, &sample)?;
     append(&screen, &dock)?;
+    paint_live(document, &screen)?;
     append(&section, &screen)?;
     Ok(PhoneShell { section, slots })
 }

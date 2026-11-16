@@ -63,6 +63,7 @@ fn a_way_needs_both_its_places() {
             y: 20,
             plate: None,
             state: NodeState::Here,
+            action: None,
         },
         MapNode {
             name: "Keep".to_owned(),
@@ -70,6 +71,7 @@ fn a_way_needs_both_its_places() {
             y: 70,
             plate: None,
             state: NodeState::Unvisited,
+            action: None,
         },
     ];
     let way = |from: &str, to: &str| MapWay {

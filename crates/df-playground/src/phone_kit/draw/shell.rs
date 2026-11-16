@@ -7,6 +7,7 @@ use web_sys::{Document, Element};
 use crate::dom::{append, element, set_action, set_style, text_element};
 use crate::phone_kit::draw::glyph;
 use crate::phone_kit::glyph::PhoneGlyph;
+use crate::phone_kit::nav::{MORE_ACTION, page_action};
 use crate::phone_kit::shell::{
     ButtonSpec, EmptyState, HpBar, LoadingState, PhoneHeader, Pill, PillTone, TabBar, TabKey, Toast,
 };
@@ -230,7 +231,7 @@ fn tab_button(
     tab: TabKey,
     class: &str,
 ) -> Result<Element, JsValue> {
-    let active = bar.active == tab;
+    let active = bar.active == Some(tab);
     let button = element(
         document,
         "button",
@@ -238,6 +239,7 @@ fn tab_button(
     )?;
     button.set_attribute("type", "button")?;
     button.set_attribute("data-tab", tab.key())?;
+    set_action(&button, &page_action(tab.page_key()))?;
     if active {
         button.set_attribute("aria-current", "page")?;
     }
@@ -259,14 +261,26 @@ fn tab_button(
     Ok(button)
 }
 
+/// Whether the "more" slot leads anywhere: a panel that works or a link.
+fn has_more_that_works(bar: &TabBar, more: &[TabKey]) -> bool {
+    !bar.links.is_empty() || more.iter().any(|tab| bar.works(*tab))
+}
+
 /// The bottom bar, with the "more" slot and its sheet when the panels do not all fit.
 pub fn tab_bar(document: &Document, bar: &TabBar) -> Result<Element, JsValue> {
     let wrap = element(document, "div", "ph-tabs-wrap")?;
     let layout = bar.layout();
-    if bar.more_open && !layout.more.is_empty() {
+    let has_more = !layout.more.is_empty() || !bar.links.is_empty();
+    if bar.more_open && has_more {
         let sheet = element(document, "div", "ph-more-sheet")?;
         for tab in &layout.more {
             append(&sheet, &tab_button(document, bar, *tab, "ph-more-item")?)?;
+        }
+        for link in &bar.links {
+            let item = text_element(document, "button", "ph-more-item ph-more-link", &link.label)?;
+            item.set_attribute("type", "button")?;
+            set_action(&item, &link.action)?;
+            append(&sheet, &item)?;
         }
         append(&wrap, &sheet)?;
     }
@@ -275,18 +289,19 @@ pub fn tab_bar(document: &Document, bar: &TabBar) -> Result<Element, JsValue> {
     for tab in &layout.bar {
         append(&nav, &tab_button(document, bar, *tab, "ph-tab")?)?;
     }
-    if !layout.more.is_empty() {
+    if has_more {
         let more = element(
             document,
             "button",
-            if bar.more_open {
+            if bar.more_open || bar.active.is_none() {
                 "ph-tab ph-tab-more ph-tab-active"
             } else {
                 "ph-tab ph-tab-more"
             },
         )?;
         more.set_attribute("type", "button")?;
-        if !layout.more.iter().any(|tab| bar.works(*tab)) {
+        set_action(&more, MORE_ACTION)?;
+        if !has_more_that_works(bar, &layout.more) {
             more.set_attribute("disabled", "")?;
             more.set_attribute("title", OFF_TAB_WORDS)?;
         }
