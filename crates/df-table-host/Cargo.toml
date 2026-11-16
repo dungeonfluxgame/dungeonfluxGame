@@ -33,9 +33,11 @@ df-types = { path = "../df-types" }
 axum = "=0.8.9"
 base64 = "=0.22.1"
 prost.workspace = true
+qrcode = { version = "=0.14.1", default-features = false }
 futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
+sha2 = { version = "=0.10.9", default-features = false, features = ["std"] }
 tokio = { version = "=1.53.1", default-features = false, features = ["rt-multi-thread", "net", "time", "io-util", "io-std", "sync", "signal", "macros", "process"] }
 
 [dev-dependencies]

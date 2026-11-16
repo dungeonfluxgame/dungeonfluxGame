@@ -3,6 +3,9 @@
 //! constants and reads every query parameter here, so a rename breaks the build instead of a
 //! running page.
 
+/// The phone page (GET), served on the player listener: the playground page in its phone role
+/// (`role::PageRole`).
+pub const PLAY: &str = "/play";
 /// The live canvas (GET).
 pub const CANVAS: &str = "/canvas.json";
 /// Changes when any playground file does (GET).
@@ -41,6 +44,28 @@ pub const PERSONA_LIST: &str = "/dev/persona";
 /// Puts a question to a character of the shown scene (POST a `voice_wire::AskRequest`).
 pub const PERSONA_ASK: &str = "/dev/persona/ask";
 
+/// The room a phone is joining: its adventure, who has joined and whether it gathers (GET, a
+/// `seat::wire::RoomReply`).
+pub const PLAY_ROOM: &str = "/play/room";
+/// A phone says hello with its seat key (POST `{}`, a `seat::wire::HelloReply`).
+pub const PLAY_HELLO: &str = "/play/hello";
+/// A phone asks for a seat (POST a `seat::wire::JoinRequest`, a `seat::wire::JoinStatus`).
+pub const PLAY_JOIN: &str = "/play/join";
+/// Where a phone's request for a seat stands (GET, a `seat::wire::JoinStatus`).
+pub const PLAY_JOIN_STATUS: &str = "/play/join/status";
+/// The heroes the player at this phone may play (GET, a `seat::wire::HeroesReply`).
+pub const PLAY_HEROES: &str = "/play/heroes";
+/// The hero the player plays at their seat (POST a `seat::wire::HeroChoice`, a
+/// `seat::wire::SeatCard`).
+pub const PLAY_HERO: &str = "/play/hero";
+/// The seat's view of the table (GET, a `seat::wire::SeatView`).
+pub const PLAY_SEAT_VIEW: &str = "/play/seat/view";
+/// A lobby action of the seat (POST a `seat::wire::SeatIntent`, a `seat::wire::SeatIntentReply`).
+pub const PLAY_SEAT_INTENT: &str = "/play/seat/intent";
+/// The header that carries a phone's seat key on the `PLAY_*` routes, and never anywhere else:
+/// not in an address, not in a log.
+pub const SEAT_KEY_HEADER: &str = "x-df-seat-key";
+
 /// The query parameter of `FRAME` that names the last frame already seen.
 pub const FRAME_AFTER_PARAMETER: &str = "after";
 /// The query parameter of `FRAME` that names the run of the host the last frame came from.
@@ -67,8 +92,8 @@ pub const CLIENT_TIMELINE: &str = "/playground/clients/{client}/timeline.json";
 /// The part of `CLIENT_TIMELINE` that names the page, as the host's router writes a path
 /// parameter.
 pub const CLIENT_PLACEHOLDER: &str = "{client}";
-/// The header every request of a page (`page-xxxxxxxx`) or of the dev CLI (`cli`) carries, so the
-/// host can say who asked.
+/// The header every request of a page (`page-xxxxxxxx`, a phone's `phone-xxxxxxxx`) or of the dev
+/// CLI (`cli`) carries, so the host can say who asked.
 pub const CLIENT_HEADER: &str = "x-df-client";
 
 /// The address of the timeline of the page `client`.
@@ -79,4 +104,14 @@ pub fn client_timeline(client: &str) -> String {
 /// The address of the dice picture `name`.
 pub fn dice_file(name: &str) -> String {
     DICE_FILE.replace(NAME_PLACEHOLDER, name)
+}
+
+/// The value `key` has in a page address's query (`?phone_kit=3&x=1`), if the query names it.
+pub fn query_value<'query>(query: &'query str, key: &str) -> Option<&'query str> {
+    query
+        .trim_start_matches('?')
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(name, _)| *name == key)
+        .map(|(_, value)| value)
 }

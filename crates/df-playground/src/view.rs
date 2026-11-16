@@ -18,6 +18,7 @@ pub mod plate_fade;
 pub mod roleplay;
 pub mod roll;
 pub mod sam;
+pub mod seat;
 pub mod seats;
 pub mod story;
 pub mod tv;

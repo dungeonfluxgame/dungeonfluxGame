@@ -248,6 +248,7 @@ fn host_status() -> crate::server::request::HostStatus {
             tick_ms: 50,
         },
         engine_sink: None,
+        player_links: Vec::new(),
     }
 }
 
@@ -363,6 +364,7 @@ fn view(client: &str, report: df_playground::media::ClientReport) -> crate::wire
     crate::wire::ClientView {
         client: client.to_owned(),
         age_ms: 1500,
+        remote: None,
         report,
     }
 }

@@ -20,6 +20,7 @@ use crate::fixture::{ElementSource, Fixture, FixtureError, FixtureTitle, StageEl
 use crate::frame::LiveCanvas;
 use crate::net::NetError;
 use crate::page_log;
+use crate::role::PageRole;
 use crate::scene::SceneOverlay;
 use crate::timeline::{ErrorSource, FixtureLoadCause};
 
@@ -144,6 +145,8 @@ pub struct App {
     pub frame: Option<u64>,
     /// This page's name for itself in reports to the host.
     pub client_id: String,
+    /// What the page is for, read from its address when it starts.
+    pub role: PageRole,
     /// The text of the last report sent, so an unchanged report is not sent again.
     pub last_report: Option<String>,
     pub polls_since_report: u32,

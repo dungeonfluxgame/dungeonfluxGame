@@ -17,7 +17,7 @@
 //! records it; the controls routes read their body themselves and write `reason=too_large`.
 
 mod audit;
-mod clients;
+pub(crate) mod clients;
 mod controls_state;
 mod files;
 mod request;
@@ -727,6 +727,32 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route(path::DEV_FIXTURE_WRITE, post(write_fixture))
         .route(path::DEV_FIXTURE_REMOVE, post(remove_fixture))
+        .with_state(state)
+}
+
+/// Writes the `CLIENT gone` lines of the pages forgotten and the quiet lines of the phones gone
+/// quiet since the open pages were last looked at (the player listener's watch).
+pub(crate) fn sweep_clients(state: &AppState) {
+    let playground = state.playground();
+    for line in playground.client_table().sweep(playground.clock_ms()) {
+        state.record_line(line);
+    }
+}
+
+/// The playground routes the player listener serves (`player::router`): the phone page at
+/// `df_playground::path::PLAY`, the files it reads, what the playground shows and the page's own
+/// report. Nothing that changes what the playground shows, and no other `/dev/` route.
+pub(crate) fn player_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route(df_playground::path::PLAY, get(files::page))
+        .route(path::PLAYGROUND_THEME, get(files::theme))
+        .route(path::PLAYGROUND_REVISION, get(files::revision_text))
+        .route(path::PLAYGROUND_FIXTURE_LIST, get(files::fixture_list))
+        .route(path::PLAYGROUND_FIXTURE, get(files::fixture))
+        .route(path::PLAYGROUND_DICE_FILE, get(files::dice))
+        .route(path::PLAYGROUND_PACKAGE_FILE, get(files::package_file))
+        .route(path::PLAYGROUND_CONTROLS, get(controls_json))
+        .route(path::DEV_CLIENT_REPORT, post(clients::receive_report))
         .with_state(state)
 }
 

@@ -8,6 +8,11 @@
 //! sound preferences changed, an error it met, a draw that rebuilt pieces, and each line, plate,
 //! figure, clip, scene, sound, song and camera framing as it ends (`TIMING ..`). A heartbeat that
 //! says nothing new writes nothing, and a report wakes no page.
+//!
+//! A page is seen with its role and the address its report came from (`remote=`, `-` when the
+//! listener does not say). A phone (`PageRole::Phone`) silent for `PHONE_QUIET_AFTER` has lost its
+//! link: `CLIENT link client= state=quiet silent_ms=`, and `state=heard silent_ms=` when it reports
+//! again. A playground page is not watched that way: its tab may be hidden for hours.
 
 mod request;
 mod routes;
@@ -18,10 +23,12 @@ mod table_tests;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
+use std::net::IpAddr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use df_playground::limits::MAXIMUM_KEPT_TIMELINE_RECORDS;
 use df_playground::media::{ClientReport, is_plain_file_name};
+use df_playground::role::PageRole;
 use df_playground::timeline::{
     ClientError, ClientTimeline, TimelineDetail, TimelineEntry, TimelineKind, TimelineQuery,
     TimelineRecord,
@@ -30,7 +37,7 @@ use df_types::saturating_millis;
 
 pub use self::request::{ClientTimelineReply, ClientsError};
 pub(super) use self::routes::{clients_json, receive_report, timeline_json};
-use crate::limits::{FORGET_CLIENT_AFTER, MAXIMUM_CLIENT_NAME, MAXIMUM_CLIENTS};
+use crate::limits::{FORGET_CLIENT_AFTER, MAXIMUM_CLIENT_NAME, MAXIMUM_CLIENTS, PHONE_QUIET_AFTER};
 use crate::wire::ClientView;
 
 /// Why a page's name is not accepted.
@@ -92,7 +99,8 @@ fn checked_or_dash(value: Option<&str>) -> &str {
     value.map_or("-", checked)
 }
 
-fn number_or_dash(value: Option<u64>) -> String {
+/// `value` as an audit line or the dev CLI writes it, or `-` when there is none.
+pub(crate) fn shown_or_dash(value: Option<impl fmt::Display>) -> String {
     value.map_or_else(|| "-".to_owned(), |value| value.to_string())
 }
 
@@ -101,6 +109,10 @@ fn number_or_dash(value: Option<u64>) -> String {
 struct Page {
     /// When it last reported, on the playground's clock.
     heard_ms: u64,
+    /// The address its newest report came from, when the listener says.
+    remote: Option<IpAddr>,
+    /// A phone silent for `PHONE_QUIET_AFTER`, whose quiet line has been written.
+    quiet: bool,
     /// Its newest report, without the timeline records (they are in `timeline`).
     report: ClientReport,
     /// The newest error it reported, so each error is written once.
@@ -125,30 +137,39 @@ pub(crate) struct Recorded {
 #[derive(Debug, Default)]
 struct Pages {
     pages: BTreeMap<String, Page>,
-    /// At most `MAXIMUM_CLIENTS`; the oldest go first.
+    /// The `CLIENT gone` and quiet lines not yet taken; at most `MAXIMUM_CLIENTS`, the oldest go
+    /// first.
     departed: VecDeque<String>,
 }
 
 impl Pages {
     /// Forgets the pages silent for `FORGET_CLIENT_AFTER` as of `now_ms`, keeping a `CLIENT gone`
-    /// line for each.
+    /// line for each, and keeps a quiet line for each phone that has just gone quiet.
     fn forget_silent(&mut self, now_ms: u64) {
         let forget_after_ms = forget_after_ms();
+        let quiet_after_ms = saturating_millis(PHONE_QUIET_AFTER);
         let departed = &mut self.departed;
         self.pages.retain(|client, page| {
             let silent_ms = now_ms.saturating_sub(page.heard_ms);
+            let is_phone = page.report.role == PageRole::Phone;
+            if is_phone && !page.quiet && silent_ms >= quiet_after_ms {
+                page.quiet = true;
+                departed.push_back(format!(
+                    "CLIENT link client={client} state=quiet silent_ms={silent_ms}"
+                ));
+            }
             let keep = silent_ms < forget_after_ms;
             if !keep {
                 departed.push_back(format!("CLIENT gone client={client} silent_ms={silent_ms}"));
-                if departed.len() > MAXIMUM_CLIENTS {
-                    departed.pop_front();
-                }
+            }
+            while departed.len() > MAXIMUM_CLIENTS {
+                departed.pop_front();
             }
             keep
         });
     }
 
-    /// Forgets the silent pages and takes every `CLIENT gone` line kept.
+    /// Forgets the silent pages and takes every `CLIENT gone` and quiet line kept.
     fn sweep(&mut self, now_ms: u64) -> Vec<String> {
         self.forget_silent(now_ms);
         self.departed.drain(..).collect()
@@ -239,7 +260,7 @@ fn arrival_line(client: &str, entry: &TimelineEntry) -> Option<String> {
                 "CLIENT draw client={client} seq={} frame={} at_ms={} devices={devices} \
                  parts={} transition={} moved={moved}",
                 entry.seq,
-                number_or_dash(*frame),
+                shown_or_dash(*frame),
                 entry.start_ms,
                 if parts.is_empty() {
                     "-".to_owned()
@@ -287,7 +308,7 @@ fn ending_line(client: &str, entry: &TimelineEntry) -> Option<String> {
             entry.kind.key(),
             entry.start_ms,
             end_ms - entry.start_ms,
-            number_or_dash(entry.planned_ms),
+            shown_or_dash(entry.planned_ms),
             if entry.short { " short=true" } else { "" },
         )),
         (TimelineKind::Scene, detail) => {
@@ -315,7 +336,7 @@ fn ending_line(client: &str, entry: &TimelineEntry) -> Option<String> {
                     allowed_percent,
                 }) => (
                     zoom_percent.to_string(),
-                    number_or_dash(allowed_percent.map(u64::from)),
+                    shown_or_dash(allowed_percent.map(u64::from)),
                 ),
                 _ => ("-".to_owned(), "-".to_owned()),
             };
@@ -384,10 +405,16 @@ impl ClientTable {
         self.pages.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Remembers what a page said at `now_ms` and says which changes it brought. The report is
-    /// bounded; pages silent too long are forgotten first, and past `MAXIMUM_CLIENTS` a new page
-    /// replaces the page heard from longest ago.
-    pub(crate) fn record(&self, client: String, report: ClientReport, now_ms: u64) -> Recorded {
+    /// Remembers what a page said at `now_ms`, from `remote` when the listener says, and says which
+    /// changes it brought. The report is bounded; pages silent too long are forgotten first, and
+    /// past `MAXIMUM_CLIENTS` a new page replaces the page heard from longest ago.
+    pub(crate) fn record(
+        &self,
+        client: String,
+        report: ClientReport,
+        remote: Option<IpAddr>,
+        now_ms: u64,
+    ) -> Recorded {
         let mut recorded = Recorded::default();
         let mut table = self.lock();
         recorded.lines = table.sweep(now_ms);
@@ -407,12 +434,14 @@ impl ClientTable {
                 lines.push(format!("CLIENT evicted client={oldest}"));
             }
             lines.push(format!(
-                "CLIENT seen client={client} device={} viewport={}",
+                "CLIENT seen client={client} device={} viewport={} role={} remote={}",
                 report.device.key(),
                 report.viewport_px.map_or_else(
                     || "-".to_owned(),
                     |viewport| format!("{}x{}", viewport.width, viewport.height)
-                )
+                ),
+                report.role.key(),
+                shown_or_dash(remote)
             ));
             recorded.check_revision = Some(report.asset_revision.clone());
             let baseline = ClientReport {
@@ -423,6 +452,8 @@ impl ClientTable {
                 client.clone(),
                 Page {
                     heard_ms: now_ms,
+                    remote,
+                    quiet: false,
                     report: baseline,
                     last_error_seq: 0,
                     newest_seq: None,
@@ -433,6 +464,13 @@ impl ClientTable {
         let Some(page) = pages.get_mut(&client) else {
             return recorded;
         };
+        if page.quiet {
+            page.quiet = false;
+            lines.push(format!(
+                "CLIENT link client={client} state=heard silent_ms={}",
+                now_ms.saturating_sub(page.heard_ms)
+            ));
+        }
         lines.extend(change_lines(&client, &page.report, &report, now_ms));
         if page.report.asset_revision != report.asset_revision {
             recorded.check_revision = Some(report.asset_revision.clone());
@@ -483,12 +521,13 @@ impl ClientTable {
             }
         }
         page.heard_ms = now_ms;
+        page.remote = remote;
         page.report = report;
         recorded
     }
 
     /// Forgets the pages silent for `FORGET_CLIENT_AFTER` as of `now_ms`, and gives their
-    /// `CLIENT gone` lines.
+    /// `CLIENT gone` lines and the quiet lines of phones that have gone quiet.
     pub(crate) fn sweep(&self, now_ms: u64) -> Vec<String> {
         self.lock().sweep(now_ms)
     }
@@ -505,6 +544,7 @@ impl ClientTable {
             .map(|(client, page)| ClientView {
                 client: client.clone(),
                 age_ms: now_ms.saturating_sub(page.heard_ms),
+                remote: page.remote,
                 report: page.report.clone(),
             })
             .collect()

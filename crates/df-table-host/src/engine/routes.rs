@@ -17,7 +17,7 @@
 //! of a request.
 
 mod observe;
-mod play;
+pub(crate) mod play;
 mod reach;
 
 use std::sync::Arc;
@@ -429,6 +429,7 @@ fn router_over(app: Arc<AppState>, started: Result<Started, EngineStartError>) -
         .and_then(|started| started.check_kit.clone());
     let engine = Arc::new(started.map(|started| started.engine));
     let rules_check = dev_route::router(Arc::clone(&app), check_kit);
+    app.set_engine(Arc::clone(&engine));
     let routes = EngineRoutes { app, engine };
     Router::new()
         .route(path::INPUT, post(input))

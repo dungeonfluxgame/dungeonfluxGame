@@ -183,6 +183,15 @@ pub fn role_word(role: DieRole) -> &'static str {
     }
 }
 
+/// "Advantage" or "Disadvantage" for a roll made so, nothing for a normal one.
+pub fn mode_word(mode: RollMode) -> Option<&'static str> {
+    match mode {
+        RollMode::Normal => None,
+        RollMode::Advantage => Some("Advantage"),
+        RollMode::Disadvantage => Some("Disadvantage"),
+    }
+}
+
 /// The verdict's word and look.
 pub fn outcome_word(outcome: RollOutcome) -> (&'static str, Tone) {
     match outcome {
@@ -337,11 +346,7 @@ impl RollCard {
 
     /// "Advantage" or "Disadvantage" over a roll made so.
     pub fn mode_word(&self) -> Option<&'static str> {
-        match self.view.mode {
-            RollMode::Normal => None,
-            RollMode::Advantage => Some("Advantage"),
-            RollMode::Disadvantage => Some("Disadvantage"),
-        }
+        mode_word(self.view.mode)
     }
 
     /// The target as it is read: "DC 15".

@@ -209,9 +209,9 @@ impl EngineHandle {
             .await
     }
 
-    /// The seat's `MachineView` read to fill a wire intent: the intent's own line covers it, so
-    /// it writes none.
-    pub(super) async fn intent_view(
+    /// The seat's `MachineView` read to fill a wire intent, or to decide whether a phone's seat
+    /// joins: the intent's own line covers it, so it writes none.
+    pub(crate) async fn intent_view(
         &self,
         audience: AudienceSpec,
     ) -> Result<df_protocol::common::MachineView, EngineError> {

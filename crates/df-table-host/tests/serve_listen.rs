@@ -27,6 +27,7 @@ async fn a_port_in_use_still_drains_the_records_written_before_it_to_the_store()
         playground_directory: directory.path().join("playground"),
         package_directory: directory.path().join("pkg"),
         telemetry_root: Some(root.clone()),
+        players_port: None,
         records_moves: false,
         echoes_lines: false,
     };

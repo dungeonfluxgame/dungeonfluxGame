@@ -191,6 +191,9 @@ pub struct HostStatus {
     /// host's state (the broker and sink unit exposes it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_sink: Option<SinkHealth>,
+    /// The phone page's addresses on the player listener (`serve --players`); empty when it is off.
+    #[serde(default)]
+    pub player_links: Vec<String>,
 }
 
 /// The method of a request, for the `HTTP` audit lines.

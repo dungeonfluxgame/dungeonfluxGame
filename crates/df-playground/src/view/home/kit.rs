@@ -8,30 +8,13 @@
 use wasm_bindgen::JsValue;
 use web_sys::{Document, Element};
 
-use crate::dom::{append, element};
+use crate::dom::{append, element, line_svg};
 use crate::home::glyph::{HomeGlyph, HomeIcon};
 use crate::view::kit::glyph;
 
-const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
-
 /// A drawing of this page's own set as an `svg` of class `class`, in the current text colour.
 pub fn page_glyph(document: &Document, which: HomeGlyph, class: &str) -> Result<Element, JsValue> {
-    let svg = document.create_element_ns(Some(SVG_NAMESPACE), "svg")?;
-    for (name, value) in [
-        ("viewBox", "0 0 24 24"),
-        ("fill", "none"),
-        ("stroke", "currentColor"),
-        ("stroke-width", "1.7"),
-        ("stroke-linecap", "round"),
-        ("stroke-linejoin", "round"),
-        ("aria-hidden", "true"),
-        ("focusable", "false"),
-        ("class", class),
-    ] {
-        svg.set_attribute(name, value)?;
-    }
-    svg.set_inner_html(which.markup());
-    Ok(svg)
+    line_svg(document, which.markup(), "1.7", class)
 }
 
 /// A drawing of either set as an `svg` of class `class`.

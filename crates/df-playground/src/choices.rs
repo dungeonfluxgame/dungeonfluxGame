@@ -10,9 +10,25 @@ use std::fmt;
 
 use crate::fixture::{Choice, ChoiceGroup, PhoneScene, UnavailableChoice};
 use crate::limits::{MAXIMUM_LABEL_WORDS, MAXIMUM_SUGGESTED_CHOICES};
+use crate::overlay::Glyph;
 
-/// The fixed groups, in the order they are shown.
-pub const GROUP_NAMES: [&str; 6] = ["Attack", "Cast", "Move", "Use", "Talk", "Look"];
+/// The fixed groups, in the order they are shown, each with the glyph that marks it.
+pub const GROUPS: [(&str, Glyph); 6] = [
+    ("Attack", Glyph::Sword),
+    ("Cast", Glyph::Star),
+    ("Move", Glyph::Bow),
+    ("Use", Glyph::Hammer),
+    ("Talk", Glyph::Voice),
+    ("Look", Glyph::Sun),
+];
+
+/// The glyph of a fixed group, or the "Look" one for a name that is not fixed.
+pub fn group_glyph(name: &str) -> Glyph {
+    GROUPS
+        .iter()
+        .find(|(group, _)| *group == name)
+        .map_or(Glyph::Sun, |(_, glyph)| *glyph)
+}
 
 /// One way a fixture breaks the choice-list rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +54,7 @@ impl fmt::Display for Warning {
             Self::UnknownGroup { name } => write!(
                 formatter,
                 "'{name}' is not a group; the groups are {}",
-                GROUP_NAMES.join(", ")
+                GROUPS.map(|(name, _)| name).join(", ")
             ),
             Self::DuplicateGroup { name } => write!(formatter, "group '{name}' is listed twice"),
             Self::EmptyGroup { name } => write!(formatter, "group '{name}' has no choices"),
@@ -64,10 +80,10 @@ fn label_words(label: &str) -> usize {
 }
 
 fn group_rank(name: &str) -> usize {
-    GROUP_NAMES
+    GROUPS
         .iter()
-        .position(|group| *group == name)
-        .unwrap_or(GROUP_NAMES.len())
+        .position(|(group, _)| *group == name)
+        .unwrap_or(GROUPS.len())
 }
 
 /// Builds the view of a phone's choices and collects the warnings.
@@ -110,7 +126,7 @@ pub fn build(scene: &PhoneScene, show_unavailable: bool) -> ChoiceListView<'_> {
             });
             continue;
         }
-        if group_rank(&group.name) == GROUP_NAMES.len() {
+        if group_rank(&group.name) == GROUPS.len() {
             warnings.push(Warning::UnknownGroup {
                 name: group.name.clone(),
             });

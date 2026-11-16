@@ -3,6 +3,7 @@
 use df_playground::media::AudioState;
 use df_playground::timeline::{ClientTimeline, TimelineDetail, TimelineEntry};
 
+use crate::playground::clients::shown_or_dash;
 use crate::wire::ClientView;
 
 fn audio_text(audio: AudioState) -> &'static str {
@@ -39,6 +40,7 @@ fn client_lines(client: &ClientView, host_frame: Option<u64>) -> Vec<String> {
         || "-".to_owned(),
         |size| format!("{}x{}", size.width, size.height),
     );
+    let remote = shown_or_dash(client.remote);
     let mut lines = vec![
         format!(
             "client {} ({:.1} s ago): {}; last sound cue {}; music {music}; pictures shown {shown}",
@@ -49,14 +51,15 @@ fn client_lines(client: &ClientView, host_frame: Option<u64>) -> Vec<String> {
         ),
         format!(
             "  frame {frame}/{host} link={} failures={} rev={} fixture={}{fixture_error} \
-             device={} pace={} viewport={viewport} boot={}",
+             device={} pace={} viewport={viewport} boot={} role={} remote={remote}",
             report.link.key(),
             report.failures,
             optional(Some(report.asset_revision.as_str())),
             optional(report.fixture.as_deref()),
             report.device.key(),
             report.pace.key(),
-            optional(report.boot.as_deref())
+            optional(report.boot.as_deref()),
+            report.role.key()
         ),
     ];
     lines.extend(report.errors.iter().map(|error| {

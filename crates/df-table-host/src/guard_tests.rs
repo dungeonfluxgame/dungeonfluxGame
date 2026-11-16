@@ -1,6 +1,6 @@
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 
-use crate::guard::{GuardError, check};
+use crate::guard::{Audience, GuardError, check, check_for};
 use crate::speech::routes::path::SPEECH_TRANSCRIBE;
 
 /// `check` for a route that takes JSON.
@@ -238,6 +238,113 @@ fn the_recording_route_still_enforces_the_origin_and_the_fetch_site() {
     ]);
     assert_eq!(
         check(&Method::POST, SPEECH_TRANSCRIBE, &foreign_host),
+        Err(GuardError::ForeignHost)
+    );
+}
+
+/// The player listener's audience: one network address, on port 7880.
+fn players() -> Audience {
+    Audience::Players {
+        addresses: vec![std::net::IpAddr::from([192, 168, 1, 20])],
+        port: 7880,
+    }
+}
+
+#[test]
+fn the_player_listener_answers_this_machines_address_and_loopback_on_its_port_only() {
+    for host in [
+        "192.168.1.20:7880",
+        "127.0.0.1:7880",
+        "localhost:7880",
+        "[::1]:7880",
+    ] {
+        assert_eq!(
+            check_for(
+                &players(),
+                &Method::GET,
+                "/play",
+                &headers(&[("host", host)])
+            ),
+            Ok(()),
+            "{host}"
+        );
+    }
+    for host in [
+        "192.168.1.20",
+        "192.168.1.20:7879",
+        "192.168.1.21:7880",
+        "evil.example:7880",
+        "192.168.1.20:phone",
+    ] {
+        assert_eq!(
+            check_for(
+                &players(),
+                &Method::GET,
+                "/play",
+                &headers(&[("host", host)])
+            ),
+            Err(GuardError::ForeignHost),
+            "{host}"
+        );
+    }
+}
+
+#[test]
+fn the_player_listener_takes_a_same_origin_report_and_refuses_a_cross_site_one() {
+    let report = |origin: &str, site: &str| {
+        headers(&[
+            ("host", "192.168.1.20:7880"),
+            ("content-type", "application/json"),
+            ("origin", origin),
+            ("sec-fetch-site", site),
+        ])
+    };
+    let path = df_playground::path::CLIENT_REPORT;
+    assert_eq!(
+        check_for(
+            &players(),
+            &Method::POST,
+            path,
+            &report("http://192.168.1.20:7880", "same-origin")
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        check_for(
+            &players(),
+            &Method::POST,
+            path,
+            &report("http://evil.example", "cross-site")
+        ),
+        Err(GuardError::ForeignOrigin)
+    );
+    assert_eq!(
+        check_for(
+            &players(),
+            &Method::POST,
+            path,
+            &report("http://192.168.1.20:7880", "cross-site")
+        ),
+        Err(GuardError::CrossSiteRequest)
+    );
+    let form = headers(&[
+        ("host", "192.168.1.20:7880"),
+        ("content-type", "text/plain"),
+    ]);
+    assert_eq!(
+        check_for(&players(), &Method::POST, path, &form),
+        Err(GuardError::NotJson)
+    );
+}
+
+#[test]
+fn the_developer_api_still_refuses_this_machines_network_address() {
+    assert_eq!(
+        check(
+            &Method::GET,
+            "/canvas.json",
+            &headers(&[("host", "192.168.1.20:7879")])
+        ),
         Err(GuardError::ForeignHost)
     );
 }

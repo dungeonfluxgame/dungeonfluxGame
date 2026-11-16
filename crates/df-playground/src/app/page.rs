@@ -1,5 +1,6 @@
 //! The page as drawn: the toolbar, the scenario strip and the devices, kept as pieces so a change
-//! redraws only what it touches.
+//! redraws only what it touches. A real phone (`PageRole::Phone`) has no toolbar or strip: only its
+//! own screen, filling the window, and a line that says when its link to the host is down.
 //!
 //! `draw_plan` says what to redraw from the state last drawn and the state now. The leaving copy
 //! of a scene change lives beside the devices, not in them, so a redraw never takes it away and a
@@ -27,18 +28,27 @@ use crate::fixture::Fixture;
 use crate::media::AudioState;
 use crate::motion_style::{frozen_card_style, frozen_world_style};
 use crate::page_log::{now_ms, with_log};
+use crate::role::PageRole;
 use crate::timeline::{ErrorSource, Showing};
 use crate::view;
 
 /// The pieces of the page once it is drawn.
 pub struct Page {
-    toolbar: Element,
+    /// The playground's toolbar and scenario strip, or a phone's link line.
+    chrome: Chrome,
     wrap: Element,
     devices: Element,
-    /// The scenario strip. It is kept and only its words are redrawn, so it stays open or closed.
-    notes: Notes,
     tv: Option<view::tv::TvHandles>,
     slots: HashMap<Part, Element>,
+}
+
+/// What the page draws around the devices.
+enum Chrome {
+    /// The playground: the toolbar and the scenario strip. The strip is kept and only its words
+    /// are redrawn, so it stays open or closed.
+    Studio { toolbar: Element, notes: Notes },
+    /// A real phone: only the line that says its link is down, shown or hidden.
+    Phone { link: Element },
 }
 
 /// The scenario strip: the `details`, its `summary` and its body, each kept across redraws.
@@ -101,7 +111,7 @@ fn build_part(
         let (view, draft) = super::voice::composer_inputs(app);
         view::composer::build(document, &view, &draft).map(Some)
     } else {
-        view::phone::build_part(document, part, &fixture.phone, &app.controls)
+        view::phone::build_part(document, part, &fixture.phone, &app.controls, app.role)
     }
 }
 
@@ -135,7 +145,9 @@ fn build_devices(document: &Document, app: &App) -> Result<Devices, JsValue> {
         tv = Some(handles);
     }
     if app.controls.device.shows_phone() {
-        let shell = view::phone::shell(document)?;
+        let shell = view::phone::shell(document, app.role)?;
+        let scene = fixture.tv.backdrop.as_ref().map(|image| image.media.as_str());
+        view::phone::paint_scene(&shell.section, app.role, scene)?;
         for (part, holder) in &shell.slots {
             fill(holder, build_part(document, *part, fixture, app)?)?;
         }
@@ -364,18 +376,16 @@ pub fn on_animation_end(target: &Element) {
 }
 
 /// Replaces the toolbar, and gives the focus back to the same control when it had it.
-fn rebuild_toolbar(document: &Document, page: &mut Page, app: &App) -> Result<(), JsValue> {
+fn rebuild_toolbar(document: &Document, current: &mut Element, app: &App) -> Result<(), JsValue> {
     let focused = document
         .active_element()
-        .filter(|active| page.toolbar.contains(Some(active)))
+        .filter(|active| current.contains(Some(active)))
         .and_then(|active| active.get_attribute("data-action"));
     let bar = toolbar(document, app)?;
-    replace(&page.toolbar, &bar)?;
-    page.toolbar = bar;
+    replace(current, &bar)?;
+    *current = bar;
     if let Some(action) = focused
-        && let Some(control) = page
-            .toolbar
-            .query_selector(&format!("[data-action=\"{action}\"]"))?
+        && let Some(control) = current.query_selector(&format!("[data-action=\"{action}\"]"))?
         && let Ok(control) = control.dyn_into::<HtmlElement>()
     {
         control.focus()?;
@@ -434,27 +444,44 @@ fn redraw_parts(
     Ok(())
 }
 
-/// Builds the page from nothing.
+/// Builds the page from nothing: the studio around the devices, or a phone's own screen.
 fn build_page(document: &Document, root: &Element, app: &App) -> Result<Page, JsValue> {
-    let shell = element(document, "div", "studio")?;
-    let bar = toolbar(document, app)?;
-    append(&shell, &bar)?;
-    let body = element(document, "div", "studio-body")?;
-    let notes = Notes::new(document)?;
-    fill_notes(document, &notes, app)?;
-    append(&body, &notes.details)?;
     let wrap = element(document, "div", "stage-wrap")?;
     let built = build_devices(document, app)?;
     append(&wrap, &built.element)?;
-    append(&body, &wrap)?;
-    append(&shell, &body)?;
+    let (shell, chrome) = match app.role {
+        PageRole::Playground => {
+            let shell = element(document, "div", "studio")?;
+            let bar = toolbar(document, app)?;
+            append(&shell, &bar)?;
+            let body = element(document, "div", "studio-body")?;
+            let notes = Notes::new(document)?;
+            fill_notes(document, &notes, app)?;
+            append(&body, &notes.details)?;
+            append(&body, &wrap)?;
+            append(&shell, &body)?;
+            let chrome = Chrome::Studio {
+                toolbar: bar,
+                notes,
+            };
+            (shell, chrome)
+        }
+        PageRole::Phone => {
+            crate::phone_kit::draw::ensure_style(document)?;
+            let shell = element(document, "div", "phone-role")?;
+            let link = view::phone::link_line(document)?;
+            view::phone::show_link_line(&link, app.connection_problem.is_some())?;
+            append(&shell, &link)?;
+            append(&shell, &wrap)?;
+            (shell, Chrome::Phone { link })
+        }
+    };
     clear(root);
     append(root, &shell)?;
     Ok(Page {
-        toolbar: bar,
+        chrome,
         wrap,
         devices: built.element,
-        notes,
         tv: built.tv,
         slots: built.slots,
     })
@@ -548,8 +575,10 @@ fn apply_plan(
     plan: &DrawPlan,
 ) -> Result<DrawnChange, JsValue> {
     let mut change = DrawnChange::default();
-    if plan.toolbar {
-        rebuild_toolbar(document, page, app)?;
+    if plan.toolbar
+        && let Chrome::Studio { toolbar, .. } = &mut page.chrome
+    {
+        rebuild_toolbar(document, toolbar, app)?;
     }
     if plan.devices {
         let leaving = app.pending_transition.take();
@@ -574,8 +603,14 @@ fn apply_plan(
             tv.sync(document, app.stage_elements(), camera, layout, zoom_limit)?;
         }
     }
+    // The notes follow the connection problem, so a phone's link line follows them too.
     if plan.notes {
-        fill_notes(document, &page.notes, app)?;
+        match &page.chrome {
+            Chrome::Studio { notes, .. } => fill_notes(document, notes, app)?,
+            Chrome::Phone { link } => {
+                view::phone::show_link_line(link, app.connection_problem.is_some())?;
+            }
+        }
     }
     Ok(change)
 }

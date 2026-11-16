@@ -65,6 +65,28 @@ async fn filled_request(
     Ok(intent.request(&machine, observed, operation))
 }
 
+/// Runs one seat's intent through the owner, as a gRPC `SubmitMachineIntent` handler would once
+/// the call's credentials gave its seat. The wire intent route and the phone's seat routes
+/// (`crate::seat`) both submit through here, so there is one path.
+pub(crate) async fn submit_intent(
+    engine: &EngineHandle,
+    intent: &WireIntentBody,
+) -> Result<wire::SubmitMachineIntentResponse, EngineError> {
+    let request = match filled_request(engine, intent).await {
+        Ok(request) => request,
+        Err(error) => {
+            engine.record_wire_intent(
+                intent.seat,
+                None,
+                WireIntentOutcome::Refused,
+                Some(error.key()),
+            );
+            return Err(error);
+        }
+    };
+    Ok(engine.machine_intent(intent.seat, &request).await?)
+}
+
 pub(super) async fn wire_intent(
     State(routes): State<EngineRoutes>,
     bytes: Result<Bytes, BytesRejection>,
@@ -72,20 +94,7 @@ pub(super) async fn wire_intent(
     let started = Instant::now();
     let result = async {
         let intent: WireIntentBody = body(bytes)?;
-        let engine = engine(&routes)?;
-        let request = match filled_request(engine, &intent).await {
-            Ok(request) => request,
-            Err(error) => {
-                engine.record_wire_intent(
-                    intent.seat,
-                    None,
-                    WireIntentOutcome::Refused,
-                    Some(error.key()),
-                );
-                return Err(error);
-            }
-        };
-        let response = engine.machine_intent(intent.seat, &request).await?;
+        let response = submit_intent(engine(&routes)?, &intent).await?;
         Ok::<WireReceiptReport, EngineError>(receipt_report(&response))
     }
     .await;

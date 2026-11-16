@@ -2,14 +2,15 @@
 //! (`POST /dev/playground/report`) and a page's timeline
 //! (`GET /playground/clients/{client}/timeline.json`).
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::Json;
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, QueryRejection};
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use axum::{Extension, Json};
 use df_playground::media::ClientReportPost;
 use df_playground::path::CLIENT_HEADER;
 use df_playground::timeline::{ClientTimeline, TimelineQuery};
@@ -76,12 +77,15 @@ pub(in crate::playground) async fn clients_json(State(state): State<Arc<AppState
 
 /// A page says what it is showing and playing and what it showed since its last report. No page
 /// is woken; only what changed is written to the audit log. A report is at most
-/// `MAXIMUM_REPORT_BYTES`, so the whole table is bounded for each of `MAXIMUM_CLIENTS` pages.
+/// `MAXIMUM_REPORT_BYTES`, so the whole table is bounded for each of `MAXIMUM_CLIENTS` pages. The
+/// player listener says where a report came from (`ConnectInfo`); the dev listener does not.
 pub(in crate::playground) async fn receive_report(
     State(state): State<Arc<AppState>>,
+    connection: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
+    let remote = connection.map(|Extension(ConnectInfo(address))| address.ip());
     let too_large = || format!("a report is at most {MAXIMUM_REPORT_BYTES} bytes");
     let body = match body {
         Ok(body) if body.len() > MAXIMUM_REPORT_BYTES => {
@@ -117,7 +121,7 @@ pub(in crate::playground) async fn receive_report(
     let recorded =
         playground
             .client_table()
-            .record(post.client, post.report, playground.clock_ms());
+            .record(post.client, post.report, remote, playground.clock_ms());
     for line in recorded.lines {
         state.record_line(line);
     }

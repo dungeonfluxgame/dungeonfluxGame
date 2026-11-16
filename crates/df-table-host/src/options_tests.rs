@@ -42,6 +42,21 @@ fn serve_reads_the_telemetry_root_and_refuses_it_without_a_value() {
 }
 
 #[test]
+fn the_player_listener_is_off_unless_its_port_is_given() {
+    assert_eq!(parse_serve_options(&[]).expect("parses").players_port, None);
+    let options = parse_serve_options(&strings(&["--players", "7880"])).expect("parses");
+    assert_eq!(options.players_port, Some(7880));
+    assert_eq!(
+        parse_serve_options(&strings(&["--players"])),
+        Err(OptionError::MissingValue("--players"))
+    );
+    assert_eq!(
+        parse_serve_options(&strings(&["--players", "phone"])),
+        Err(OptionError::BadPort("phone".to_owned()))
+    );
+}
+
+#[test]
 fn serve_reads_each_option() {
     let options = parse_serve_options(&strings(&[
         "--port",

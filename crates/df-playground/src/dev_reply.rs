@@ -3,8 +3,9 @@
 //!
 //! The page owns this type and the host (`df_table_host::dev_http`) re-exports it, so the envelope
 //! cannot drift. The host fills `E` with a route module's typed error. The page reads a
-//! `HostReply`: the value, the closed kind of the typed error when it is a speech refusal, and the
-//! host's own sentence. A refusal from the guard in front of every route has no typed error.
+//! `HostReply`: the value, the closed kind of the typed error when it is one the page words (a
+//! speech refusal, a seat refusal), and the host's own sentence. A refusal from the guard in
+//! front of every route has no typed error.
 
 use std::fmt;
 
@@ -54,38 +55,55 @@ impl<T, E: fmt::Display> DevReply<T, E> {
     }
 }
 
-/// The host's answer as the page reads it. The guard's refusal has no typed error, so it reads as
-/// `None`.
-pub type HostReply<T> = DevReply<T, Option<ErrorKey>>;
+/// A closed set of refusals the page words, read from the tag of a route module's typed error.
+pub trait ErrorTag: Sized {
+    /// The refusal `tag` names, or none for a tag of another route module.
+    fn from_tag(tag: &str) -> Option<Self>;
+}
+
+impl ErrorTag for SpeechErrorKind {
+    fn from_tag(tag: &str) -> Option<Self> {
+        Self::from_key(tag)
+    }
+}
+
+/// The host's answer as the page reads it, with the refusals of kind `K` it words. The guard's
+/// refusal has no typed error, so it reads as `None`.
+pub type HostReply<T, K = SpeechErrorKind> = DevReply<T, Option<ErrorKey<K>>>;
 
 /// The typed error of a refusal, as far as the page reads it.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-pub struct ErrorKey {
-    /// The speech refusal it is; none when the tag is another route module's.
-    #[serde(rename = "error", default, deserialize_with = "speech_kind")]
-    pub kind: Option<SpeechErrorKind>,
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(bound(deserialize = "K: ErrorTag"))]
+pub struct ErrorKey<K> {
+    /// The refusal it is; none when the tag is another route module's.
+    #[serde(rename = "error", default = "no_kind", deserialize_with = "tag_kind")]
+    pub kind: Option<K>,
 }
 
-/// Reads the tag of an error: the speech refusal it names, or none for a tag this page does not
-/// word (the one place the tag's text is compared).
-fn speech_kind<'de, D: Deserializer<'de>>(
+fn no_kind<K>() -> Option<K> {
+    None
+}
+
+/// Reads the tag of an error: the refusal of kind `K` it names, or none for a tag this page does
+/// not word (the one place the tag's text is compared).
+fn tag_kind<'de, D: Deserializer<'de>, K: ErrorTag>(
     deserializer: D,
-) -> Result<Option<SpeechErrorKind>, D::Error> {
+) -> Result<Option<K>, D::Error> {
     let tag = String::deserialize(deserializer)?;
-    Ok(SpeechErrorKind::from_key(&tag))
+    Ok(K::from_tag(&tag))
 }
 
-/// A refusal: which speech refusal the host's typed error is (none when it is not one, or when it
-/// has no typed error) and its sentence.
+/// A refusal: which refusal of kind `K` the host's typed error is (none when it is not one, or
+/// when it has no typed error) and its sentence.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Rejection {
-    pub kind: Option<SpeechErrorKind>,
+pub struct Rejection<K = SpeechErrorKind> {
+    pub kind: Option<K>,
     pub message: String,
 }
 
-impl<T> HostReply<T> {
+impl<T, K> DevReply<T, Option<ErrorKey<K>>> {
     /// The value, or the refusal.
-    pub fn into_result(self) -> Result<T, Rejection> {
+    pub fn into_result(self) -> Result<T, Rejection<K>> {
         match self {
             Self::Done { value } => Ok(value),
             Self::Rejected { error, message } => Err(Rejection {

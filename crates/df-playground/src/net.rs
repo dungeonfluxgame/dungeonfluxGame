@@ -13,7 +13,7 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::{Headers, RequestInit, Response};
 
 use crate::dom::BrowserError;
-use crate::path::CLIENT_HEADER;
+use crate::path::{CLIENT_HEADER, SEAT_KEY_HEADER};
 
 /// Why a request did not give text.
 #[derive(Debug, Clone, PartialEq)]
@@ -141,11 +141,28 @@ fn request_headers() -> Result<Headers, NetError> {
     Ok(headers)
 }
 
+/// The headers of a seat route's request: the page's name and, when given, the phone's seat key,
+/// which travels in this header only (never in an address).
+fn seat_headers(seat_key: Option<&str>) -> Result<Headers, NetError> {
+    let headers = request_headers()?;
+    if let Some(key) = seat_key {
+        headers
+            .set(SEAT_KEY_HEADER, key)
+            .map_err(request_error("put the seat key in the request"))?;
+    }
+    Ok(headers)
+}
+
 /// Reads `address` as text. A non-success status is an error that names the address and status.
 pub async fn fetch_text(address: &str) -> Result<String, NetError> {
+    fetch_seat_text(address, None).await
+}
+
+/// Reads `address` as text, with the phone's seat key when given.
+pub async fn fetch_seat_text(address: &str, seat_key: Option<&str>) -> Result<String, NetError> {
     let window = web_sys::window().ok_or(NetError::NoWindow)?;
     let init = RequestInit::new();
-    let headers = request_headers()?;
+    let headers = seat_headers(seat_key)?;
     init.set_headers(&headers);
     let response = response_of(address, window.fetch_with_str_and_init(address, &init)).await?;
     read_body(address, response).await
@@ -154,8 +171,17 @@ pub async fn fetch_text(address: &str) -> Result<String, NetError> {
 /// Posts `body` (JSON) to `address` and reads the answer as text. A refusal is an error that
 /// carries the host's own explanation.
 pub async fn post_json(address: &str, body: &str) -> Result<String, NetError> {
+    post_seat_json(address, None, body).await
+}
+
+/// Posts `body` (JSON) to `address`, with the phone's seat key when given.
+pub async fn post_seat_json(
+    address: &str,
+    seat_key: Option<&str>,
+    body: &str,
+) -> Result<String, NetError> {
     let window = web_sys::window().ok_or(NetError::NoWindow)?;
-    let headers = request_headers()?;
+    let headers = seat_headers(seat_key)?;
     headers
         .set("Content-Type", "application/json")
         .map_err(request_error("set the content type"))?;

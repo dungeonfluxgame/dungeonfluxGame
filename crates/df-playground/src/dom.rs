@@ -191,3 +191,45 @@ fn slide_for_page(slide: &Slide) -> Result<String, JsValue> {
     let elapsed = with_continuity(|continuity| continuity.slide_elapsed(now, slide));
     Ok(slide_style(slide, elapsed))
 }
+
+/// Puts a stylesheet in the page once: a `style` element with the id `id` and the text `css`. The
+/// host serves only `theme.css`, so a kit's own rules travel in the package.
+pub fn ensure_style(document: &Document, id: &str, css: &str) -> Result<(), JsValue> {
+    if document.get_element_by_id(id).is_some() {
+        return Ok(());
+    }
+    let body = document
+        .body()
+        .ok_or_else(|| JsValue::from_str("the page has no body"))?;
+    let style = element(document, "style", "")?;
+    style.set_attribute("id", id)?;
+    style.set_text_content(Some(css));
+    append(&body, &style)
+}
+
+/// A line drawing as an `svg` of class `class`: `markup` is the inside of a 24 by 24 box made of
+/// strokes of `stroke_width`, drawn in the current text colour. Every small glyph of the page is
+/// built here.
+pub fn line_svg(
+    document: &Document,
+    markup: &str,
+    stroke_width: &str,
+    class: &str,
+) -> Result<Element, JsValue> {
+    let svg = document.create_element_ns(Some("http://www.w3.org/2000/svg"), "svg")?;
+    for (name, value) in [
+        ("viewBox", "0 0 24 24"),
+        ("fill", "none"),
+        ("stroke", "currentColor"),
+        ("stroke-width", stroke_width),
+        ("stroke-linecap", "round"),
+        ("stroke-linejoin", "round"),
+        ("aria-hidden", "true"),
+        ("focusable", "false"),
+        ("class", class),
+    ] {
+        svg.set_attribute(name, value)?;
+    }
+    svg.set_inner_html(markup);
+    Ok(svg)
+}

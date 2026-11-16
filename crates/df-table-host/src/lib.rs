@@ -58,12 +58,14 @@ pub mod observe;
 pub mod options;
 pub mod owner_latency;
 pub mod persona;
+pub mod player;
 pub mod playground;
 pub mod render;
 pub mod repl;
 pub mod report;
 pub mod request;
 pub mod scene_builder;
+pub mod seat;
 pub mod serve;
 pub mod server;
 pub mod services;
@@ -129,6 +131,8 @@ mod options_tests;
 #[cfg(test)]
 mod owner_latency_tests;
 #[cfg(test)]
+mod player_tests;
+#[cfg(test)]
 mod playground_atomic_tests;
 #[cfg(test)]
 mod playground_control_tests;
@@ -158,6 +162,8 @@ mod scene_home_tests;
 mod scene_lobby_tests;
 #[cfg(test)]
 mod scene_transition_tests;
+#[cfg(test)]
+mod seat_tests;
 #[cfg(test)]
 mod server_tests;
 #[cfg(test)]

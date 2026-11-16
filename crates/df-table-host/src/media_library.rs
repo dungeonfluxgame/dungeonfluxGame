@@ -419,7 +419,7 @@ fn record_media_refusal(state: &AppState, name: &str, error: FileError) {
     }
 }
 
-async fn media_file(
+pub(crate) async fn media_file(
     State(state): State<Arc<AppState>>,
     UrlPath(name): UrlPath<String>,
     method: Method,

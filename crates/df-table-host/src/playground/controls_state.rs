@@ -262,7 +262,7 @@ impl PlaygroundState {
 
     /// Remembers what a page said. See `ClientTable::record`.
     pub fn record_client(&self, client: String, report: ClientReport) {
-        self.clients.record(client, report, self.now_ms());
+        self.clients.record(client, report, None, self.now_ms());
     }
 
     /// The table of open pages, for the client routes, which write the lines it gives.

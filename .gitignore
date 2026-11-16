@@ -96,3 +96,6 @@ development/evidence/journey/journal.lock
 
 # Voice clips the host synthesises (regenerable)
 assets/playground/media/voice-*.mp3
+
+# Seat, friend and hero books the dev host writes (hold seat key hashes)
+assets/playground/players/

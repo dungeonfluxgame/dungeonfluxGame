@@ -17,7 +17,8 @@ use crate::copy::ReadingPace;
 use crate::page_log;
 use crate::timeline::ErrorSource;
 
-fn action_of(event: &Event) -> Option<(Element, String)> {
+/// The element an event happened in that carries a `data-action`, and that action.
+pub(super) fn action_of(event: &Event) -> Option<(Element, String)> {
     let target = event.target()?.dyn_into::<Element>().ok()?;
     let carrier = target.closest("[data-action]").ok()??;
     let action = carrier.get_attribute("data-action")?;

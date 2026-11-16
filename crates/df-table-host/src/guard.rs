@@ -9,7 +9,14 @@
 //! There is no password: a request without a browser can
 //! name any host it likes, so on a shared machine any local process can drive the canvas.
 //!
+//! The player listener (`player`) answers phones on the network with the same rules, for its own
+//! audience: a request must name one of this machine's addresses (or a loopback name) on the
+//! player port, so a page elsewhere cannot use DNS to reach it under another name, and a request
+//! that changes something must be same-origin JSON.
+//!
 //! It owns these rules as plain functions over headers, and never touches the canvas.
+
+use std::net::IpAddr;
 
 use axum::http::{HeaderMap, Method, StatusCode, header};
 
@@ -114,22 +121,73 @@ fn is_loopback_name(name: &str) -> bool {
     matches!(name, "127.0.0.1" | "localhost" | "::1")
 }
 
-/// The host of an `Origin` header such as `http://127.0.0.1:7878`. `null` and anything that is not
-/// a URL give `None`.
-fn origin_host(origin: &str) -> Option<&str> {
+/// The port an `http` authority names when it names none.
+const HTTP_PORT: u16 = 80;
+
+/// The port inside an authority such as `192.168.1.20:7880` or `[::1]:7880`, or `HTTP_PORT` when it
+/// names none. A port that is not a number gives `None`.
+fn port_of(authority: &str) -> Option<u16> {
+    let port = match authority.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once(']')?.1.strip_prefix(':'),
+        None => authority.rsplit_once(':').map(|(_name, port)| port),
+    };
+    port.map_or(Some(HTTP_PORT), |port| port.parse().ok())
+}
+
+/// The authority of an `Origin` header such as `http://127.0.0.1:7878`. `null` and anything that
+/// is not a URL give `None`.
+fn origin_authority(origin: &str) -> Option<&str> {
     let (_scheme, rest) = origin.split_once("://")?;
-    let authority = rest.split('/').next()?;
-    Some(host_name(authority))
+    rest.split('/').next()
+}
+
+/// Who a listener answers: the host names a request may give and an origin may have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Audience {
+    /// The developer API: a loopback name, on any port.
+    Developer,
+    /// The player listener: one of `addresses` (this machine's addresses on the network) or a
+    /// loopback name, on `port` only.
+    Players { addresses: Vec<IpAddr>, port: u16 },
+}
+
+impl Audience {
+    /// Whether a request for `authority` (a `Host` header, or an origin's authority) is for this
+    /// listener.
+    fn accepts(&self, authority: &str) -> bool {
+        let name = host_name(authority);
+        match self {
+            Self::Developer => is_loopback_name(name),
+            Self::Players { addresses, port } => {
+                let ours = is_loopback_name(name)
+                    || name
+                        .parse::<IpAddr>()
+                        .is_ok_and(|address| addresses.contains(&address));
+                ours && port_of(authority) == Some(*port)
+            }
+        }
+    }
 }
 
 fn header_text(headers: &HeaderMap, name: header::HeaderName) -> Option<&str> {
     headers.get(name).and_then(|value| value.to_str().ok())
 }
 
-/// Applies the rules to one request for the route at `path`.
+/// Applies the developer API's rules to one request for the route at `path`.
 pub fn check(method: &Method, path: &str, headers: &HeaderMap) -> Result<(), GuardError> {
+    check_for(&Audience::Developer, method, path, headers)
+}
+
+/// Applies the rules of the listener that answers `audience` to one request for the route at
+/// `path`.
+pub fn check_for(
+    audience: &Audience,
+    method: &Method,
+    path: &str,
+    headers: &HeaderMap,
+) -> Result<(), GuardError> {
     let host = header_text(headers, header::HOST).ok_or(GuardError::ForeignHost)?;
-    if !is_loopback_name(host_name(host)) {
+    if !audience.accepts(host) {
         return Err(GuardError::ForeignHost);
     }
     if method == Method::GET || method == Method::HEAD {
@@ -144,7 +202,7 @@ pub fn check(method: &Method, path: &str, headers: &HeaderMap) -> Result<(), Gua
         return Err(body.refusal());
     }
     if let Some(origin) = header_text(headers, header::ORIGIN)
-        && !origin_host(origin).is_some_and(is_loopback_name)
+        && !origin_authority(origin).is_some_and(|authority| audience.accepts(authority))
     {
         return Err(GuardError::ForeignOrigin);
     }

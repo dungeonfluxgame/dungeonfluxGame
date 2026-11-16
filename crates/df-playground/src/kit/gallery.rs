@@ -9,10 +9,9 @@
 //! fixture's. Until `TvScene` has a `kit` field the host fills (inventory F8), this is the only
 //! way kit panels reach the screen.
 
-use std::fmt;
-
 use serde::{Deserialize, Serialize};
 
+use crate::gallery::{Gallery, GalleryError, board_number as number_in};
 use crate::kit::KitPanels;
 
 /// The query parameter that names the board.
@@ -35,53 +34,16 @@ pub struct KitBoard {
 }
 
 /// Every board.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct KitGallery {
-    pub boards: Vec<KitBoard>,
-}
+pub type KitGallery = Gallery<KitBoard>;
 
-/// The gallery's boards could not be read.
-#[derive(Debug)]
-pub struct GalleryError(serde_json::Error);
-
-impl fmt::Display for GalleryError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "the kit gallery could not be read: {}", self.0)
-    }
-}
-
-impl std::error::Error for GalleryError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
-    }
-}
-
-impl KitGallery {
+impl Gallery<KitBoard> {
     /// The compiled-in boards.
     pub fn read() -> Result<Self, GalleryError> {
         Self::parse(GALLERY_TEXT)
-    }
-
-    pub fn parse(text: &str) -> Result<Self, GalleryError> {
-        serde_json::from_str(text).map_err(GalleryError)
-    }
-
-    /// Board `number`, counted from 1.
-    pub fn board(&self, number: usize) -> Option<&KitBoard> {
-        number
-            .checked_sub(1)
-            .and_then(|index| self.boards.get(index))
     }
 }
 
 /// The board number a page address's query names (`?kit=3`), or `None` when it names none.
 pub fn board_number(query: &str) -> Option<usize> {
-    query
-        .trim_start_matches('?')
-        .split('&')
-        .filter_map(|pair| pair.split_once('='))
-        .find(|(key, _)| *key == GALLERY_QUERY_KEY)
-        .and_then(|(_, value)| value.parse::<usize>().ok())
-        .filter(|number| *number >= 1)
+    number_in(query, GALLERY_QUERY_KEY)
 }

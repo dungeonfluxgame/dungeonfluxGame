@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
@@ -24,10 +24,14 @@ use df_table::ports::EventSink;
 use df_types::saturating_millis;
 
 use crate::cast::routes::SpeakerRest;
+use crate::engine::EngineHandle;
+use crate::engine::report::EngineError;
+use crate::engine::setup::EngineStartError;
 use crate::event_log::EventLog;
 use crate::limits::{TICK_INTERVAL, TURN_SETTLE};
 use crate::observe::HostEventSink;
 use crate::playground::{PlaygroundFiles, PlaygroundState};
+use crate::seat::{PLAYERS_DIRECTORY, SeatDesk};
 use crate::server::request::{ClockStatus, HostStatus, LogStatus};
 use crate::sink::LineEcho;
 use crate::view::{FrameCanvas, ViewError};
@@ -151,7 +155,18 @@ pub struct AppState {
     /// The pending clearing of the dungeon master's box after its last line (`persona narrate`),
     /// one rest timer like the camera's.
     narration_rest: SpeakerRest,
+    /// The phone page's addresses on the player listener, set once when it listens; unset while
+    /// the host serves no players.
+    player_links: OnceLock<Vec<String>>,
+    /// The table's engine, set once when its routes start, so the phone's seat routes on either
+    /// listener reach the same owner.
+    engine: OnceLock<SharedEngine>,
+    /// The players books: who holds which seat, the friend profiles and the heroes.
+    seats: SeatDesk,
 }
+
+/// The engine the routes started, or why it did not start.
+pub(crate) type SharedEngine = Arc<Result<EngineHandle, EngineStartError>>;
 
 impl AppState {
     /// `echo` prints new audit lines to the terminal; `None` keeps the log quiet.
@@ -162,6 +177,7 @@ impl AppState {
         kind_directory: PathBuf,
         playground_files: PlaygroundFiles,
     ) -> Self {
+        let seats = SeatDesk::new(playground_files.assets().join(PLAYERS_DIRECTORY));
         Self {
             canvas: Mutex::new(canvas),
             sink,
@@ -178,7 +194,47 @@ impl AppState {
             frame_logged: AtomicU64::new(0),
             speaker_rest: SpeakerRest::default(),
             narration_rest: SpeakerRest::default(),
+            player_links: OnceLock::new(),
+            engine: OnceLock::new(),
+            seats,
         }
+    }
+
+    /// Remembers the engine its routes started. A second call keeps the first: the host runs one
+    /// engine.
+    pub(crate) fn set_engine(&self, engine: SharedEngine) {
+        // The first call wins; a second router over the same state would start a second engine
+        // that no phone should reach.
+        let _ = self.engine.set(engine);
+    }
+
+    /// The running engine, or `EngineError` saying why there is none.
+    pub(crate) fn engine(&self) -> Result<&EngineHandle, EngineError> {
+        match self.engine.get().map(AsRef::as_ref) {
+            Some(Ok(engine)) => Ok(engine),
+            Some(Err(error)) => Err(EngineError::NotStarted {
+                cause: error.cause(),
+                detail: error.to_string(),
+            }),
+            None => Err(EngineError::Stopped),
+        }
+    }
+
+    /// The players books.
+    pub(crate) fn seats(&self) -> &SeatDesk {
+        &self.seats
+    }
+
+    /// Remembers the phone page's addresses once the player listener listens. A second call keeps
+    /// the first addresses: the host has one player listener.
+    pub(crate) fn set_player_links(&self, links: Vec<String>) {
+        // The first call wins; there is no second listener whose links could be lost.
+        let _ = self.player_links.set(links);
+    }
+
+    /// The phone page's addresses on the player listener; empty while the host serves no players.
+    pub(crate) fn player_links(&self) -> &[String] {
+        self.player_links.get().map_or(&[], Vec::as_slice)
     }
 
     /// The pending pull-back of the camera after the last spoken line.
@@ -440,6 +496,7 @@ impl AppState {
                 tick_ms: saturating_millis(TICK_INTERVAL),
             },
             engine_sink: None,
+            player_links: self.player_links().to_vec(),
         }
     }
 

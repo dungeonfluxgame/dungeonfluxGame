@@ -19,6 +19,7 @@ use crate::persona::cli::{
     PERSONA_SECRET_USAGE, PERSONA_SET_USAGE, PERSONA_STATE_USAGE, PERSONA_TEMPERAMENT_USAGE,
     PERSONA_TRIGGER_USAGE, PERSONA_USAGE, PERSONA_VOICE_USAGE,
 };
+use crate::seat::cli::PLAYERS_USAGE;
 use crate::services::SERVICES_USAGE;
 use crate::speech::SPEECH_USAGE;
 use crate::speech::cli::{
@@ -345,6 +346,11 @@ pub fn usage_text() -> String {
          or composes every profile's track once, tempo impulse posts an event of the journey, \
          and the director plays the profile the tempo calls for, with a minimum dwell and a dip \
          fade between tracks; tempo reset starts the journey again on the base profile.\n\
+         \n  {PLAYERS_USAGE}\
+         \n      the phones at the table: the seat each phone's key holds (a guest by name, a \
+         friend on a profile the host approves), the account's friend profiles, the requests \
+         waiting (also on /playground/phone-link), and a sample hero for a seat until creation \
+         makes real ones; remove takes a seat off the table and the book.\n\
          \n  {SPEECH_USAGE}\
          \n      voice chat through the speech service (see services): the status and the \
          voices; {SPEECH_SPEAK_USAGE} voices operator text in a character's voice (- for the \

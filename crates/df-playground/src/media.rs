@@ -14,6 +14,7 @@ use crate::limits::{
     MAXIMUM_MEDIA_NAME_BYTES, MAXIMUM_REPORT_BYTES, MAXIMUM_REPORTED_ERROR_CHARACTERS,
     MAXIMUM_REPORTED_ERRORS, MAXIMUM_REPORTED_IMAGES, MAXIMUM_TIMELINE_RECORDS,
 };
+use crate::role::PageRole;
 use crate::sound_plan::AudioPrefs;
 use crate::timeline::{ClientError, FixtureLoadCause, LinkState, TimelineRecord, ViewportPx, cut};
 
@@ -172,6 +173,9 @@ pub struct ClientReport {
     /// This viewer's sound preferences (sound, music, master volume).
     #[serde(default)]
     pub audio_prefs: AudioPrefs,
+    /// What the page is for: the playground, or a phone on the player listener.
+    #[serde(default)]
+    pub role: PageRole,
 }
 
 impl Default for ClientReport {
@@ -195,6 +199,7 @@ impl Default for ClientReport {
             page_clock_ms: 0,
             timeline: Vec::new(),
             audio_prefs: AudioPrefs::default(),
+            role: PageRole::Playground,
         }
     }
 }

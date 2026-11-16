@@ -108,6 +108,37 @@
   --ui-t-display: 3.7cqw;
   --ui-font: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
 }
+/* Phone tokens (2026-11-15): the phone kit's own colours and px scale, beside the concept tokens.
+   The phone is read at arm's length, so its sizes are px, not cqw. Every text pair is checked to
+   WCAG AA by contrast_tests.rs. */
+:root {
+  --ph-screen-top: #0b141d;
+  --ph-screen-bottom: #120d0a;
+  --ph-bar-fill: #0a1017;
+  --ph-glass-solid: #17110d;
+  --ph-glass-fill: linear-gradient(180deg, #16122294, #080a1ab8);
+  --ph-glass-lit: linear-gradient(180deg, #2c211799, #120d0ab8);
+  /* The luminous rims of render 26: idle is cool silver, lit is warm gold. */
+  --ph-rim-idle: linear-gradient(135deg, #e6f0ffd9, #8fb4e07a 32%, #4a62b44d 62%, #cfe0ffb3);
+  --ph-rim-lit: linear-gradient(135deg, #fff3d2, #e8aa4a 42%, #8a5f2a 70%, #ffe3a2);
+  --ph-hairline-gold: linear-gradient(90deg, #e8aa4a00, #f1c46ae6 30%, #f1c46ae6 70%, #e8aa4a00);
+  --ph-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M2 4.5l5 5 5-5' fill='none' stroke='%23f1c46a' stroke-width='1.6'/%3E%3C/svg%3E");
+  --ph-field: #0d141c;
+  --ph-primary-ink: #1a1208;
+  --ph-danger-fill: #8f2a2d;
+  --ph-danger-ink: #fff3ef;
+  --ph-danger-soft: #4a1618;
+  --ph-danger-soft-ink: #ffb4af;
+  --ph-warn-fill: #3b3010;
+  --ph-warn-rim: #8a7a2a;
+  --ph-off-ink: #b3ab9d;
+  --ph-cut: 12px;
+  --ph-rim-w: 1.5px;
+  --ph-t-small: 14px;
+  --ph-t-body: 17px;
+  --ph-t-lead: 20px;
+  --ph-t-title: 25px;
+}
 /* A chamfered glass panel: the element's own background is the rim, ::before is the fill inset by
    the rim width. Colours come from --ui-rim and --ui-fill, so a state only sets those two.
    The glow is a drop-shadow on a wrapper, because a clip-path clips a box-shadow. */

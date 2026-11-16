@@ -17,7 +17,7 @@ pub const PORT_VARIABLE: &str = "DF_TABLE_PORT";
 
 pub const SERVE_USAGE: &str = "\
 df-table serve [--port N] [--kinds DIR] [--playground DIR] [--package DIR] [--telemetry DIR]
-               [--moves] [--quiet]
+               [--players N] [--moves] [--quiet]
 
   --port N     loopback port for the viewer and the developer API (default 7878)
   --kinds DIR  directory of kind files (default assets/canvas/kinds, relative to here)
@@ -25,10 +25,14 @@ df-table serve [--port N] [--kinds DIR] [--playground DIR] [--package DIR] [--te
   --package DIR     the playground's compiled package (default artifacts/playground/pkg)
   --telemetry DIR   the telemetry store root: the canvas's records also go down the shared
                     diagnostic path to it (default: none, the records stay in this process)
+  --players N  also listen on port N of every network address (0.0.0.0) for phones on this
+               network: they get only the phone page at /play and the few routes it reads,
+               never the developer API (default: off)
   --moves      also record moves, which are frequent (the log shows gaps without them)
   --quiet      do not echo audit lines to this terminal
 
-The API has no password: any process on this machine can drive it.";
+The API has no password: any process on this machine can drive it. It stays on the loopback
+address; the player listener serves no route that changes anything but a page's own report.";
 
 /// Why an option was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +65,8 @@ pub struct ServeOptions {
     pub package_directory: PathBuf,
     /// The telemetry store root the shared diagnostic path writes to, when one is given.
     pub telemetry_root: Option<PathBuf>,
+    /// The port of the player listener on every network address, when phones may join.
+    pub players_port: Option<u16>,
     pub records_moves: bool,
     pub echoes_lines: bool,
 }
@@ -78,6 +84,7 @@ pub fn parse_serve_options(arguments: &[String]) -> Result<ServeOptions, OptionE
         playground_directory: PathBuf::from(DEFAULT_PLAYGROUND_DIRECTORY),
         package_directory: PathBuf::from(DEFAULT_PACKAGE_DIRECTORY),
         telemetry_root: None,
+        players_port: None,
         records_moves: false,
         echoes_lines: true,
     };
@@ -113,6 +120,12 @@ pub fn parse_serve_options(arguments: &[String]) -> Result<ServeOptions, OptionE
                     .next()
                     .ok_or(OptionError::MissingValue("--telemetry"))?;
                 options.telemetry_root = Some(PathBuf::from(value));
+            }
+            "--players" => {
+                let value = arguments
+                    .next()
+                    .ok_or(OptionError::MissingValue("--players"))?;
+                options.players_port = Some(parse_port(value)?);
             }
             "--moves" => options.records_moves = true,
             "--quiet" => options.echoes_lines = false,

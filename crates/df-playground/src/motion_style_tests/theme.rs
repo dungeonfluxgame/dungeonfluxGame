@@ -4,6 +4,7 @@
 
 const THEME: &str = include_str!("../../../../assets/playground/theme.css");
 const KIT: &str = include_str!("../../../../assets/playground/kit.css");
+const PHONE: &str = include_str!("../../../../assets/playground/phone.css");
 
 #[derive(Debug)]
 struct Rule {
@@ -88,7 +89,7 @@ fn the_theme_has_its_motion_where_the_test_looks() {
 
 #[test]
 fn no_style_sheet_of_the_page_honours_a_reduced_motion_setting() {
-    for (name, css) in [("theme.css", THEME), ("kit.css", KIT)] {
+    for (name, css) in [("theme.css", THEME), ("kit.css", KIT), ("phone.css", PHONE)] {
         assert!(
             !css.contains("prefers-reduced-motion"),
             "{name} names prefers-reduced-motion"

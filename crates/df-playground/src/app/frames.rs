@@ -78,6 +78,7 @@ pub fn apply_controls(reply: ControlsReply) -> ControlsUpdate {
         let audio_before = app.controls.audio;
         let audio_after = reply.controls.audio;
         app.controls = reply.controls;
+        app.controls.device = app.role.shown_device(app.controls.device);
         app.scene = reply.scene;
         app.reshow();
         ControlsUpdate {
@@ -118,6 +119,10 @@ fn apply_canvas(boot_id: &str, canvas: LiveCanvas) -> bool {
 /// no frame of it yet. A canvas is taken only if the page still follows that run and has nothing
 /// newer, so a slow read never undoes a frame that arrived meanwhile.
 async fn refresh_canvas(boot_id: String) {
+    // A phone draws no stage, and the player listener does not serve the canvas.
+    if !with_app(|app| app.role.reads_canvas()) {
+        return;
+    }
     let canvas = match fetch_text(path::CANVAS).await {
         Ok(text) => serde_json::from_str::<LiveCanvas>(&text)
             .map_err(PageError::not_read(path::CANVAS, "a canvas")),
@@ -378,7 +383,7 @@ pub async fn run() {
 }
 
 /// Waits `ms` milliseconds, held at the longest wait a browser timer takes.
-fn wait_ms(ms: u64) -> TimeoutFuture {
+pub(super) fn wait_ms(ms: u64) -> TimeoutFuture {
     let held = ms.min(LONGEST_BROWSER_TIMER_MS);
     TimeoutFuture::new(u32::try_from(held).unwrap_or(u32::MAX))
 }

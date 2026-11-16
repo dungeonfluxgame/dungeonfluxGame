@@ -106,6 +106,12 @@ pub const FRAME_WAIT: Duration = Duration::from_secs(25);
 /// A page not heard from for this long is forgotten: it sends a sign of life every ten seconds,
 /// so silence means it was closed.
 pub const FORGET_CLIENT_AFTER: Duration = Duration::from_secs(45);
+/// A phone not heard from for this long has lost its link (it reports every ten seconds); its
+/// `CLIENT link state=quiet` line is written, and `state=heard` when it reports again.
+pub const PHONE_QUIET_AFTER: Duration = Duration::from_secs(25);
+/// How often the player listener's watch looks for phones gone quiet and pages gone, so their lines
+/// are written while nothing else asks.
+pub const CLIENT_WATCH_INTERVAL: Duration = Duration::from_secs(5);
 /// How long open connections get to finish after an interrupt.
 pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 /// Deadline for connecting, sending and reading one answer on the command line. It covers the
@@ -129,3 +135,11 @@ pub const FIGURE_GLIDE_MS: u64 = 90;
 /// How long after a change of an element's turn its pivot may not change: the glide and a margin
 /// for the frame that carries it to the page.
 pub const TURN_SETTLE: Duration = Duration::from_millis(150);
+/// Most requests for a seat as a friend that wait for the host at once (approved, refused and
+/// unread refusals count); a further one is refused `pending_full` until one is answered. Bounded
+/// so a phone that keeps asking cannot grow the host's memory.
+pub const MAXIMUM_PENDING_APPROVALS: usize = 64;
+/// Most friend profiles the dev host's friends book keeps. Deliberately large.
+pub const MAXIMUM_FRIEND_PROFILES: usize = 10_000;
+/// Most heroes the dev host's hero library keeps. Deliberately large.
+pub const MAXIMUM_HEROES: usize = 100_000;

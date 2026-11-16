@@ -4,6 +4,10 @@
 //! waits a short grace period for open connections, then closes the rest. It never decides what
 //! the canvas does.
 //!
+//! With `--players N` it also starts the player listener (`player`) on every network address and
+//! says where the phone page is; the developer API stays on the loopback address. The player
+//! listener and its watch stop when serving ends.
+//!
 //! It also composes the shared diagnostic path when `--telemetry DIR` names a store root: the
 //! canvas sink's records then reach the telemetry store too, and `HOST shared_path` says whether
 //! they do. The store is drained and stopped when serving ends, a failure to listen included.
@@ -47,6 +51,11 @@ pub enum ServeError {
         port: u16,
         kind: ErrorKind,
     },
+    /// The player listener could not listen on every network address at `port`.
+    ListenPlayers {
+        port: u16,
+        kind: ErrorKind,
+    },
     /// The interrupt handler could not be installed, so the host could not be stopped cleanly.
     Interrupt(ErrorKind),
     /// The listener or a connection failed while serving.
@@ -58,6 +67,12 @@ impl fmt::Display for ServeError {
         match self {
             Self::Listen { port, kind } => {
                 write!(formatter, "cannot listen on 127.0.0.1:{port}: {kind}")
+            }
+            Self::ListenPlayers { port, kind } => {
+                write!(
+                    formatter,
+                    "cannot listen for players on 0.0.0.0:{port}: {kind}"
+                )
             }
             Self::Interrupt(kind) => write!(formatter, "cannot watch for Ctrl-C: {kind}"),
             Self::Serving(kind) => write!(formatter, "serving stopped: {kind}"),
@@ -147,8 +162,14 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
         ));
     }
     state.echo_new_lines();
-    let (listener, address) = match listen(options.port).await {
-        Ok(bound) => bound,
+    let listening = match listen(options.port).await {
+        Ok(bound) => listen_for_players(options.players_port)
+            .await
+            .map(|players| (bound, players)),
+        Err(error) => Err(error),
+    };
+    let ((listener, address), players) = match listening {
+        Ok(listening) => listening,
         Err(error) => {
             // The records written before the failure (the shared path line, rejected kinds) still
             // reach the store: it is drained and stopped as at any other end of serving.
@@ -161,6 +182,17 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
          playground on http://{address}/playground",
         options.kind_directory.display()
     ));
+    let _players = players.map(|players| {
+        for link in players.links() {
+            announce(&format!("phone page: {link}"));
+        }
+        announce(&format!(
+            "phone page link and QR code: http://{address}{}",
+            crate::player::path::PHONE_LINK
+        ));
+        let tasks = crate::player::start(players, &state);
+        (StopWhenDropped(tasks.serving), StopWhenDropped(tasks.watch))
+    });
 
     let stop = Arc::new(Notify::new());
     let stopped = Arc::clone(&stop);
@@ -206,6 +238,22 @@ async fn listen(port: u16) -> Result<(tokio::net::TcpListener, std::net::SocketA
         .local_addr()
         .map_err(|error| ServeError::Serving(error.kind()))?;
     Ok((listener, address))
+}
+
+/// The player listener on `port`, when one is asked for.
+async fn listen_for_players(
+    port: Option<u16>,
+) -> Result<Option<crate::player::PlayerListener>, ServeError> {
+    let Some(port) = port else {
+        return Ok(None);
+    };
+    crate::player::listen(port)
+        .await
+        .map(Some)
+        .map_err(|error| ServeError::ListenPlayers {
+            port,
+            kind: error.kind(),
+        })
 }
 
 /// Drains the shared path's receipts and stops its store, when one was composed. It blocks, so it

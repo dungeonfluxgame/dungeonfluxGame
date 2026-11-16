@@ -192,6 +192,10 @@ pub const CAPTURE_REFRESH_MS: u64 = 200;
 /// How long the composer keeps a message about a refusal or a failure, in milliseconds. A message
 /// stays long enough to read at arm's length.
 pub const COMPOSER_NOTE_MS: u64 = 7_000;
+/// How often a phone on its way to a seat asks the host where it stands (the room, a friend's
+/// approval, the seat's lobby view), in milliseconds. A poll, like the frame's, until the seat
+/// view has a long poll of its own.
+pub const SEAT_POLL_MS: u64 = 2_000;
 
 // Layout tuning of the overlay components. They are how the screen is composed, not caps.
 
@@ -199,3 +203,9 @@ pub const COMPOSER_NOTE_MS: u64 = 7_000;
 pub const HEALTH_AMBER_PERCENT: u16 = 50;
 /// The share of a hero's health, in percent, below which the bar turns red.
 pub const HEALTH_RED_PERCENT: u16 = 25;
+
+// Layout tuning of the phone kit. It is how the phone is composed, not a cap.
+
+/// The slots of the phone's bottom bar, the "more" slot included. Five touch targets of at least
+/// 64 px fit a 320 px screen; a sixth tab goes behind "more".
+pub const PHONE_TAB_SLOTS: usize = 5;

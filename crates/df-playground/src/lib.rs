@@ -28,6 +28,8 @@ pub mod figure;
 pub mod fixture;
 pub mod fixture_checks;
 pub mod frame;
+#[cfg(debug_assertions)]
+pub mod gallery;
 pub mod home;
 pub mod image_layout;
 pub mod inventory;
@@ -39,11 +41,14 @@ pub mod media;
 pub mod motion_style;
 pub mod overlay;
 pub mod path;
+pub mod phone_kit;
 pub mod plate_fade;
 pub mod plate_fit;
+pub mod role;
 pub mod roll;
 pub mod scene;
 mod scene_apply;
+pub mod seat;
 pub mod sound_plan;
 pub mod speaker_card;
 pub mod style;
@@ -125,9 +130,13 @@ mod plate_fade_tests;
 #[cfg(test)]
 mod plate_fit_tests;
 #[cfg(test)]
+mod role_tests;
+#[cfg(test)]
 mod roll_tests;
 #[cfg(test)]
 mod scene_tests;
+#[cfg(test)]
+mod seat_tests;
 #[cfg(test)]
 mod sound_plan_tests;
 #[cfg(test)]

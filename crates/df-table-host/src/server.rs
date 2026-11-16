@@ -68,33 +68,61 @@ fn rejected(status: StatusCode, cause: Option<RejectionCause>, message: &str) ->
     )
 }
 
-/// Runs the guard before every route and records what it refuses, then echoes the audit lines
-/// the request recorded to the terminal: the one echo of every route.
-async fn guard_requests(
-    State(state): State<Arc<AppState>>,
+/// What a listener's guard needs: the state to record a refusal in, and who the listener answers
+/// (the dev API's loopback audience, or the player listener's).
+#[derive(Clone)]
+pub(crate) struct ListenerGuard {
+    state: Arc<AppState>,
+    audience: Arc<guard::Audience>,
+}
+
+impl ListenerGuard {
+    pub(crate) fn new(state: Arc<AppState>, audience: guard::Audience) -> Self {
+        Self {
+            state,
+            audience: Arc::new(audience),
+        }
+    }
+}
+
+/// Runs the listener's guard before every route and records what it refuses, then echoes the
+/// audit lines the request recorded to the terminal: the one echo of every route, on either
+/// listener.
+pub(crate) async fn guard_requests(
+    State(guarded): State<ListenerGuard>,
     request: Request,
     next: Next,
 ) -> Response {
-    let response = match guard::check(request.method(), request.uri().path(), request.headers()) {
+    let checked = guard::check_for(
+        &guarded.audience,
+        request.method(),
+        request.uri().path(),
+        request.headers(),
+    );
+    let response = match checked {
         Ok(()) => next.run(request).await,
-        Err(error) => {
-            state.record_rejection(None, None, RejectionCause::ForbiddenRequest);
-            // The guard runs before routing, so there is no route template; the raw path is never
-            // written (it carries names a caller chose).
-            state.record_line(format!(
-                "HTTP refused method={} route=unmatched cause={}",
-                RequestMethod::of(request.method()).key(),
-                RejectionCause::ForbiddenRequest.key()
-            ));
-            rejected(
-                error.status(),
-                Some(RejectionCause::ForbiddenRequest),
-                error.message(),
-            )
-        }
+        Err(error) => refuse_guarded(&guarded.state, request.method(), error),
     };
-    state.echo_new_lines();
+    guarded.state.echo_new_lines();
     response
+}
+
+/// Records and answers a request a listener's guard refused: the dev API's and the player
+/// listener's refusals are written alike.
+fn refuse_guarded(state: &AppState, method: &Method, error: guard::GuardError) -> Response {
+    state.record_rejection(None, None, RejectionCause::ForbiddenRequest);
+    // The guard runs before routing, so there is no route template; the raw path is never
+    // written (it carries names a caller chose).
+    state.record_line(format!(
+        "HTTP refused method={} route=unmatched cause={}",
+        RequestMethod::of(method).key(),
+        RejectionCause::ForbiddenRequest.key()
+    ));
+    rejected(
+        error.status(),
+        Some(RejectionCause::ForbiddenRequest),
+        error.message(),
+    )
 }
 
 /// Whether an answer of `route` gets an `HTTP served` line: a `/dev/` route but a page's report,
@@ -210,7 +238,7 @@ pub(crate) struct FrameQuery {
 /// by asking again and again. A different count, or a `boot` that names another run of the host
 /// (after a restart), answers at once.
 /// The frame is built once for each change count and every page is sent the same bytes.
-async fn frame_json(
+pub(crate) async fn frame_json(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     query: Result<Query<FrameQuery>, QueryRejection>,
@@ -530,6 +558,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             music.clone(),
         ))
         .merge(crate::tempo::routes::router(state.clone(), music))
+        .merge(crate::player::dev_router(state.clone()))
         // A route layer sees the matched route, and the answers of the body and query readers.
         .route_layer(middleware::from_fn_with_state(state.clone(), record_served))
         .layer(DefaultBodyLimit::max(MAXIMUM_REQUEST_BYTES))
@@ -537,7 +566,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             state.clone(),
             announce_changes,
         ))
-        .layer(middleware::from_fn_with_state(state, guard_requests))
+        .layer(middleware::from_fn_with_state(
+            ListenerGuard::new(state, guard::Audience::Developer),
+            guard_requests,
+        ))
 }
 
 /// Writes `HOST clock_stopped` when the clock's task ends (it is aborted, or its runtime stops).

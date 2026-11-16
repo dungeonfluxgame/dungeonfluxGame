@@ -3,15 +3,17 @@
 use df_playground::controls::{Device, TransitionStyle};
 use df_playground::limits::MAXIMUM_KEPT_TIMELINE_RECORDS;
 use df_playground::media::{AudioState, ClientReport};
+use df_playground::role::PageRole;
 use df_playground::timeline::{
     ClientError, EndReason, ErrorSource, FixtureLoadCause, LinkState, TimelineDetail, TimelineKind,
     TimelineQuery, TimelineRecord, ViewportPx,
 };
+use df_types::saturating_millis;
 
 use std::collections::VecDeque;
 
 use super::{ClientTable, entry_of, push_entry};
-use crate::limits::{FORGET_CLIENT_AFTER, MAXIMUM_CLIENTS};
+use crate::limits::{FORGET_CLIENT_AFTER, MAXIMUM_CLIENTS, PHONE_QUIET_AFTER};
 
 fn report() -> ClientReport {
     ClientReport {
@@ -47,25 +49,72 @@ fn closed(mut record: TimelineRecord, end: u64, reason: EndReason) -> TimelineRe
 /// A table that has heard `page-1` once, at host time 1 000, and the lines of that first report.
 fn heard() -> (ClientTable, Vec<String>) {
     let table = ClientTable::default();
-    let recorded = table.record("page-1".to_owned(), report(), 1_000);
+    let recorded = table.record("page-1".to_owned(), report(), None, 1_000);
     (table, recorded.lines)
 }
 
 #[test]
 fn a_new_page_is_seen_with_its_device_and_its_revision_is_checked() {
     let table = ClientTable::default();
-    let recorded = table.record("page-1".to_owned(), report(), 1_000);
+    let recorded = table.record("page-1".to_owned(), report(), None, 1_000);
     assert_eq!(
         recorded.lines,
-        ["CLIENT seen client=page-1 device=tv viewport=1920x1080"]
+        ["CLIENT seen client=page-1 device=tv viewport=1920x1080 role=playground remote=-"]
     );
     assert_eq!(recorded.check_revision.as_deref(), Some("00aa.00bb"));
 }
 
 #[test]
+fn a_phone_is_seen_with_its_address_goes_quiet_once_and_is_heard_again() {
+    let table = ClientTable::default();
+    let phone = ClientReport {
+        role: PageRole::Phone,
+        device: Device::Phone,
+        ..report()
+    };
+    let address = Some(std::net::IpAddr::from([192, 168, 1, 30]));
+    let seen = table.record("phone-1".to_owned(), phone.clone(), address, 1_000);
+    assert_eq!(
+        seen.lines,
+        [concat!(
+            "CLIENT seen client=phone-1 device=phone viewport=1920x1080 ",
+            "role=phone remote=192.168.1.30"
+        )]
+    );
+    let quiet_ms = 1_000 + saturating_millis(PHONE_QUIET_AFTER);
+    assert_eq!(
+        table.sweep(quiet_ms),
+        [format!(
+            "CLIENT link client=phone-1 state=quiet silent_ms={}",
+            saturating_millis(PHONE_QUIET_AFTER)
+        )]
+    );
+    assert!(table.sweep(quiet_ms + 1_000).is_empty());
+    let heard = table.record("phone-1".to_owned(), phone, address, quiet_ms + 2_000);
+    assert_eq!(
+        heard.lines,
+        [format!(
+            "CLIENT link client=phone-1 state=heard silent_ms={}",
+            saturating_millis(PHONE_QUIET_AFTER) + 2_000
+        )]
+    );
+    assert_eq!(table.views_at(quiet_ms + 2_000)[0].remote, address);
+}
+
+#[test]
+fn a_silent_playground_page_is_not_called_quiet() {
+    let (table, _) = heard();
+    assert!(
+        table
+            .sweep(1_000 + saturating_millis(PHONE_QUIET_AFTER))
+            .is_empty()
+    );
+}
+
+#[test]
 fn two_identical_heartbeats_write_no_line() {
     let (table, _) = heard();
-    let recorded = table.record("page-1".to_owned(), report(), 11_000);
+    let recorded = table.record("page-1".to_owned(), report(), None, 11_000);
     assert!(recorded.lines.is_empty(), "{:?}", recorded.lines);
     assert_eq!(recorded.check_revision, None);
     assert_eq!(table.views_at(11_000)[0].age_ms, 0);
@@ -78,7 +127,7 @@ fn a_revision_change_writes_one_line_and_asks_for_a_check() {
         asset_revision: "00cc.00bb".to_owned(),
         ..report()
     };
-    let recorded = table.record("page-1".to_owned(), changed, 2_000);
+    let recorded = table.record("page-1".to_owned(), changed, None, 2_000);
     assert_eq!(
         recorded.lines,
         ["CLIENT revision client=page-1 from=00aa.00bb to=00cc.00bb"]
@@ -97,7 +146,7 @@ fn the_link_the_fixture_and_the_sound_lock_each_write_a_line_when_they_change() 
         audio: AudioState::Unlocked,
         ..report()
     };
-    let lines = table.record("page-1".to_owned(), down, 2_000).lines;
+    let lines = table.record("page-1".to_owned(), down, None, 2_000).lines;
     assert_eq!(
         lines,
         [
@@ -122,7 +171,7 @@ fn an_error_is_written_once_with_its_length_and_never_its_words() {
         ..report()
     };
     let lines = table
-        .record("page-1".to_owned(), with_error.clone(), 5_000)
+        .record("page-1".to_owned(), with_error.clone(), None, 5_000)
         .lines;
     assert_eq!(
         lines,
@@ -130,7 +179,7 @@ fn an_error_is_written_once_with_its_length_and_never_its_words() {
     );
     assert!(
         table
-            .record("page-1".to_owned(), with_error, 6_000)
+            .record("page-1".to_owned(), with_error, None, 6_000)
             .lines
             .is_empty()
     );
@@ -158,7 +207,7 @@ fn a_line_closed_before_its_dwell_is_timed_on_the_host_clock_and_marked_short() 
     // The page's clock read 1 000 when the host's read 10 000: page time + 9 000 is host time.
     assert!(
         table
-            .record("page-1".to_owned(), opened, 10_000)
+            .record("page-1".to_owned(), opened, None, 10_000)
             .lines
             .is_empty(),
         "a line writes when it ends"
@@ -168,7 +217,7 @@ fn a_line_closed_before_its_dwell_is_timed_on_the_host_clock_and_marked_short() 
         page_clock_ms: 2_000,
         ..report()
     };
-    let lines = table.record("page-1".to_owned(), ended, 11_000).lines;
+    let lines = table.record("page-1".to_owned(), ended, None, 11_000).lines;
     assert_eq!(
         lines,
         [concat!(
@@ -199,7 +248,7 @@ fn a_record_opened_and_closed_between_reports_writes_its_start_and_its_end() {
         page_clock_ms: 1_000,
         ..report()
     };
-    let lines = table.record("page-1".to_owned(), report, 2_000).lines;
+    let lines = table.record("page-1".to_owned(), report, None, 2_000).lines;
     assert_eq!(
         lines,
         [
@@ -244,7 +293,7 @@ fn a_scene_a_camera_and_a_draw_write_their_lines() {
         page_clock_ms: 0,
         ..report()
     };
-    let lines = table.record("page-1".to_owned(), report, 0).lines;
+    let lines = table.record("page-1".to_owned(), report, None, 0).lines;
     assert_eq!(
         lines,
         [
@@ -281,7 +330,7 @@ fn a_bubble_placement_writes_its_character_side_and_whether_it_moved() {
         timeline: vec![placed],
         ..report()
     };
-    let lines = table.record("page-1".to_owned(), report, 0).lines;
+    let lines = table.record("page-1".to_owned(), report, None, 0).lines;
     assert_eq!(
         lines,
         ["CLIENT bubble client=page-1 seq=4 at_ms=20 character=warrior side=below_head moved=true"]
@@ -300,7 +349,7 @@ fn an_id_that_is_not_a_plain_name_is_written_as_a_dash() {
         timeline: vec![figure],
         ..report()
     };
-    let lines = table.record("page-1".to_owned(), report, 0).lines;
+    let lines = table.record("page-1".to_owned(), report, None, 0).lines;
     assert_eq!(lines.len(), 1);
     assert!(lines[0].contains(" id=- "), "{}", lines[0]);
     assert!(!lines[0].contains("goblin"));
@@ -325,10 +374,15 @@ fn a_silent_page_is_gone_and_a_page_past_the_maximum_evicts_the_oldest() {
     assert!(table.sweep(1_000 + forget_after_ms).is_empty(), "once");
     let table = ClientTable::default();
     for index in 0..MAXIMUM_CLIENTS as u64 {
-        table.record(format!("page-{index}"), report(), index);
+        table.record(format!("page-{index}"), report(), None, index);
     }
     let lines = table
-        .record("page-new".to_owned(), report(), MAXIMUM_CLIENTS as u64)
+        .record(
+            "page-new".to_owned(),
+            report(),
+            None,
+            MAXIMUM_CLIENTS as u64,
+        )
         .lines;
     assert_eq!(lines[0], "CLIENT evicted client=page-0");
     assert_eq!(
@@ -354,7 +408,7 @@ fn the_timeline_reads_by_kind_and_after_a_sequence() {
         timeline: records,
         ..report()
     };
-    table.record("page-1".to_owned(), report, 2_000);
+    table.record("page-1".to_owned(), report, None, 2_000);
     let all = table
         .timeline("page-1", TimelineQuery::default())
         .expect("open");

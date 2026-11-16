@@ -75,6 +75,11 @@ pub fn format_host_status(status: &HostStatus) -> String {
         Some(engine) => lines.extend(sink_lines("engine sink", engine)),
         None => lines.push("engine sink: not running".to_owned()),
     }
+    lines.push(if status.player_links.is_empty() {
+        "players: off (start the host with serve --players N)".to_owned()
+    } else {
+        format!("players: {}", status.player_links.join(" "))
+    });
     lines.join("\n")
 }
 

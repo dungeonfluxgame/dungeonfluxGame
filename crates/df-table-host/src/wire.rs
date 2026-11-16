@@ -233,6 +233,10 @@ pub struct MediaRemove {
 pub struct ClientView {
     pub client: String,
     pub age_ms: u64,
+    /// The address the page's newest report came from, when its listener says (the player
+    /// listener does; the loopback dev listener does not).
+    #[serde(default)]
+    pub remote: Option<std::net::IpAddr>,
     pub report: ClientReport,
 }
 

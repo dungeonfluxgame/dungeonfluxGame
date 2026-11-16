@@ -1,0 +1,3061 @@
+{
+  "boards": [
+    {
+      "name": "Shell: header, bar, pills, buttons and states",
+      "after": "renders 26 to 35 (title bar), 08 and 11 (seat states), 32 (pills)",
+      "screens": [
+        {
+          "title": "Header, status and health",
+          "panels": {
+            "scene": "lobby-hall-plate.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "status": {
+              "text": "Waiting for Lyra to choose",
+              "tone": "accent"
+            },
+            "pills": [
+              {
+                "text": "Your turn",
+                "tone": "good",
+                "glyph": "act"
+              },
+              {
+                "text": "Poisoned",
+                "tone": "danger",
+                "glyph": "warning"
+              },
+              {
+                "text": "Inspired",
+                "tone": "warn"
+              },
+              {
+                "text": "3 notes",
+                "tone": "neutral",
+                "glyph": "notebook"
+              }
+            ],
+            "hp": [
+              {
+                "current": 27,
+                "maximum": 27
+              },
+              {
+                "current": 12,
+                "maximum": 27,
+                "temporary": 5
+              },
+              {
+                "current": 4,
+                "maximum": 27
+              }
+            ]
+          }
+        },
+        {
+          "title": "Buttons, empty and loading",
+          "panels": {
+            "scene": "lobby-hall-plate.webp",
+            "header": {
+              "name": "Lyra",
+              "subtitle": "The Gilded Anchor, upstairs room",
+              "portrait": "chip-nyx.webp",
+              "hp": {
+                "current": 20,
+                "maximum": 20
+              }
+            },
+            "buttons": [
+              {
+                "label": "Play this hero",
+                "kind": "primary"
+              },
+              {
+                "label": "Not now",
+                "kind": "secondary"
+              },
+              {
+                "label": "Leave the table",
+                "kind": "danger"
+              },
+              {
+                "label": "Roll",
+                "kind": "primary",
+                "enabled": false,
+                "reason": "Wait for the host to call a check"
+              }
+            ],
+            "empty": {
+              "title": "Nothing here yet",
+              "text": "Notes you keep and snaps you take will show up in this book.",
+              "glyph": "notebook"
+            },
+            "loading": {
+              "text": "Painting the next scene"
+            }
+          }
+        },
+        {
+          "title": "Link down, with a pop-up to keep",
+          "panels": {
+            "scene": "lobby-hall-plate.webp",
+            "link_down": true,
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "toast": {
+              "kind": "A name you learned",
+              "text": "The innkeeper is called Mara Voss.",
+              "keep_label": "Keep"
+            },
+            "empty": {
+              "title": "Reconnecting",
+              "text": "Your hero is safe. The table will pick up where it was.",
+              "glyph": "wifi"
+            }
+          }
+        },
+        {
+          "title": "Bar with the more sheet open",
+          "panels": {
+            "scene": "lobby-hall-plate.webp",
+            "header": {
+              "name": "Caelia",
+              "subtitle": "The Guildhall steps",
+              "portrait": "lobby-nyx.webp",
+              "hp": {
+                "current": 22,
+                "maximum": 26
+              }
+            },
+            "empty": {
+              "title": "More to look at",
+              "text": "The bar keeps five places. Where you are always shows on it.",
+              "glyph": "more"
+            },
+            "tabs": {
+              "active": "hero",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ],
+              "badges": [
+                {
+                  "tab": "roll",
+                  "count": 1
+                },
+                {
+                  "tab": "notebook",
+                  "count": 3
+                }
+              ],
+              "more_open": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Act: the story, the suggestions and the composer",
+      "after": "render 32 (choice pills), 26 to 35 (title bar and caption)",
+      "screens": [
+        {
+          "title": "The story",
+          "panels": {
+            "scene": "quay-in-the-rain.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "act": {
+              "narration": [
+                "The road to Keldmere winds through mist and pine, the air thick with the scent of rain.",
+                "Ahead, a lantern swings from a leaning post, and someone has left a cart across the way."
+              ],
+              "private_note": "You remember the toll-keeper owes your uncle a favour.",
+              "choices": {
+                "suggested": [
+                  {
+                    "label": "Approach the cart",
+                    "explain": "See who left it there",
+                    "glyph": "sun",
+                    "lit": true
+                  },
+                  {
+                    "label": "Call out to the lantern",
+                    "explain": "Say you mean no harm",
+                    "glyph": "voice"
+                  },
+                  {
+                    "label": "Climb the bank",
+                    "explain": "Look from above first",
+                    "glyph": "bow"
+                  }
+                ],
+                "groups": [
+                  {
+                    "name": "Look",
+                    "choices": [
+                      {
+                        "label": "Study the cart"
+                      },
+                      {
+                        "label": "Listen"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "Talk",
+                    "choices": [
+                      {
+                        "label": "Hail the toll-keeper"
+                      }
+                    ]
+                  }
+                ],
+                "unavailable": [
+                  {
+                    "label": "Cast a spell",
+                    "reason": "You have no spells yet"
+                  }
+                ]
+              }
+            },
+            "tabs": {
+              "active": "story",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "Suggestions and a typed line",
+          "panels": {
+            "scene": "quay-in-the-rain.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "act": {
+              "narration": [
+                "The road to Keldmere winds through mist and pine, the air thick with the scent of rain.",
+                "Ahead, a lantern swings from a leaning post, and someone has left a cart across the way."
+              ],
+              "private_note": "You remember the toll-keeper owes your uncle a favour.",
+              "choices": {
+                "suggested": [
+                  {
+                    "label": "Approach the cart",
+                    "explain": "See who left it there",
+                    "glyph": "sun",
+                    "lit": true
+                  },
+                  {
+                    "label": "Call out to the lantern",
+                    "explain": "Say you mean no harm",
+                    "glyph": "voice"
+                  },
+                  {
+                    "label": "Climb the bank",
+                    "explain": "Look from above first",
+                    "glyph": "bow"
+                  }
+                ],
+                "groups": [
+                  {
+                    "name": "Look",
+                    "choices": [
+                      {
+                        "label": "Study the cart"
+                      },
+                      {
+                        "label": "Listen"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "Talk",
+                    "choices": [
+                      {
+                        "label": "Hail the toll-keeper"
+                      }
+                    ]
+                  }
+                ],
+                "unavailable": [
+                  {
+                    "label": "Cast a spell",
+                    "reason": "You have no spells yet"
+                  }
+                ]
+              }
+            },
+            "composer": {
+              "look": "idle",
+              "people": [
+                "Everyone",
+                "The toll-keeper"
+              ]
+            },
+            "tabs": {
+              "active": "act",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "Listening, the microphone on",
+          "panels": {
+            "scene": "quay-in-the-rain.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "act": {
+              "narration": [
+                "Ahead, a lantern swings from a leaning post, and someone has left a cart across the way."
+              ]
+            },
+            "composer": {
+              "look": "listening",
+              "people": [
+                "Everyone",
+                "The toll-keeper"
+              ]
+            },
+            "tabs": {
+              "active": "act",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "A spoken line to read and change",
+          "panels": {
+            "scene": "quay-in-the-rain.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "act": {
+              "narration": [
+                "Ahead, a lantern swings from a leaning post, and someone has left a cart across the way."
+              ]
+            },
+            "composer": {
+              "look": "transcript",
+              "text": "I walk up slowly with my hands where they can see them and ask whose cart this is.",
+              "people": [
+                "Everyone",
+                "The toll-keeper"
+              ]
+            },
+            "tabs": {
+              "active": "act",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "Waiting for the others",
+          "panels": {
+            "scene": "quay-in-the-rain.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "status": {
+              "text": "Waiting for Lyra to choose",
+              "tone": "accent"
+            },
+            "act": {
+              "narration": [
+                "You step aside. Lyra crouches by the wheel and runs a thumb along a fresh scratch."
+              ]
+            },
+            "tabs": {
+              "active": "act",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Talk: the cast, who you address and the thread",
+      "after": "renders 31 and 34 (talk and bond), 04 and 18 (the table)",
+      "screens": [
+        {
+          "title": "The cast and the conversation",
+          "panels": {
+            "scene": "innkeeper-table-plate-clean.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Gilded Anchor, common room",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "talk": {
+              "cast": [
+                {
+                  "name": "Mara Voss",
+                  "portrait": "finn-alder.webp",
+                  "known_as": "innkeeper"
+                },
+                {
+                  "name": "Dain Rusk",
+                  "portrait": "dain-rusk.webp",
+                  "known_as": "a man in a grey cloak"
+                },
+                {
+                  "name": "Brakka",
+                  "portrait": "brakka.webp",
+                  "known_as": "a bouncer"
+                }
+              ],
+              "addressing": "Mara Voss",
+              "thread": [
+                {
+                  "speaker": "Rylan",
+                  "voice": "hero",
+                  "text": "We need a room for the night, and a quiet word about the road north."
+                },
+                {
+                  "speaker": "Mara Voss",
+                  "voice": "npc",
+                  "text": "Rooms I have. Quiet words cost extra."
+                },
+                {
+                  "speaker": "Mara Voss",
+                  "voice": "npc",
+                  "text": "Nobody takes the north road since the bridge went."
+                },
+                {
+                  "speaker": "Lyra",
+                  "voice": "ally",
+                  "text": "Then we'll find another way over."
+                },
+                {
+                  "speaker": "The room",
+                  "voice": "narrator",
+                  "text": "The man in the grey cloak lowers his cup and listens."
+                }
+              ]
+            },
+            "composer": {
+              "look": "idle",
+              "people": [
+                "Mara Voss",
+                "Dain Rusk",
+                "Brakka"
+              ]
+            },
+            "tabs": {
+              "active": "talk",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "Speaking to the whole room",
+          "panels": {
+            "scene": "innkeeper-table-plate-clean.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Gilded Anchor, common room",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "talk": {
+              "cast": [
+                {
+                  "name": "Mara Voss",
+                  "portrait": "finn-alder.webp",
+                  "known_as": "innkeeper"
+                },
+                {
+                  "name": "Dain Rusk",
+                  "known_as": "a man in a grey cloak"
+                }
+              ],
+              "thread": [
+                {
+                  "speaker": "Rylan",
+                  "voice": "hero",
+                  "text": "Does anyone here know the north road?"
+                },
+                {
+                  "speaker": "Dain Rusk",
+                  "voice": "mystic",
+                  "text": "Better than most."
+                }
+              ]
+            },
+            "composer": {
+              "look": "transcript",
+              "text": "I'll buy the next round if someone draws me a map.",
+              "people": [
+                "Mara Voss",
+                "Dain Rusk"
+              ]
+            },
+            "tabs": {
+              "active": "talk",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "No one to talk to",
+          "panels": {
+            "scene": "innkeeper-table-plate-clean.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "talk": {},
+            "empty": {
+              "title": "No one here to talk to",
+              "text": "When someone is near, they will show up here by the name you learn.",
+              "glyph": "talk"
+            },
+            "tabs": {
+              "active": "talk",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Roll: the check, the stakes and the result",
+      "after": "renders 03 and 33 (the dice moments), 32 (the lit choice)",
+      "screens": [
+        {
+          "title": "A check is called",
+          "panels": {
+            "scene": "garrick-shop-plate.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "roll": {
+              "check": "Perception check",
+              "basis": "Wisdom, proficient: +5",
+              "stakes": "Spot who is watching from the trees before they spot you."
+            },
+            "tabs": {
+              "active": "roll",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ],
+              "badges": [
+                {
+                  "tab": "roll",
+                  "count": 1
+                }
+              ]
+            }
+          }
+        },
+        {
+          "title": "With advantage",
+          "panels": {
+            "scene": "garrick-shop-plate.webp",
+            "header": {
+              "name": "Lyra",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "chip-nyx.webp",
+              "hp": {
+                "current": 20,
+                "maximum": 20
+              }
+            },
+            "roll": {
+              "check": "Stealth check",
+              "basis": "Dexterity, proficient: +6",
+              "stakes": "Slip past the lantern without a sound.",
+              "mode": "advantage",
+              "mode_reason": "You are hidden in the shadow of the cart."
+            },
+            "tabs": {
+              "active": "roll",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ],
+              "badges": [
+                {
+                  "tab": "roll",
+                  "count": 1
+                }
+              ]
+            }
+          }
+        },
+        {
+          "title": "The dice are in the air",
+          "panels": {
+            "scene": "garrick-shop-plate.webp",
+            "header": {
+              "name": "Lyra",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "chip-nyx.webp",
+              "hp": {
+                "current": 20,
+                "maximum": 20
+              }
+            },
+            "roll": {
+              "check": "Stealth check",
+              "basis": "Dexterity, proficient: +6",
+              "stakes": "Slip past the lantern without a sound.",
+              "state": "rolling",
+              "mode": "advantage",
+              "mode_reason": "You are hidden in the shadow of the cart."
+            },
+            "tabs": {
+              "active": "roll",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "Result: success",
+          "panels": {
+            "scene": "garrick-shop-plate.webp",
+            "header": {
+              "name": "Lyra",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "chip-nyx.webp",
+              "hp": {
+                "current": 20,
+                "maximum": 20
+              }
+            },
+            "roll": {
+              "check": "Stealth check",
+              "basis": "Dexterity, proficient: +6",
+              "stakes": "Slip past the lantern without a sound.",
+              "state": {
+                "done": {
+                  "id": "sample",
+                  "title": "Stealth",
+                  "kind": "skill_check",
+                  "dice": [
+                    {
+                      "sides": 20,
+                      "face": 14,
+                      "role": "test"
+                    },
+                    {
+                      "sides": 20,
+                      "face": 6,
+                      "role": "test",
+                      "kept": false
+                    }
+                  ],
+                  "modifiers": [
+                    {
+                      "label": "Dexterity",
+                      "value": 6
+                    }
+                  ],
+                  "total": 20,
+                  "outcome": "success"
+                }
+              },
+              "mode": "advantage"
+            },
+            "tabs": {
+              "active": "roll",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "Result: failure",
+          "panels": {
+            "scene": "garrick-shop-plate.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "roll": {
+              "check": "Perception check",
+              "basis": "Wisdom, proficient: +5",
+              "stakes": "Spot who is watching from the trees before they spot you.",
+              "state": {
+                "done": {
+                  "id": "sample",
+                  "title": "Perception",
+                  "kind": "skill_check",
+                  "dice": [
+                    {
+                      "sides": 20,
+                      "face": 9,
+                      "role": "test",
+                      "kept": false
+                    },
+                    {
+                      "sides": 20,
+                      "face": 4,
+                      "role": "test"
+                    }
+                  ],
+                  "modifiers": [
+                    {
+                      "label": "Wisdom",
+                      "value": -1
+                    }
+                  ],
+                  "total": 3,
+                  "outcome": "failure"
+                }
+              },
+              "mode": "disadvantage",
+              "mode_reason": "Rain blurs the treeline."
+            },
+            "tabs": {
+              "active": "roll",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Creation: quick hero, deeper choices, review and lock in",
+      "after": "renders 08, 11, 21, 25 (seat states), 32 (choices)",
+      "screens": [
+        {
+          "title": "Quick hero",
+          "panels": {
+            "scene": "home-hall-plate.webp",
+            "header": {
+              "name": "Make your hero",
+              "subtitle": "Step by step; change anything later"
+            },
+            "blocks": [
+              {
+                "kind": "heading",
+                "text": "Who are you?",
+                "caption": "A name and three story cards are enough."
+              },
+              {
+                "kind": "field",
+                "label": "Name",
+                "value": "Mara Vell",
+                "placeholder": "Your hero's name",
+                "message": "Two to thirty letters. Spaces and hyphens are fine."
+              },
+              {
+                "kind": "heading",
+                "text": "Your story"
+              },
+              {
+                "kind": "rows",
+                "rows": [
+                  {
+                    "label": "What did you do?",
+                    "value": "A soldier who served the crown",
+                    "because": "Gives you the Soldier background",
+                    "change": "Change"
+                  },
+                  {
+                    "label": "How do you fight?",
+                    "value": "Up close, sword and shield",
+                    "because": "Gives you the Fighter class",
+                    "change": "Change"
+                  },
+                  {
+                    "label": "What do you want?",
+                    "value": "To find my missing brother",
+                    "because": "Shapes the story, not the numbers",
+                    "change": "Change"
+                  }
+                ]
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Surprise me",
+                    "kind": "secondary"
+                  },
+                  {
+                    "label": "Go deeper",
+                    "kind": "secondary"
+                  },
+                  {
+                    "label": "Review my hero",
+                    "kind": "primary"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "title": "Species, class and background",
+          "panels": {
+            "scene": "home-hall-plate.webp",
+            "header": {
+              "name": "Make your hero",
+              "subtitle": "Going deeper: your story"
+            },
+            "blocks": [
+              {
+                "kind": "heading",
+                "text": "Species"
+              },
+              {
+                "kind": "cards",
+                "cards": [
+                  {
+                    "title": "Human",
+                    "sub": "Adaptable",
+                    "picture": "lobby-cam.webp",
+                    "selected": true
+                  },
+                  {
+                    "title": "Elf",
+                    "sub": "Keen and graceful",
+                    "picture": "lobby-nyx.webp"
+                  },
+                  {
+                    "title": "Dwarf",
+                    "sub": "Sturdy",
+                    "picture": "brakka.webp"
+                  },
+                  {
+                    "title": "Tiefling",
+                    "sub": "Fiendish blood",
+                    "picture": "chip-vyx.webp",
+                    "mark": {
+                      "text": "Not in play yet",
+                      "tone": "warn"
+                    },
+                    "off": true
+                  }
+                ],
+                "small": false
+              },
+              {
+                "kind": "heading",
+                "text": "Class"
+              },
+              {
+                "kind": "cards",
+                "cards": [
+                  {
+                    "title": "Fighter",
+                    "sub": "Weapons and grit",
+                    "glyph": "sword",
+                    "selected": true
+                  },
+                  {
+                    "title": "Wizard",
+                    "sub": "Spells and study",
+                    "glyph": "book",
+                    "mark": {
+                      "text": "Not in play yet",
+                      "tone": "warn"
+                    },
+                    "off": true
+                  },
+                  {
+                    "title": "Rogue",
+                    "sub": "Stealth and tricks",
+                    "glyph": "mask",
+                    "mark": {
+                      "text": "Not in play yet",
+                      "tone": "warn"
+                    },
+                    "off": true
+                  },
+                  {
+                    "title": "Cleric",
+                    "sub": "Faith and healing",
+                    "glyph": "sun",
+                    "mark": {
+                      "text": "Not in play yet",
+                      "tone": "warn"
+                    },
+                    "off": true
+                  }
+                ],
+                "small": false
+              },
+              {
+                "kind": "heading",
+                "text": "Background"
+              },
+              {
+                "kind": "cards",
+                "cards": [
+                  {
+                    "title": "Soldier",
+                    "sub": "Rank and discipline",
+                    "glyph": "shield",
+                    "selected": true
+                  },
+                  {
+                    "title": "Acolyte",
+                    "sub": "Temple service",
+                    "glyph": "sun",
+                    "mark": {
+                      "text": "Not in play yet",
+                      "tone": "warn"
+                    },
+                    "off": true
+                  }
+                ],
+                "small": false
+              }
+            ]
+          }
+        },
+        {
+          "title": "Abilities, skills and languages",
+          "panels": {
+            "scene": "home-hall-plate.webp",
+            "header": {
+              "name": "Make your hero",
+              "subtitle": "Going deeper: your numbers"
+            },
+            "blocks": [
+              {
+                "kind": "heading",
+                "text": "Ability scores",
+                "caption": "The standard array, placed for a Fighter."
+              },
+              {
+                "kind": "stats",
+                "stats": [
+                  {
+                    "label": "Strength",
+                    "value": "15",
+                    "sub": "+2"
+                  },
+                  {
+                    "label": "Dexterity",
+                    "value": "13",
+                    "sub": "+1"
+                  },
+                  {
+                    "label": "Constitution",
+                    "value": "14",
+                    "sub": "+2"
+                  },
+                  {
+                    "label": "Intelligence",
+                    "value": "8",
+                    "sub": "-1"
+                  },
+                  {
+                    "label": "Wisdom",
+                    "value": "12",
+                    "sub": "+1"
+                  },
+                  {
+                    "label": "Charisma",
+                    "value": "10",
+                    "sub": "+0"
+                  }
+                ]
+              },
+              {
+                "kind": "chips",
+                "label": "Skills (choose two)",
+                "chips": [
+                  {
+                    "text": "Athletics",
+                    "selected": true
+                  },
+                  {
+                    "text": "Perception",
+                    "selected": true
+                  },
+                  {
+                    "text": "Intimidation",
+                    "selected": false
+                  },
+                  {
+                    "text": "Survival",
+                    "selected": false
+                  },
+                  {
+                    "text": "Acrobatics",
+                    "selected": false
+                  }
+                ]
+              },
+              {
+                "kind": "chips",
+                "label": "Languages",
+                "chips": [
+                  {
+                    "text": "Common",
+                    "selected": true
+                  },
+                  {
+                    "text": "Dwarvish",
+                    "selected": false
+                  },
+                  {
+                    "text": "Elvish",
+                    "selected": false
+                  },
+                  {
+                    "text": "Thieves' cant",
+                    "selected": false
+                  }
+                ]
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Review my hero",
+                    "kind": "primary"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "title": "Review sheet",
+          "panels": {
+            "scene": "home-hall-plate.webp",
+            "header": {
+              "name": "Mara Vell",
+              "subtitle": "Human Fighter, Soldier",
+              "portrait": "lobby-cam.webp"
+            },
+            "blocks": [
+              {
+                "kind": "heading",
+                "text": "Your hero",
+                "caption": "Tap Change on any line."
+              },
+              {
+                "kind": "rows",
+                "rows": [
+                  {
+                    "label": "Story",
+                    "value": "Soldier who wants to find a brother",
+                    "because": "From your three story cards",
+                    "change": "Change"
+                  },
+                  {
+                    "label": "Species",
+                    "value": "Human",
+                    "because": "You picked it",
+                    "change": "Change"
+                  },
+                  {
+                    "label": "Class",
+                    "value": "Fighter, level 1",
+                    "because": "How you fight: up close",
+                    "change": "Change"
+                  },
+                  {
+                    "label": "Ability scores",
+                    "value": "15 13 14 8 12 10",
+                    "because": "Standard array, Fighter order",
+                    "change": "Change"
+                  },
+                  {
+                    "label": "Skills",
+                    "value": "Athletics, Perception",
+                    "because": "Soldier and Fighter grant these",
+                    "change": "Change"
+                  },
+                  {
+                    "label": "Languages",
+                    "value": "Common",
+                    "because": "Every hero speaks Common",
+                    "change": "Change"
+                  }
+                ]
+              },
+              {
+                "kind": "notice",
+                "tone": "warn",
+                "text": "A Wizard would be marked Not in play yet here; this build is fully playable."
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Lock in this hero",
+                    "kind": "primary"
+                  },
+                  {
+                    "label": "Back",
+                    "kind": "secondary"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "title": "Lock in",
+          "panels": {
+            "scene": "home-hall-plate.webp",
+            "header": {
+              "name": "Mara Vell",
+              "subtitle": "Locking in",
+              "portrait": "lobby-cam.webp"
+            },
+            "blocks": [
+              {
+                "kind": "stage",
+                "picture": null,
+                "state": "generating",
+                "caption": "Making your portrait and reference sheet"
+              },
+              {
+                "kind": "notice",
+                "tone": "good",
+                "text": "You can join the table now. Your picture arrives when it is ready."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Look studio: controls, details, refine, compare and versions",
+      "after": "renders 01 (inspection), 08 (portrait cards)",
+      "screens": [
+        {
+          "title": "Controls",
+          "panels": {
+            "scene": "lobby-hall-plate.webp",
+            "header": {
+              "name": "Your look",
+              "subtitle": "One pose, step by step",
+              "portrait": "lobby-cam.webp"
+            },
+            "blocks": [
+              {
+                "kind": "stage",
+                "picture": "lobby-cam.webp",
+                "state": "ready",
+                "caption": "Version 2, kept"
+              },
+              {
+                "kind": "slider",
+                "label": "Height",
+                "percent": 55,
+                "low": "Short",
+                "high": "Tall"
+              },
+              {
+                "kind": "slider",
+                "label": "Build",
+                "percent": 70,
+                "low": "Slight",
+                "high": "Broad"
+              },
+              {
+                "kind": "slider",
+                "label": "Age",
+                "percent": 35,
+                "low": "Young",
+                "high": "Old"
+              },
+              {
+                "kind": "slider",
+                "label": "Hair length",
+                "percent": 40,
+                "low": "Cropped",
+                "high": "Long"
+              },
+              {
+                "kind": "swatches",
+                "label": "Skin",
+                "swatches": [
+                  {
+                    "name": "Fair",
+                    "color": "#f1d3b8"
+                  },
+                  {
+                    "name": "Tan",
+                    "color": "#d9a679",
+                    "selected": true
+                  },
+                  {
+                    "name": "Brown",
+                    "color": "#9a6a45"
+                  },
+                  {
+                    "name": "Deep",
+                    "color": "#5d3a26"
+                  }
+                ]
+              },
+              {
+                "kind": "swatches",
+                "label": "Hair",
+                "swatches": [
+                  {
+                    "name": "Black",
+                    "color": "#1b1612"
+                  },
+                  {
+                    "name": "Brown",
+                    "color": "#5a3b25",
+                    "selected": true
+                  },
+                  {
+                    "name": "Red",
+                    "color": "#a4472b"
+                  },
+                  {
+                    "name": "Silver",
+                    "color": "#c7c9cf"
+                  }
+                ]
+              },
+              {
+                "kind": "swatches",
+                "label": "Eyes",
+                "swatches": [
+                  {
+                    "name": "Brown",
+                    "color": "#6b4426",
+                    "selected": true
+                  },
+                  {
+                    "name": "Green",
+                    "color": "#4f8a5b"
+                  },
+                  {
+                    "name": "Blue",
+                    "color": "#4f7fb8"
+                  },
+                  {
+                    "name": "Grey",
+                    "color": "#8d96a3"
+                  }
+                ]
+              },
+              {
+                "kind": "chips",
+                "label": "Face shape",
+                "chips": [
+                  {
+                    "text": "Round",
+                    "selected": false
+                  },
+                  {
+                    "text": "Square",
+                    "selected": true
+                  },
+                  {
+                    "text": "Long",
+                    "selected": false
+                  },
+                  {
+                    "text": "Heart",
+                    "selected": false
+                  }
+                ]
+              },
+              {
+                "kind": "chips",
+                "label": "Hair style",
+                "chips": [
+                  {
+                    "text": "Cropped",
+                    "selected": false
+                  },
+                  {
+                    "text": "Braided",
+                    "selected": true
+                  },
+                  {
+                    "text": "Loose",
+                    "selected": false
+                  },
+                  {
+                    "text": "Topknot",
+                    "selected": false
+                  }
+                ]
+              },
+              {
+                "kind": "chips",
+                "label": "Facial hair",
+                "chips": [
+                  {
+                    "text": "None",
+                    "selected": false
+                  },
+                  {
+                    "text": "Stubble",
+                    "selected": true
+                  },
+                  {
+                    "text": "Beard",
+                    "selected": false
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "title": "Details in your words",
+          "panels": {
+            "scene": "lobby-hall-plate.webp",
+            "header": {
+              "name": "Your look",
+              "subtitle": "One pose, step by step",
+              "portrait": "lobby-cam.webp"
+            },
+            "blocks": [
+              {
+                "kind": "field",
+                "label": "Anything else?",
+                "value": "A scar across the left cheek, a silver earring and a faded blue cloak pin.",
+                "placeholder": "Scars, tattoos, jewellery, war paint",
+                "message": "Each detail becomes a chip you can take out.",
+                "tall": true
+              },
+              {
+                "kind": "chips",
+                "label": "Your details",
+                "chips": [
+                  {
+                    "text": "Scar: left cheek",
+                    "selected": true,
+                    "removable": true
+                  },
+                  {
+                    "text": "Earring: right ear",
+                    "selected": true,
+                    "removable": true
+                  },
+                  {
+                    "text": "Cloak pin: blue",
+                    "selected": true,
+                    "removable": true
+                  }
+                ]
+              },
+              {
+                "kind": "notice",
+                "tone": "accent",
+                "text": "Changing things costs nothing. Refine makes one picture from what changed."
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Refine",
+                    "kind": "primary"
+                  },
+                  {
+                    "label": "Start again",
+                    "kind": "danger"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "title": "Generating",
+          "panels": {
+            "scene": "lobby-hall-plate.webp",
+            "header": {
+              "name": "Your look",
+              "subtitle": "One pose, step by step",
+              "portrait": "lobby-cam.webp"
+            },
+            "blocks": [
+              {
+                "kind": "stage",
+                "picture": null,
+                "state": "generating",
+                "caption": "Painting version 3 from what you changed"
+              },
+              {
+                "kind": "strip",
+                "label": "Versions",
+                "items": [
+                  {
+                    "label": "Base"
+                  },
+                  {
+                    "label": "1",
+                    "picture": "lobby-cam.webp"
+                  },
+                  {
+                    "label": "2",
+                    "picture": "lobby-cam.webp",
+                    "selected": true
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "title": "New beside the kept one",
+          "panels": {
+            "scene": "lobby-hall-plate.webp",
+            "header": {
+              "name": "Your look",
+              "subtitle": "One pose, step by step",
+              "portrait": "lobby-cam.webp"
+            },
+            "blocks": [
+              {
+                "kind": "compare",
+                "kept": "lobby-cam.webp",
+                "fresh": "chip-cam.webp",
+                "caption": "Keep the new picture, or stay with the one you had."
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Keep it",
+                    "kind": "primary"
+                  },
+                  {
+                    "label": "Keep old",
+                    "kind": "secondary"
+                  }
+                ]
+              },
+              {
+                "kind": "strip",
+                "label": "Earlier versions",
+                "items": [
+                  {
+                    "label": "Base"
+                  },
+                  {
+                    "label": "1",
+                    "picture": "lobby-cam.webp"
+                  },
+                  {
+                    "label": "2",
+                    "picture": "lobby-cam.webp",
+                    "selected": true
+                  },
+                  {
+                    "label": "3",
+                    "picture": "chip-cam.webp"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "title": "It could not be made",
+          "panels": {
+            "scene": "lobby-hall-plate.webp",
+            "header": {
+              "name": "Your look",
+              "subtitle": "One pose, step by step",
+              "portrait": "lobby-cam.webp"
+            },
+            "blocks": [
+              {
+                "kind": "stage",
+                "picture": "lobby-cam.webp",
+                "state": "failed",
+                "caption": "Version 2 is still your kept picture"
+              },
+              {
+                "kind": "notice",
+                "tone": "danger",
+                "text": "The picture could not be made this time. Nothing was lost."
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Try again",
+                    "kind": "primary"
+                  },
+                  {
+                    "label": "Start again",
+                    "kind": "danger"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Bag, trade and look closer",
+      "after": "renders 04, 06, 10, 14, 16 (merchant, chest), 01 (inspection)",
+      "screens": [
+        {
+          "title": "The bag",
+          "panels": {
+            "scene": "garrick-shop-plate.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "blocks": [
+              {
+                "kind": "heading",
+                "text": "What you carry",
+                "caption": "Six things, 48 gold"
+              },
+              {
+                "kind": "cards",
+                "cards": [
+                  {
+                    "title": "Greatsword",
+                    "sub": "Two-handed",
+                    "glyph": "sword",
+                    "rarity": "rare",
+                    "selected": true
+                  },
+                  {
+                    "title": "Shield",
+                    "sub": "+2 AC",
+                    "glyph": "shield",
+                    "rarity": "uncommon"
+                  },
+                  {
+                    "title": "Healing potion",
+                    "sub": "x2",
+                    "glyph": "plus",
+                    "rarity": "common"
+                  },
+                  {
+                    "title": "Rope",
+                    "sub": "50 ft",
+                    "glyph": "hammer",
+                    "rarity": "common"
+                  },
+                  {
+                    "title": "Old letter",
+                    "sub": "Sealed",
+                    "picture": "letter.png",
+                    "rarity": "uncommon"
+                  },
+                  {
+                    "title": "Sun amulet",
+                    "sub": "Warm to hold",
+                    "glyph": "sun",
+                    "rarity": "legendary"
+                  }
+                ],
+                "small": true
+              }
+            ],
+            "tabs": {
+              "active": "inventory",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "One item",
+          "panels": {
+            "scene": "garrick-shop-plate.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "blocks": [
+              {
+                "kind": "inspect",
+                "picture": "letter.png",
+                "title": "Old letter",
+                "rarity": "uncommon",
+                "text": "Sealed with grey wax. The seal shows a gate and three stars."
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Look closer",
+                    "kind": "primary"
+                  },
+                  {
+                    "label": "Use",
+                    "kind": "secondary"
+                  },
+                  {
+                    "label": "Give",
+                    "kind": "secondary"
+                  },
+                  {
+                    "label": "Drop",
+                    "kind": "danger"
+                  }
+                ]
+              }
+            ],
+            "tabs": {
+              "active": "inventory",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "Trading with a keeper",
+          "panels": {
+            "scene": "garrick-shop-plate.webp",
+            "header": {
+              "name": "Garrick's shop",
+              "subtitle": "Smith and keeper",
+              "portrait": "finn-alder.webp"
+            },
+            "blocks": [
+              {
+                "kind": "heading",
+                "text": "Garrick the smith",
+                "caption": "Your purse: 48 gold"
+              },
+              {
+                "kind": "rows",
+                "rows": [
+                  {
+                    "label": "Whetstone",
+                    "value": "6 gp",
+                    "because": "He keeps a dozen",
+                    "change": "Buy",
+                    "picture": "sigrun.webp"
+                  },
+                  {
+                    "label": "Steel helm",
+                    "value": "40 gp",
+                    "because": "Fits you well",
+                    "change": "Buy",
+                    "picture": "dain-rusk.webp"
+                  },
+                  {
+                    "label": "Old letter",
+                    "value": "Worth 12 gp to him",
+                    "because": "You hold one",
+                    "change": "Sell",
+                    "picture": "letter.png"
+                  }
+                ]
+              },
+              {
+                "kind": "notice",
+                "tone": "warn",
+                "text": "You cannot afford the Steel helm yet: 40 gp is more than your purse after the whetstone."
+              }
+            ],
+            "tabs": {
+              "active": "inventory",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "Look closer",
+          "panels": {
+            "scene": "garrick-shop-plate.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "blocks": [
+              {
+                "kind": "inspect",
+                "picture": "map.png",
+                "title": "Old map",
+                "rarity": "common",
+                "text": "A road runs north to a keep. Someone has circled the bridge in red ink."
+              },
+              {
+                "kind": "notice",
+                "tone": "accent",
+                "text": "The main screen shows this now."
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Back to the bag",
+                    "kind": "secondary"
+                  }
+                ]
+              }
+            ],
+            "tabs": {
+              "active": "inventory",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Clues and the map",
+      "after": "renders 29, 33 (read, puzzle), 12, 20, 22 (the map)",
+      "screens": [
+        {
+          "title": "Clues found",
+          "panels": {
+            "scene": "innkeeper-table-plate-clean.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "blocks": [
+              {
+                "kind": "heading",
+                "text": "What you have found",
+                "caption": "Look closer at any piece, then say how they fit."
+              },
+              {
+                "kind": "cards",
+                "cards": [
+                  {
+                    "title": "Sealed letter",
+                    "sub": "Seen",
+                    "picture": "letter.png",
+                    "mark": {
+                      "text": "Seen",
+                      "tone": "neutral"
+                    }
+                  },
+                  {
+                    "title": "Old map",
+                    "sub": "Worked out",
+                    "picture": "map.png",
+                    "mark": {
+                      "text": "Worked out",
+                      "tone": "good"
+                    }
+                  },
+                  {
+                    "title": "Grey cloak thread",
+                    "sub": "Seen",
+                    "glyph": "mask",
+                    "mark": {
+                      "text": "Seen",
+                      "tone": "neutral"
+                    }
+                  },
+                  {
+                    "title": "Bridge mark",
+                    "sub": "A close look showed a red ring",
+                    "glyph": "book",
+                    "mark": {
+                      "text": "Worked out",
+                      "tone": "good"
+                    }
+                  }
+                ],
+                "small": false
+              },
+              {
+                "kind": "field",
+                "label": "Put forward an idea",
+                "value": "The red ring on the map is the same gate as the seal on the letter.",
+                "placeholder": "How do these fit together?",
+                "message": "The DM judges it. Hints only nudge.",
+                "tall": true
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Put it forward",
+                    "kind": "primary"
+                  },
+                  {
+                    "label": "Look closer",
+                    "kind": "secondary"
+                  }
+                ]
+              }
+            ],
+            "tabs": {
+              "active": "clues",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "Looking closer at a clue",
+          "panels": {
+            "scene": "innkeeper-table-plate-clean.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "blocks": [
+              {
+                "kind": "inspect",
+                "picture": "letter.png",
+                "title": "Sealed letter",
+                "text": "Grey wax. A gate over three stars. Inside, one word: wait."
+              },
+              {
+                "kind": "notice",
+                "tone": "good",
+                "text": "Worked out: the gate is the Keldmere bridge gate."
+              }
+            ],
+            "tabs": {
+              "active": "clues",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "The map",
+          "panels": {
+            "scene": "quay-in-the-rain.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "blocks": [
+              {
+                "kind": "map",
+                "nodes": [
+                  {
+                    "name": "The Quay",
+                    "x": 22,
+                    "y": 82,
+                    "plate": "quay-in-the-rain.webp",
+                    "state": "visited"
+                  },
+                  {
+                    "name": "Ashen Road",
+                    "x": 50,
+                    "y": 55,
+                    "plate": "innkeeper-table-plate-clean.webp",
+                    "state": "here"
+                  },
+                  {
+                    "name": "Keldmere",
+                    "x": 78,
+                    "y": 30,
+                    "plate": "home-hall-plate.webp",
+                    "state": "unvisited"
+                  },
+                  {
+                    "name": "The Old Bridge",
+                    "x": 24,
+                    "y": 28,
+                    "plate": "garrick-shop-plate.webp",
+                    "state": "unvisited"
+                  }
+                ],
+                "ways": [
+                  {
+                    "from": "The Quay",
+                    "to": "Ashen Road"
+                  },
+                  {
+                    "from": "Ashen Road",
+                    "to": "Keldmere"
+                  },
+                  {
+                    "from": "Ashen Road",
+                    "to": "The Old Bridge",
+                    "blocked": true
+                  }
+                ]
+              },
+              {
+                "kind": "heading",
+                "text": "Tap a place to go there",
+                "caption": "Or say where you want to go."
+              }
+            ],
+            "tabs": {
+              "active": "map",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "A tap that is refused",
+          "panels": {
+            "scene": "quay-in-the-rain.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "blocks": [
+              {
+                "kind": "map",
+                "nodes": [
+                  {
+                    "name": "Ashen Road",
+                    "x": 30,
+                    "y": 70,
+                    "plate": "innkeeper-table-plate-clean.webp",
+                    "state": "here"
+                  },
+                  {
+                    "name": "The Old Bridge",
+                    "x": 70,
+                    "y": 25,
+                    "plate": "garrick-shop-plate.webp",
+                    "state": "unvisited"
+                  }
+                ],
+                "ways": [
+                  {
+                    "from": "Ashen Road",
+                    "to": "The Old Bridge",
+                    "blocked": true
+                  }
+                ]
+              },
+              {
+                "kind": "notice",
+                "tone": "warn",
+                "text": "You cannot reach the Old Bridge now: the way is barred while the guards watch."
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Talk to the guards",
+                    "kind": "secondary"
+                  },
+                  {
+                    "label": "Look for another way",
+                    "kind": "secondary"
+                  }
+                ]
+              }
+            ],
+            "tabs": {
+              "active": "map",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Hero sheet and notebook",
+      "after": "renders 36 (journal), 08 (portrait), 25 (states)",
+      "screens": [
+        {
+          "title": "The sheet",
+          "panels": {
+            "scene": "lobby-hall-plate.webp",
+            "header": {
+              "name": "Mara Vell",
+              "subtitle": "Human Fighter, level 3",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27,
+                "temporary": 4
+              }
+            },
+            "blocks": [
+              {
+                "kind": "stats",
+                "stats": [
+                  {
+                    "label": "Armour",
+                    "value": "18"
+                  },
+                  {
+                    "label": "Speed",
+                    "value": "30",
+                    "sub": "feet"
+                  },
+                  {
+                    "label": "Bonus",
+                    "value": "+2",
+                    "sub": "proficiency"
+                  }
+                ]
+              },
+              {
+                "kind": "stats",
+                "stats": [
+                  {
+                    "label": "Strength",
+                    "value": "16",
+                    "sub": "+3"
+                  },
+                  {
+                    "label": "Dexterity",
+                    "value": "13",
+                    "sub": "+1"
+                  },
+                  {
+                    "label": "Constitution",
+                    "value": "14",
+                    "sub": "+2"
+                  },
+                  {
+                    "label": "Intelligence",
+                    "value": "8",
+                    "sub": "-1"
+                  },
+                  {
+                    "label": "Wisdom",
+                    "value": "12",
+                    "sub": "+1"
+                  },
+                  {
+                    "label": "Charisma",
+                    "value": "10",
+                    "sub": "+0"
+                  }
+                ]
+              },
+              {
+                "kind": "chips",
+                "label": "Skills",
+                "chips": [
+                  {
+                    "text": "Athletics +5",
+                    "selected": true
+                  },
+                  {
+                    "text": "Perception +3",
+                    "selected": true
+                  },
+                  {
+                    "text": "Intimidation +2",
+                    "selected": false
+                  }
+                ]
+              },
+              {
+                "kind": "rows",
+                "rows": [
+                  {
+                    "label": "Second Wind",
+                    "value": "Heal 1d10 + 3",
+                    "because": "Once between rests"
+                  },
+                  {
+                    "label": "Action Surge",
+                    "value": "One more action",
+                    "because": "Once between rests"
+                  },
+                  {
+                    "label": "Spellcasting",
+                    "because": "Your background offers it",
+                    "mark": {
+                      "text": "Not in play yet",
+                      "tone": "warn"
+                    }
+                  }
+                ]
+              },
+              {
+                "kind": "chips",
+                "label": "Conditions",
+                "chips": [
+                  {
+                    "text": "Poisoned",
+                    "selected": true
+                  }
+                ]
+              }
+            ],
+            "tabs": {
+              "active": "hero",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "The notebook",
+          "panels": {
+            "scene": "innkeeper-table-plate-clean.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "blocks": [
+              {
+                "kind": "field",
+                "label": "Write a note",
+                "value": "",
+                "placeholder": "What do you want to remember?",
+                "tall": true
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Keep the note",
+                    "kind": "primary"
+                  },
+                  {
+                    "label": "Snap the main screen",
+                    "kind": "secondary"
+                  }
+                ]
+              },
+              {
+                "kind": "chips",
+                "label": "Show",
+                "chips": [
+                  {
+                    "text": "All",
+                    "selected": true
+                  },
+                  {
+                    "text": "People",
+                    "selected": false
+                  },
+                  {
+                    "text": "Places",
+                    "selected": false
+                  },
+                  {
+                    "text": "Items and clues",
+                    "selected": false
+                  },
+                  {
+                    "text": "Snaps",
+                    "selected": false
+                  },
+                  {
+                    "text": "My notes",
+                    "selected": false
+                  }
+                ]
+              },
+              {
+                "kind": "rows",
+                "rows": [
+                  {
+                    "label": "Snap: the Gilded Anchor",
+                    "value": "Mara Voss and Dain Rusk, in the common room",
+                    "because": "Place: the Gilded Anchor, this evening",
+                    "change": "Share",
+                    "picture": "innkeeper-table-plate-clean.webp"
+                  },
+                  {
+                    "label": "Mara Voss",
+                    "value": "Keeps the Gilded Anchor",
+                    "because": "People, learned tonight",
+                    "change": "Share",
+                    "picture": "finn-alder.webp"
+                  },
+                  {
+                    "label": "My note",
+                    "value": "Ask Dain who he is waiting for",
+                    "because": "Pinned to Dain Rusk",
+                    "change": "Share"
+                  }
+                ]
+              }
+            ],
+            "tabs": {
+              "active": "notebook",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            },
+            "toast": {
+              "kind": "A name you learned",
+              "text": "The man in grey is called Dain Rusk.",
+              "keep_label": "Keep"
+            }
+          }
+        },
+        {
+          "title": "Kept pop-ups waiting",
+          "panels": {
+            "scene": "innkeeper-table-plate-clean.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "The Ashen Road, near Keldmere",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "blocks": [
+              {
+                "kind": "heading",
+                "text": "Recent",
+                "caption": "These wait until the scene ends."
+              },
+              {
+                "kind": "rows",
+                "rows": [
+                  {
+                    "label": "A new place",
+                    "value": "Keldmere",
+                    "because": "Named by Mara Voss",
+                    "change": "Keep"
+                  },
+                  {
+                    "label": "A task",
+                    "value": "Find a way over the north bridge",
+                    "because": "From the party's talk",
+                    "change": "Keep"
+                  },
+                  {
+                    "label": "A line",
+                    "value": "Quiet words cost extra.",
+                    "because": "Mara Voss",
+                    "change": "Keep"
+                  }
+                ]
+              }
+            ],
+            "tabs": {
+              "active": "notebook",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Battle: grid, actions, reactions and my state",
+      "after": "renders 03 (combat), 24 (state legend)",
+      "screens": [
+        {
+          "title": "The grid",
+          "panels": {
+            "scene": "quay-in-the-rain.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "Your turn",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "blocks": [
+              {
+                "kind": "strip",
+                "label": "Round 2 · turn order",
+                "items": [
+                  {
+                    "label": "Rylan",
+                    "picture": "lobby-cam.webp",
+                    "selected": true
+                  },
+                  {
+                    "label": "Bandit captain",
+                    "picture": "brakka.webp"
+                  },
+                  {
+                    "label": "Lyra",
+                    "picture": "chip-nyx.webp"
+                  },
+                  {
+                    "label": "Bandit",
+                    "picture": "dain-rusk.webp"
+                  }
+                ]
+              },
+              {
+                "kind": "stats",
+                "stats": [
+                  {
+                    "label": "Action",
+                    "value": "Ready"
+                  },
+                  {
+                    "label": "Bonus",
+                    "value": "Ready"
+                  },
+                  {
+                    "label": "Reaction",
+                    "value": "Ready"
+                  },
+                  {
+                    "label": "Movement",
+                    "value": "20",
+                    "sub": "feet left"
+                  },
+                  {
+                    "label": "Round",
+                    "value": "2"
+                  }
+                ]
+              },
+              {
+                "kind": "grid",
+                "terrain": [
+                  "#.......",
+                  "#..cc...",
+                  "#...~~..",
+                  "#.......",
+                  "###.....",
+                  "..c...##",
+                  "........",
+                  "..~~...."
+                ],
+                "reach": [
+                  [
+                    3,
+                    3
+                  ],
+                  [
+                    4,
+                    3
+                  ],
+                  [
+                    5,
+                    3
+                  ],
+                  [
+                    3,
+                    4
+                  ],
+                  [
+                    4,
+                    4
+                  ],
+                  [
+                    3,
+                    2
+                  ],
+                  [
+                    2,
+                    3
+                  ],
+                  [
+                    2,
+                    4
+                  ]
+                ],
+                "path": [
+                  [
+                    3,
+                    3
+                  ],
+                  [
+                    4,
+                    3
+                  ],
+                  [
+                    5,
+                    3
+                  ]
+                ],
+                "target": [
+                  5,
+                  2
+                ],
+                "tokens": [
+                  {
+                    "at": [
+                      2,
+                      3
+                    ],
+                    "name": "Rylan",
+                    "portrait": "lobby-cam.webp",
+                    "side": "me"
+                  },
+                  {
+                    "at": [
+                      1,
+                      1
+                    ],
+                    "name": "Lyra",
+                    "portrait": "chip-nyx.webp",
+                    "side": "ally"
+                  },
+                  {
+                    "at": [
+                      5,
+                      2
+                    ],
+                    "name": "Bandit captain",
+                    "portrait": "brakka.webp",
+                    "side": "foe"
+                  },
+                  {
+                    "at": [
+                      6,
+                      3
+                    ],
+                    "name": "Bandit",
+                    "portrait": "dain-rusk.webp",
+                    "side": "foe"
+                  }
+                ]
+              },
+              {
+                "kind": "notice",
+                "tone": "warn",
+                "text": "This path leaves the Bandit's reach: it may strike you as you pass. It costs 15 feet."
+              },
+              {
+                "kind": "notice",
+                "tone": "danger",
+                "text": "Target: Bandit captain. 30 feet away, half cover, and you have advantage."
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Move here (15 ft)",
+                    "kind": "primary"
+                  },
+                  {
+                    "label": "Centre on me",
+                    "kind": "secondary"
+                  }
+                ]
+              }
+            ],
+            "tabs": {
+              "active": "act",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "What I can do",
+          "panels": {
+            "scene": "quay-in-the-rain.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "Your turn",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "blocks": [
+              {
+                "kind": "stats",
+                "stats": [
+                  {
+                    "label": "Action",
+                    "value": "Ready"
+                  },
+                  {
+                    "label": "Bonus",
+                    "value": "Ready"
+                  },
+                  {
+                    "label": "Reaction",
+                    "value": "Ready"
+                  },
+                  {
+                    "label": "Movement",
+                    "value": "20",
+                    "sub": "feet left"
+                  },
+                  {
+                    "label": "Round",
+                    "value": "2"
+                  }
+                ]
+              }
+            ],
+            "tabs": {
+              "active": "act",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            },
+            "act": {
+              "choices": {
+                "suggested": [
+                  {
+                    "label": "Greatsword",
+                    "explain": "Melee, 2d6 + 3",
+                    "glyph": "sword",
+                    "lit": true
+                  },
+                  {
+                    "label": "Handaxe",
+                    "explain": "Thrown, 20 ft, 1d6 + 3",
+                    "glyph": "hammer"
+                  },
+                  {
+                    "label": "Second Wind",
+                    "explain": "Bonus: heal 1d10 + 3",
+                    "glyph": "plus"
+                  },
+                  {
+                    "label": "End turn",
+                    "explain": "Pass to the Bandit captain",
+                    "glyph": "crown"
+                  }
+                ],
+                "groups": [
+                  {
+                    "name": "Move",
+                    "choices": [
+                      {
+                        "label": "Dash"
+                      },
+                      {
+                        "label": "Disengage"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "Use",
+                    "choices": [
+                      {
+                        "label": "Dodge"
+                      },
+                      {
+                        "label": "Help"
+                      },
+                      {
+                        "label": "Hide"
+                      },
+                      {
+                        "label": "Ready"
+                      },
+                      {
+                        "label": "Use an item"
+                      }
+                    ]
+                  }
+                ],
+                "unavailable": [
+                  {
+                    "label": "Action Surge",
+                    "reason": "Used this rest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "title": "A reaction",
+          "panels": {
+            "scene": "quay-in-the-rain.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "Your turn",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "blocks": [
+              {
+                "kind": "notice",
+                "tone": "accent",
+                "text": "The Bandit leaves your reach. Strike it as it goes?"
+              },
+              {
+                "kind": "meter",
+                "label": "Time to answer",
+                "percent": 62,
+                "tone": "warn"
+              },
+              {
+                "kind": "buttons",
+                "buttons": [
+                  {
+                    "label": "Yes, strike",
+                    "kind": "primary"
+                  },
+                  {
+                    "label": "No",
+                    "kind": "secondary"
+                  }
+                ]
+              }
+            ],
+            "tabs": {
+              "active": "act",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        },
+        {
+          "title": "My state and the foes",
+          "panels": {
+            "scene": "quay-in-the-rain.webp",
+            "header": {
+              "name": "Rylan",
+              "subtitle": "Your turn",
+              "portrait": "lobby-cam.webp",
+              "hp": {
+                "current": 24,
+                "maximum": 27
+              }
+            },
+            "blocks": [
+              {
+                "kind": "stats",
+                "stats": [
+                  {
+                    "label": "Hit points",
+                    "value": "24",
+                    "sub": "of 27"
+                  },
+                  {
+                    "label": "Temporary",
+                    "value": "5"
+                  },
+                  {
+                    "label": "Armour",
+                    "value": "18"
+                  }
+                ]
+              },
+              {
+                "kind": "chips",
+                "label": "Conditions",
+                "chips": [
+                  {
+                    "text": "Poisoned: disadvantage on attacks",
+                    "selected": true
+                  },
+                  {
+                    "text": "Concentrating: Bless",
+                    "selected": true
+                  }
+                ]
+              },
+              {
+                "kind": "tally",
+                "label": "Death saves",
+                "successes": 2,
+                "failures": 1
+              },
+              {
+                "kind": "heading",
+                "text": "The others"
+              },
+              {
+                "kind": "rows",
+                "rows": [
+                  {
+                    "label": "Lyra",
+                    "value": "20 / 20 hit points",
+                    "picture": "chip-nyx.webp"
+                  },
+                  {
+                    "label": "Bandit captain",
+                    "picture": "brakka.webp",
+                    "mark": {
+                      "text": "Bloodied",
+                      "tone": "warn"
+                    }
+                  },
+                  {
+                    "label": "Bandit",
+                    "picture": "dain-rusk.webp",
+                    "mark": {
+                      "text": "Near death",
+                      "tone": "danger"
+                    }
+                  }
+                ]
+              }
+            ],
+            "tabs": {
+              "active": "hero",
+              "tabs": [
+                "story",
+                "act",
+                "talk",
+                "roll",
+                "inventory",
+                "clues",
+                "map",
+                "hero",
+                "notebook"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

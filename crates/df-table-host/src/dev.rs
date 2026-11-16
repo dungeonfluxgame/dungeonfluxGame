@@ -58,6 +58,8 @@ pub enum ReplyError {
     /// A change of what the playground shows.
     Playground(PlaygroundChangeError),
     Engine(EngineError),
+    /// A seat route (`/play/*`, `/dev/players/*`).
+    Seat(crate::seat::request::SeatError),
     Director(DirectorError),
     SceneBuilder(SceneBuilderError),
     Locate(LocateError),
@@ -102,6 +104,7 @@ impl fmt::Display for ReplyError {
             }
             Self::Playground(error) => write!(formatter, "{error}"),
             Self::Engine(error) => write!(formatter, "{error}"),
+            Self::Seat(error) => write!(formatter, "{error}"),
             Self::Director(error) => write!(formatter, "{error}"),
             Self::SceneBuilder(error) => write!(formatter, "{error}"),
             Self::Locate(error) => write!(formatter, "{error}"),
@@ -194,6 +197,12 @@ impl From<PlaygroundChangeError> for ReplyError {
 impl From<EngineError> for ReplyError {
     fn from(error: EngineError) -> Self {
         Self::Engine(error)
+    }
+}
+
+impl From<crate::seat::request::SeatError> for ReplyError {
+    fn from(error: crate::seat::request::SeatError) -> Self {
+        Self::Seat(error)
     }
 }
 
@@ -302,6 +311,7 @@ fn write_refusal(
             return formatter.write_str(&format_refusal(error, message));
         }
         ReplyError::Engine(error) => error.key(),
+        ReplyError::Seat(error) => error.key(),
         ReplyError::Director(error) => error.key(),
         ReplyError::SceneBuilder(error) => error.key(),
         ReplyError::Locate(error) => error.key(),
@@ -914,6 +924,7 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
         Command::Persona(command) => crate::persona::cli::run(port, command).await,
         Command::World(command) => crate::world::cli::run(port, command).await,
         Command::Tempo(command) => crate::tempo::cli::run(port, command).await,
+        Command::Players(command) => crate::seat::cli::run(port, command).await,
         Command::Move(command) => crate::movement::cli::run(port, command).await,
         Command::Speech(command) => crate::speech::cli::run(port, command).await,
         Command::Clients => reads::show_clients(port).await,

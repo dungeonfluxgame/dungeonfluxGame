@@ -85,16 +85,7 @@ impl Shape {
 
 /// Puts the kit's stylesheet in the page once.
 fn ensure_style(document: &Document) -> Result<(), JsValue> {
-    if document.get_element_by_id(KIT_STYLE_ID).is_some() {
-        return Ok(());
-    }
-    let body = document
-        .body()
-        .ok_or_else(|| JsValue::from_str("the page has no body"))?;
-    let style = element(document, "style", "")?;
-    style.set_attribute("id", KIT_STYLE_ID)?;
-    style.set_text_content(Some(KIT_CSS));
-    append(&body, &style)
+    crate::dom::ensure_style(document, KIT_STYLE_ID, KIT_CSS)
 }
 
 /// A glass panel of `shape` and `fill` with the classes `class`. Returns `(root, pane)`: lay out

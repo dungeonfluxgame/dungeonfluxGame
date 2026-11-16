@@ -97,6 +97,11 @@ pub const STATUS_KEYS: [&str; 9] = [
     "waiting_for",
 ];
 
+/// The words of the reconnecting status, and of the other lines a phone says in the same voice.
+pub const RECONNECTING_WORDS: &str = "Reconnecting";
+pub const PRIVATE_NOTE_TITLE: &str = "A note only you can see";
+pub const UNAVAILABLE_TITLE: &str = "Not available now";
+
 /// The plain sentence for a status, or `None` when nothing needs saying.
 pub fn status_copy(status: &Status) -> Option<String> {
     match status {
@@ -107,7 +112,7 @@ pub fn status_copy(status: &Status) -> Option<String> {
         Status::ArtDelayed => Some("Picture catching up".to_owned()),
         Status::Degraded => Some("Some pictures are unavailable. Play continues.".to_owned()),
         Status::ReadOnly => Some("Could not save. Try again.".to_owned()),
-        Status::Reconnecting => Some("Reconnecting".to_owned()),
+        Status::Reconnecting => Some(RECONNECTING_WORDS.to_owned()),
         Status::WaitingFor { who, what } => Some(format!("Waiting for {who} {what}")),
     }
 }

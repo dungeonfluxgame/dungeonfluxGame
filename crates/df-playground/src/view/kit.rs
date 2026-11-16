@@ -9,32 +9,15 @@ use wasm_bindgen::JsValue;
 use web_sys::{Document, Element};
 
 use crate::copy::{ReadingPace, caption_dwell_ms, word_count};
-use crate::dom::{append, element, text_element};
+use crate::dom::{append, element, line_svg, text_element};
 use crate::media::{MediaKind, media_kind};
 use crate::overlay::Glyph;
 use crate::path::media_file;
 use crate::style::css_color;
 
-const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
-
 /// A glyph as an `svg` of class `class`, drawn in the current text colour.
 pub fn glyph(document: &Document, glyph: Glyph, class: &str) -> Result<Element, JsValue> {
-    let svg = document.create_element_ns(Some(SVG_NAMESPACE), "svg")?;
-    for (name, value) in [
-        ("viewBox", "0 0 24 24"),
-        ("fill", "none"),
-        ("stroke", "currentColor"),
-        ("stroke-width", "1.7"),
-        ("stroke-linecap", "round"),
-        ("stroke-linejoin", "round"),
-        ("aria-hidden", "true"),
-        ("focusable", "false"),
-        ("class", class),
-    ] {
-        svg.set_attribute(name, value)?;
-    }
-    svg.set_inner_html(glyph.markup());
-    Ok(svg)
+    line_svg(document, glyph.markup(), "1.7", class)
 }
 
 /// A picture of the media library in an element of class `class`: the picture when `media` names

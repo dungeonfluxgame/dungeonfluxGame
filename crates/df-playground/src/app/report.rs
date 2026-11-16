@@ -85,6 +85,7 @@ fn build_report() -> Option<ClientReport> {
         page_clock_ms: 0,
         timeline: Vec::new(),
         audio_prefs: audio::prefs(),
+        role: app.role,
     })
 }
 

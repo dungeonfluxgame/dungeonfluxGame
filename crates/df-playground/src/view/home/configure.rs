@@ -16,14 +16,13 @@
 use wasm_bindgen::JsValue;
 use web_sys::{Document, Element};
 
-use crate::dom::{append, element, text_element};
+use crate::dom::{append, element, line_svg, text_element};
 use crate::home::configure::{
     CardKind, ConfigureData, PanelLayout, PresetSelect, Row, SLIDER_SEGMENTS, SelectRow,
     SettingCard, SliderRow, StatRow,
 };
 use crate::view::kit::photo;
 
-const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
 /// The inside of the left and right arrows of a choice, in a 24 by 24 box.
 const ARROW_LEFT: &str = r#"<path d="M15 4.5l-7.5 7.5 7.5 7.5"/>"#;
 const ARROW_RIGHT: &str = r#"<path d="M9 4.5l7.5 7.5-7.5 7.5"/>"#;
@@ -54,22 +53,7 @@ pub fn build(document: &Document, data: &ConfigureData) -> Result<Element, JsVal
 
 /// A drawing in the current text colour as an `svg` of class `class`.
 fn mark(document: &Document, markup: &str, class: &str) -> Result<Element, JsValue> {
-    let svg = document.create_element_ns(Some(SVG_NAMESPACE), "svg")?;
-    for (name, value) in [
-        ("viewBox", "0 0 24 24"),
-        ("fill", "none"),
-        ("stroke", "currentColor"),
-        ("stroke-width", "1.7"),
-        ("stroke-linecap", "round"),
-        ("stroke-linejoin", "round"),
-        ("aria-hidden", "true"),
-        ("focusable", "false"),
-        ("class", class),
-    ] {
-        svg.set_attribute(name, value)?;
-    }
-    svg.set_inner_html(markup);
-    Ok(svg)
+    line_svg(document, markup, "1.7", class)
 }
 
 /// Marks `target` as something the remote can rest on.
