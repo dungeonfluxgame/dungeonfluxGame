@@ -18,10 +18,12 @@
 /* The screen: the scene (set as --ph-scene by the page; the room or adventure picture before a
    scene) under a vignette and dark fades top and bottom, so the text on it stays readable. */
 .ph-screen {
+  --ph-scene-fades:
+    linear-gradient(180deg, #05070ff2 0, #05070fa6 14%, #05070f59 38%, #05070f8c 68%, #05070ffa 100%),
+    radial-gradient(120% 85% at 50% 42%, transparent 35%, #02050fd9 100%);
   position: relative; display: flex; flex-direction: column; min-height: 0; height: 100%; overflow: hidden;
   background-image:
-    linear-gradient(180deg, #05070ff2 0, #05070fa6 14%, #05070f59 38%, #05070f8c 68%, #05070ffa 100%),
-    radial-gradient(120% 85% at 50% 42%, transparent 35%, #02050fd9 100%),
+    var(--ph-scene-fades),
     var(--ph-scene, linear-gradient(180deg, var(--ph-screen-top), var(--ph-screen-bottom)));
   background-size: 100% 100%, 100% 100%, cover;
   background-position: center;
@@ -29,7 +31,16 @@
   color: var(--ui-text); font: 400 var(--ph-t-body)/1.45 var(--ui-font);
   -webkit-text-size-adjust: 100%;
 }
-.ph-live { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+.ph-live { isolation: isolate; padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+/* The scene the live phone showed before the shared screen moved on: laid over the new one under
+   everything else and faded away, so the scene behind crossfades. */
+.ph-scene-was {
+  position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background-image: var(--ph-scene-fades), var(--ph-scene-was);
+  background-size: 100% 100%, 100% 100%, cover; background-position: center;
+  animation: ph-scene-out 1.2s ease-in-out forwards;
+}
+@keyframes ph-scene-out { to { opacity: 0; } }
 .ph-screen button { font-family: var(--ui-font); }
 .ph-screen [hidden], .ph-link[hidden] { display: none; }
 
@@ -68,6 +79,10 @@
 }
 .ph-head::after { bottom: 0; }
 .ph-head-text { min-width: 0; }
+/* A seated phone's header is its own hero: the medallion crops the portrait to the face, and a tap
+   opens the portrait full screen. */
+.ph-head .ph-portrait .portrait-image { object-position: top; }
+.ph-head[data-action] { cursor: pointer; }
 .ph-name { font: 500 var(--ph-t-title)/1.15 var(--ui-font); color: var(--ui-text-strong); text-shadow: 0 0 14px #f1d9a066, 0 1px 3px #000; overflow-wrap: anywhere; }
 .ph-subtitle { margin-top: 2px; font: italic var(--ph-t-small)/1.3 var(--ui-font); color: var(--ui-muted-warm); }
 .ph-head-hp { grid-column: 1 / -1; }
@@ -148,6 +163,8 @@
 }
 .ph-note-title { font: 500 var(--ph-t-small)/1.2 var(--ui-font); letter-spacing: .08em; text-transform: uppercase; color: var(--ui-creating-text); }
 .ph-note-text { margin: 4px 0 0; font: italic var(--ph-t-body)/1.45 var(--ui-font); color: var(--ui-text); }
+.ph-note-seen { margin: 8px 0 0; padding-left: 18px; font: var(--ph-t-small)/1.4 var(--ui-font); color: var(--ui-muted-warm); }
+.ph-note-seen li + li { margin-top: 2px; }
 .ph-picture { margin: 0; }
 .ph-picture-image {
   display: block; width: 100%; height: min(280px, 36dvh); object-fit: contain; object-position: 50% 0;
@@ -366,6 +383,8 @@
 .ph-pcard-art { aspect-ratio: 4 / 3; border-radius: 6px; }
 .ph-pcard-small .ph-pcard-art { aspect-ratio: 1; }
 .ph-art-image { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 15%; }
+/* A face cut from a room picture: the whole picture moved and sized so only the cut shows. */
+.ph-art-cut-image { position: absolute; max-width: none; }
 .ph-art-glyph { position: absolute; inset: 22%; width: 56%; height: 56%; color: var(--ui-tone-narrator); filter: drop-shadow(0 0 6px #f1c46a88); }
 .ph-art-initial { position: absolute; inset: 0; display: grid; place-items: center; font: 500 28px/1 var(--ui-font); color: var(--ui-brass-hi); }
 .ph-pcard-title { font: 400 17px/1.2 var(--ui-font); overflow-wrap: anywhere; text-shadow: 0 1px 3px #000; }
@@ -395,6 +414,16 @@
 .ph-slider-track { position: relative; height: 8px; margin: 8px 11px 2px; border-radius: 99px; background: #05070fb3; border: 1px solid #a9c6f066; }
 .ph-slider-fill { height: 100%; border-radius: 99px; background: var(--ph-hairline-gold); }
 .ph-slider-thumb { position: absolute; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #fff3d2, var(--ui-tone-narrator)); box-shadow: 0 0 10px #f1c46aaa; }
+/* The native range input lies over the drawn track, unseen, so a finger moves the slider. */
+.ph-slider-input {
+  position: absolute;
+  inset: -14px -11px;
+  width: calc(100% + 22px);
+  height: 36px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
 .ph-slider-ends { display: flex; justify-content: space-between; font: italic var(--ph-t-small)/1.2 var(--ui-font); color: var(--ui-muted-warm); }
 .ph-swatches { display: flex; flex-wrap: wrap; gap: 12px; }
 .ph-swatch { width: 44px; height: 44px; padding: 0; border: 2px solid #a9c6f066; border-radius: 50%; background: var(--swatch, #888); cursor: pointer; }
@@ -405,6 +434,28 @@
   box-shadow: 0 0 8px #9fc4f022; font: 18px/1.3 var(--ui-font); resize: none;
 }
 .ph-input:focus { outline: 0; border-color: var(--ui-tone-narrator); box-shadow: 0 0 12px #f1c46a66; }
+.ph-input::placeholder {
+  color: var(--ph-off-ink);
+  font-style: italic;
+  opacity: 1;
+}
+/* The look studio's start form: example portraits, two to a row on a phone, more when wider. */
+.ph-look .ph-pcard-art {
+  aspect-ratio: 3 / 4;
+}
+.ph-look .ph-pcard-on {
+  box-shadow: 0 0 18px #f1c46aaa, inset 0 0 0 1px #f1c46a;
+}
+@media (min-width: 600px) {
+  .ph-look .ph-pcards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (min-width: 900px) {
+  .ph-look .ph-pcards {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
 .ph-field-message { margin: 0; font: italic var(--ph-t-small)/1.35 var(--ui-font); color: var(--ui-muted-warm); }
 
 /* Numbers: ability scores, the action economy, the hero sheet. */
@@ -480,6 +531,8 @@
 .ph-inspect { --tone: var(--ui-text-strong); margin: 0; display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .ph-inspect-art { width: min(100%, 300px); aspect-ratio: 1; border-radius: 16px; border: 1px solid #a9c6f088; box-shadow: 0 0 24px #9fc4f040; }
 .ph-inspect-art .ph-art-image { object-fit: contain; }
+/* A painting or item looked at closely keeps its whole square: the column never squeezes it. */
+.ph-inspect, .ph-inspect-art { flex: 0 0 auto; }
 .ph-inspect-block { text-align: center; }
 .ph-inspect-title { margin: 0; font: 500 var(--ph-t-title)/1.15 var(--ui-font); color: var(--ui-text-strong); text-shadow: 0 0 14px #f1d9a066; }
 .ph-inspect-rarity { margin-top: 2px; font: 500 var(--ph-t-small)/1.2 var(--ui-font); letter-spacing: .1em; text-transform: uppercase; color: var(--ui-rarity-common); }
@@ -528,9 +581,15 @@
   background: var(--ph-glass-solid); color: var(--ui-text-strong); font: 20px/1.2 var(--ui-font);
 }
 .ph-join-name:focus { outline: 2px solid var(--ui-brass-hi); outline-offset: 2px; }
+.ph-join-name::placeholder { color: var(--ph-off-ink); font-style: italic; opacity: 1; }
+.ph-join-face-mark { flex-basis: 52px; height: 52px; }
+.ph-join-face { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; object-position: top; }
 .ph-join-cards .ph-pill { flex: 0 0 auto; margin-left: auto; }
 .ph-join-dock { gap: 10px; padding: 12px 16px max(12px, env(safe-area-inset-bottom)); }
 .ph-join-dock:empty { display: none; }
+/* A seat that plays a character: what the table asks it, above its suggested lines. */
+.ph-seat-ask { display: flex; flex-direction: column; gap: 10px; }
+.ph-seat-ask > .ph-status { padding: 0; }
 
 /* The gallery: a board's screens side by side, each in a phone frame. */
 .ph-gallery { min-height: 100dvh; padding: 20px 16px 48px; background: #070d13; color: var(--ui-text); font-family: var(--ui-font); }
@@ -576,3 +635,324 @@
 .ph-live[data-page="story"] [data-part="phone-choices"], .ph-live[data-page="story"] .composer { display: none; }
 .ph-live[data-page="act"] [data-part="phone-image"], .ph-live[data-page="act"] [data-part="phone-narration"], .ph-live[data-page="act"] [data-part="phone-note"] { display: none; }
 .ph-live[data-page="other"] .ph-story, .ph-live[data-page="other"] .composer { display: none; }
+/* Story page: the lines sit on one frosted navy panel with a gold hairline edge, so they read apart
+   from the scene; the picture stays clear above, and the page's one scroller is still .ph-story. */
+.ph-live[data-page="story"] .ph-narration {
+  padding: 16px 18px; border: 1px solid color-mix(in srgb, var(--ui-brass) 40%, transparent); border-radius: 14px;
+  background: #05070fb3; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.ph-live[data-page="story"] .ph-narration::before, .ph-live[data-page="story"] .ph-narration::after { display: none; }
+/* The look studio's full-screen viewer: one overlay over the page (not a second scroller), the
+   picture fitted whole over a dark scrim with the scene behind. */
+.ph-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  animation: ph-viewer-in .22s ease-out both;
+}
+@keyframes ph-viewer-in {
+  from {
+    opacity: 0;
+    transform: scale(.97);
+  }
+}
+.ph-viewer-scrim {
+  position: absolute;
+  inset: 0;
+  background: #05070fd9;
+  backdrop-filter: blur(6px);
+}
+.ph-viewer-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: max(12px, env(safe-area-inset-top)) 16px 8px;
+  pointer-events: none;
+}
+.ph-viewer-label {
+  font: italic var(--ph-t-small)/1.3 var(--ui-font);
+  color: var(--ui-text-strong);
+  text-shadow: 0 1px 3px #000;
+}
+.ph-viewer-control {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid #f1c46a99;
+  border-radius: 50%;
+  background: #05070fcc;
+  color: var(--ui-text-strong);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.ph-viewer-control:disabled {
+  opacity: .3;
+}
+.ph-viewer-glyph {
+  width: 20px;
+  height: 20px;
+}
+.ph-viewer-frame {
+  position: relative;
+  grid-row: 2;
+  min-height: 0;
+  margin: 0 16px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  touch-action: pinch-zoom;
+}
+.ph-viewer-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  box-shadow: 0 0 24px #000;
+  transition: transform .2s ease-out;
+}
+.ph-viewer-zoomed {
+  place-items: start;
+  overflow: auto;
+  scrollbar-width: none;
+}
+.ph-viewer-zoomed::-webkit-scrollbar {
+  display: none;
+}
+.ph-viewer-zoomed .ph-viewer-image {
+  max-width: none;
+  max-height: none;
+  width: 200%;
+}
+.ph-viewer-previous,
+.ph-viewer-next {
+  position: absolute;
+  top: 50%;
+  margin-top: -22px;
+}
+.ph-viewer-previous {
+  left: 8px;
+}
+.ph-viewer-next {
+  right: 8px;
+}
+.ph-viewer-previous::before {
+  content: "<";
+  font: 22px/1 var(--ui-font);
+}
+.ph-viewer-next::before {
+  content: ">";
+  font: 22px/1 var(--ui-font);
+}
+/* Opaque, so the studio's own dock never shows through behind the viewer's buttons. */
+.ph-viewer-dock {
+  position: relative;
+  grid-row: 3;
+  background: #05070f;
+  box-shadow: 0 -12px 24px #05070f;
+  display: flex;
+  gap: 10px;
+  padding: 10px 16px max(14px, env(safe-area-inset-bottom));
+}
+.ph-viewer-dock > * {
+  flex: 1;
+}
+.ph-stage[data-action],
+.ph-compare-side[data-action] {
+  cursor: zoom-in;
+}
+/* The lobby: the player's own hero large, the others small. Ready lights the gold rim and glow. */
+.ph-showcase {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 10px;
+}
+.ph-showcase-ready {
+  box-shadow: 0 0 22px #f1c46aaa;
+}
+.ph-showcase-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 2 / 3;
+  max-height: 62vh;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #05070fb3;
+  cursor: zoom-in;
+}
+.ph-showcase-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.ph-showcase-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+.ph-showcase-name {
+  margin: 0;
+  font: 400 24px/1.2 var(--ui-font);
+  color: var(--ui-text-strong);
+  text-shadow: 0 1px 3px #000;
+}
+.ph-showcase-build {
+  flex: 1;
+  margin: 0;
+  font: italic var(--ph-t-small)/1.3 var(--ui-font);
+  color: var(--ui-muted-warm);
+}
+.ph-table-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.ph-table-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  text-align: center;
+}
+.ph-table-image,
+.ph-table-silhouette {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: top;
+}
+.ph-table-name {
+  font: 400 15px/1.2 var(--ui-font);
+  overflow-wrap: anywhere;
+}
+.ph-table-state {
+  font: italic 13px/1.2 var(--ui-font);
+  color: var(--ui-muted-warm);
+}
+.ph-table-away {
+  opacity: .5;
+}
+
+/* The roll the dungeon master calls for a seated hero, and the seat's last roll: the shared
+   screen's own card (kit roll card), set in the phone's column instead of the TV's corner. */
+.ph-roll-call { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px; border-radius: 16px; background: #0d0c14cc; border: 1px solid #f1d9a055; text-align: center; }
+.ph-roll-call-kicker { font: 500 var(--ph-t-small)/1.2 var(--ui-font); letter-spacing: .1em; text-transform: uppercase; color: var(--ui-muted-warm); }
+.ph-roll-call-title { margin: 0; font: 500 var(--ph-t-title)/1.15 var(--ui-font); color: var(--ui-text-strong); }
+.ph-roll-call-mode, .ph-roll-call-target { font: 500 var(--ph-t-small)/1.2 var(--ui-font); padding: 2px 10px; border-radius: 999px; border: 1px solid #f1d9a066; color: var(--ui-text-strong); }
+.ph-roll-call-button { margin-top: 6px; min-width: 60%; min-height: 56px; border-radius: 14px; border: 1px solid #f1d9a0; background: linear-gradient(#e9c97a, #b68a3c); color: #1a1408; font: 600 1.4rem/1 var(--ui-font); }
+.ph-roll-mirror { position: relative; width: 100%; overflow: hidden; border-radius: 16px; }
+/* The screen's card is a third of its stage wide (`.tv-roll .kit-roll`, 33cqw): a container three
+   times the column wide makes that third the column, with every part of the card in proportion. */
+.ph-roll-scale { position: relative; container-type: inline-size; width: 303.03%; }
+.ph-roll-scale::before { display: none; }
+.ph-roll-scale .kit-roll { position: relative; right: auto; top: auto; width: 33cqw; }
+
+/* What the phone mirrors of the shared screen, drawn by the screen's own renderers: the party
+   strip (smaller, on Act) and the handout (full, on Story). The clue board is the Clues page's
+   own list of cards. */
+.ph-mirror-party { position: relative; container-type: inline-size; width: 100%; }
+.ph-mirror-party .tv-party { position: relative; inset: auto; width: 100%; transform: none; }
+.ph-act-live { display: flex; flex-direction: column; gap: 12px; }
+.ph-handout { width: 100%; height: auto; object-fit: contain; border-radius: 12px; }
+
+/* === pages worker: a clue full screen on the phone === */
+/* The look studio's viewer on a clue, with what was found of it between the picture and the dock.
+   A step to another clue replaces it in place, without its entrance again. */
+.ph-clue-viewer { grid-template-rows: auto 1fr auto auto; }
+.ph-clue-viewer[data-redrawn] { animation: none; }
+.ph-clue-words { position: relative; grid-row: 3; padding: 10px 20px 6px; }
+.ph-clue-text { margin: 0; font: italic var(--ph-t-body)/1.4 var(--ui-font); color: var(--ui-text-strong); }
+.ph-clue-problem { margin: 8px 0 0; font: var(--ph-t-small)/1.3 var(--ui-font); color: #f0a08a; }
+.ph-clue-viewer .ph-viewer-dock { grid-row: 4; }
+/* === end pages worker === */
+
+/* === pages worker: the chapter title on the Story page === */
+/* The shared screen's chapter title card, drawn by its own renderer in a 16:9 box the column wide,
+   so every cqw of the card is in proportion; the picture follows under it. */
+.ph-story-picture { display: flex; flex-direction: column; gap: 10px; }
+.ph-mirror-title { position: relative; container-type: inline-size; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 12px; background: #05070f; }
+.ph-mirror-title > .ph-picture { position: absolute; inset: 0; }
+.ph-mirror-title > .ph-picture .ph-picture-image { height: 100%; object-fit: cover; object-position: 50% 50%; border: 0; border-radius: 0; box-shadow: none; }
+.ph-mirror-title > .ph-picture .ph-picture-caption { display: none; }
+/* === end pages worker === */
+
+/* === pages worker: the party strip on the phone === */
+/* The shared screen's party strip as the phone shows it: each card as wide as its words, a small
+   square headshot beside them, the name and the hit points wrapping instead of being cut, and the
+   cards wrapping onto more rows. The strip hugs its cards. The TV keeps its own fixed cards. */
+.ph-mirror-party .tv-party { width: fit-content; max-width: 100%; margin-inline: auto; }
+.ph-mirror-party .tv-party-bar {
+  --ui-cut: 10px; --ui-edge: 1px;
+  flex-wrap: wrap; justify-content: center; gap: 8px; padding: 8px;
+}
+.ph-mirror-party .party-card {
+  flex: 0 1 auto; width: auto; min-width: 0; max-width: 100%; aspect-ratio: auto;
+}
+.ph-mirror-party .party-card-body {
+  --ui-cut: 8px; --ui-edge: 1px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 8px 10px 10px;
+}
+.ph-mirror-party .party-portrait {
+  position: relative; inset: auto; flex: 0 0 44px; width: 44px; height: 44px; border-radius: 8px;
+}
+.ph-mirror-party .party-portrait::after { display: none; }
+.ph-mirror-party .portrait-initial { font-size: 20px; }
+.ph-mirror-party .party-info { position: static; flex: 0 1 auto; min-width: 0; gap: 2px; }
+.ph-mirror-party .party-glyph { width: 14px; height: 14px; }
+.ph-mirror-party :is(.party-name, .party-hp) {
+  white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere;
+}
+.ph-mirror-party .party-name { font: 600 var(--ph-t-body)/1.2 var(--ui-font); }
+.ph-mirror-party :is(.party-class, .party-hp) { font: var(--ph-t-small)/1.25 var(--ui-font); }
+.ph-mirror-party .party-bar { height: 3px; }
+.ph-mirror-party .party-conditions {
+  position: static; flex: 1 0 100%; max-width: none; justify-content: flex-start;
+}
+.ph-mirror-party .chip { padding: 0 6px; font: var(--ph-t-small)/1.4 var(--ui-font); }
+.ph-mirror-party .party-card-open .party-card-body { flex-direction: row; justify-content: flex-start; }
+.ph-mirror-party .party-open-ring { width: 28px; height: 28px; border-width: 2px; }
+.ph-mirror-party .party-open-plus { width: 14px; height: 14px; }
+.ph-mirror-party .party-open-word { font: var(--ph-t-small)/1.2 var(--ui-font); }
+/* === end pages worker === */
+
+/* === pages worker: what the table waits on === */
+/* A pulsing dot on the tab where the table waits on the player (Act for a question, Roll for a
+   roll), and a line above the dock on the other pages that goes there. Nothing moves the player. */
+.ph-badge-wait {
+  min-width: 12px; width: 12px; height: 12px; padding: 0; top: 8px; left: calc(50% + 8px);
+  background: var(--ui-tone-narrator); box-shadow: 0 0 8px #f1c46acc;
+  animation: ph-wait-pulse 1.4s ease-in-out infinite;
+}
+@keyframes ph-wait-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 6px #f1c46a99; }
+  50% { transform: scale(1.35); box-shadow: 0 0 14px #f1c46aee; }
+}
+.ph-wait-banner {
+  display: block; width: calc(100% - 16px); margin: 6px 8px; padding: 10px 14px; min-height: 44px;
+  border: 1px solid var(--ui-tone-narrator); border-radius: 12px; background: #080c16e6;
+  color: var(--ui-text-strong); font: 500 var(--ph-t-small)/1.3 var(--ui-font); text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+  box-shadow: 0 0 12px #f1c46a55;
+}
+/* === end pages worker === */
+
+/* === pages worker: the last roll in one line === */
+/* Once the table asks again, the seat's last roll is one line under the question, a tap that
+   opens its full card on Roll. */
+.ph-roll-summary {
+  display: block; width: 100%; min-height: 44px; margin-top: 4px; padding: 10px 14px;
+  border: 1px solid #f1d9a055; border-radius: 12px; background: #0d0c14cc; text-align: left;
+  color: var(--ui-text-strong); font: 500 var(--ph-t-small)/1.3 var(--ui-font); cursor: pointer;
+}
+/* === end pages worker === */

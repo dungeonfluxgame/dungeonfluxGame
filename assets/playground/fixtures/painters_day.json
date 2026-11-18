@@ -1,0 +1,37 @@
+{
+  "name": "The painter's day",
+  "description": "The bare scene a player's day as the travelling painter starts from: no caption, card, party, title or roleplay lines, and no picture until the hero's starting plate is shown.",
+  "tv": {
+    "place": "",
+    "status": {
+      "kind": "ok"
+    },
+    "caption": null,
+    "backdrop": null,
+    "card": null,
+    "pills": {
+      "logo": "inline"
+    },
+    "party": [],
+    "seats": null,
+    "roleplay": {
+      "title": null,
+      "bubbles": [],
+      "caption": null
+    },
+    "elements": []
+  },
+  "phone": {
+    "hero": "The painter",
+    "goal": null,
+    "status": {
+      "kind": "ok"
+    },
+    "narration": [],
+    "suggested": [],
+    "groups": [],
+    "unavailable": [],
+    "note": null,
+    "image": null
+  }
+}

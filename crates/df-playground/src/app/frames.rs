@@ -1,11 +1,13 @@
-//! Following the host: the frames it pushes, the controls it keeps, the slow look at its files and
-//! the loop that runs them.
+//! Following the host: the frames it pushes (the page's only view stream: the canvas, the controls
+//! and the revision of its files), the page's heartbeat and the loop that runs them.
 //!
-//! Three paths bring controls to the page (a frame, a poll and the answer to a change the page
-//! sent), and they can arrive out of order, so every one goes through `apply_controls`, which asks
+//! Two paths bring controls to the page (a frame and the answer to a change the page sent), and
+//! they can arrive out of order, so both go through `apply_controls`, which asks
 //! the page's `ReplyGate`: an answer from an older run of the host, or an older revision of this
 //! one, is left. The canvas is ordered the same way (`canvas_accepts`). The decisions are in
 //! `continuity` and `decisions`, where native tests cover them.
+
+use std::cell::Cell;
 
 use gloo_timers::future::TimeoutFuture;
 use wasm_bindgen_futures::spawn_local;
@@ -19,16 +21,19 @@ use super::voice;
 use crate::audio;
 use crate::backoff::retry_delay_ms;
 use crate::continuity::{Admit, canvas_accepts};
-use crate::controls::{ControlsChange, ControlsChangeReply, ControlsReply};
+use crate::controls::{ControlsChange, ControlsReply};
 use crate::decisions::{controls_effect, fixture_load_needed};
 use crate::dom::{js_message, with_continuity};
 use crate::draw_plan::{frame_action, wants_live};
-use crate::frame::{FrameReply, LiveCanvas, LiveFrame, frame_address, parse_frame_reply};
-use crate::limits::{HEARTBEAT_POLLS, LONGEST_BROWSER_TIMER_MS, POLL_MS};
-use crate::net::{NetError, fetch_text, post_json};
+use crate::frame::{Frame, FrameCanvas, FrameReply, frame_address, parse_frame_reply};
+use crate::limits::{
+    FRAME_REQUEST_TIMEOUT_MS, HEARTBEAT_POLLS, LONGEST_BROWSER_TIMER_MS, POLL_MS, WAKE_CHECK_MS,
+};
+use crate::net::{Call, CallError, NetError, call, text};
 use crate::path;
 use crate::sound_plan::AudioPrefs;
 use crate::timeline::ErrorSource;
+use crate::voice_wire::SpeechErrorKind;
 
 /// What a look at the host's controls found.
 #[derive(Debug, Clone, Copy, Default)]
@@ -47,6 +52,7 @@ pub struct ControlsUpdate {
 /// of the host or a newer revision of this one. An older answer, such as a slow one that was
 /// overtaken, changes nothing.
 pub fn apply_controls(reply: ControlsReply) -> ControlsUpdate {
+    let following = with_app(|app| app.gate.is_started());
     let update = with_app_mut(|app| {
         let first = !app.gate.is_started();
         let new_run = match app.gate.admit(&reply.boot_id, reply.revision) {
@@ -92,6 +98,11 @@ pub fn apply_controls(reply: ControlsReply) -> ControlsUpdate {
     if update.changed {
         super::toolbar::refresh_plate();
     }
+    if update.boot_changed && following {
+        // The host restarted: its media links died with it, and a phone says hello again.
+        crate::path::forget_media_links();
+        super::seat::host_restarted();
+    }
     if let Some(prefs) = update.audio {
         take_host_prefs(prefs);
     }
@@ -100,7 +111,7 @@ pub fn apply_controls(reply: ControlsReply) -> ControlsUpdate {
 
 /// Takes a canvas as the page's own when it is newer than the one it has, from the run of the
 /// host it is following.
-fn apply_canvas(boot_id: &str, canvas: LiveCanvas) -> bool {
+fn apply_canvas(boot_id: &str, canvas: FrameCanvas) -> bool {
     with_app_mut(|app| {
         let known = app
             .live
@@ -115,108 +126,57 @@ fn apply_canvas(boot_id: &str, canvas: LiveCanvas) -> bool {
     })
 }
 
-/// Reads the canvas the host serves, for a page that has just met another run of the host and has
-/// no frame of it yet. A canvas is taken only if the page still follows that run and has nothing
-/// newer, so a slow read never undoes a frame that arrived meanwhile.
-async fn refresh_canvas(boot_id: String) {
-    // A phone draws no stage, and the player listener does not serve the canvas.
-    if !with_app(|app| app.role.reads_canvas()) {
-        return;
-    }
-    let canvas = match fetch_text(path::CANVAS).await {
-        Ok(text) => serde_json::from_str::<LiveCanvas>(&text)
-            .map_err(PageError::not_read(path::CANVAS, "a canvas")),
-        Err(error) => Err(error.into()),
-    };
-    match canvas {
-        Ok(canvas) => {
-            let following = with_app(|app| app.gate.boot_id() == Some(boot_id.as_str()));
-            if following {
-                apply_canvas(&boot_id, canvas);
-            }
-        }
-        Err(error) => set_problem(error),
-    }
-}
-
-/// Reads the host's controls. An unreadable answer is shown as a connection problem.
-async fn refresh_controls() -> ControlsUpdate {
-    let reply = match fetch_text(path::CONTROLS).await {
-        Ok(text) => serde_json::from_str::<ControlsReply>(&text)
-            .map_err(PageError::not_read(path::CONTROLS, "the controls")),
-        Err(error) => Err(error.into()),
-    };
-    match reply {
-        Ok(reply) => {
-            let boot_id = reply.boot_id.clone();
-            let update = apply_controls(reply);
-            if update.boot_changed {
-                refresh_canvas(boot_id).await;
-            }
-            update
-        }
-        Err(error) => {
-            set_problem(error);
-            ControlsUpdate::default()
-        }
-    }
-}
-
-/// Reads the host's answer to a change: the controls after it, or the host's sentence when it
-/// refused, whatever the status. An answer that is neither keeps its network error.
-fn read_change_answer(answer: Result<String, NetError>) -> Result<ControlsReply, PageError> {
-    let address = path::CONTROLS_CHANGE;
-    let refused = |message| PageError::Rejected { address, message };
-    match answer {
-        Ok(text) => serde_json::from_str::<ControlsChangeReply>(&text)
-            .map_err(PageError::not_read(address, "a reply to a change"))?
-            .into_result()
-            .map_err(refused),
-        Err(error) => {
-            let NetError::Status { body, .. } = &error else {
-                return Err(error.into());
-            };
-            match serde_json::from_str::<ControlsChangeReply>(body).map(|reply| reply.into_result())
-            {
-                Ok(Err(message)) => Err(refused(message)),
-                Ok(Ok(_)) | Err(_) => Err(error.into()),
-            }
-        }
-    }
-}
-
-/// Sends one change to the host and draws what it answers.
+/// Sends one change to the host and draws what it answers: the controls after it, or the host's
+/// sentence when it refused. An answer that is neither is noted.
 pub async fn send_change(change: ControlsChange) {
-    let body = match serde_json::to_string(&change) {
-        Ok(body) => body,
-        Err(error) => {
-            log_error(
-                ErrorSource::Net,
-                &format!("could not write the change: {error}"),
-            );
-            return;
-        }
-    };
-    match read_change_answer(post_json(path::CONTROLS_CHANGE, &body).await) {
+    let address = path::CONTROLS_CHANGE;
+    let answer = call::<Box<ControlsReply>, SpeechErrorKind>(Call::post(address, &change)).await;
+    match answer {
         Ok(reply) => {
-            let boot_id = reply.boot_id.clone();
-            let update = apply_controls(reply);
-            if update.boot_changed {
-                refresh_canvas(boot_id).await;
-            }
+            // A new run of the host met here sends its canvas in the next frame, at once.
+            let update = apply_controls(*reply);
             if update.fixture_changed {
                 load_selected_fixture().await;
             } else if update.changed {
                 sync_audio();
             }
         }
-        Err(error) => set_problem(error),
+        Err(CallError::Refused(rejection)) => set_problem(PageError::Rejected {
+            address,
+            message: rejection.message,
+        }),
+        Err(CallError::Net(error)) => set_problem(error),
+        Err(error @ (CallError::Unreadable { .. } | CallError::Unwritable { .. })) => {
+            log_error(ErrorSource::Net, &error.to_string());
+        }
     }
     render();
 }
 
+/// Takes the revision of the host's files a frame carries: a rebuilt package reloads the page, and
+/// changed files read the theme and the fixture list again (the host hears of it at once). The
+/// first revision is the one the page started with. Whether the files changed.
+async fn follow_files(revision: String) -> bool {
+    let known = with_app_mut(|app| std::mem::replace(&mut app.asset_revision, revision.clone()));
+    if known.is_empty() || known == revision {
+        return false;
+    }
+    if package_part(&known) != package_part(&revision) {
+        if let Some(Err(error)) = web_sys::window().map(|window| window.location().reload()) {
+            log_error(
+                ErrorSource::Asset,
+                &format!("could not reload the page: {}", js_message(&error)),
+            );
+        }
+        return false;
+    }
+    refresh_assets().await;
+    schedule_forced_report();
+    true
+}
+
 /// Takes one frame from the host as the page's own and draws what it changed.
-async fn apply_frame(frame: LiveFrame) {
+async fn apply_frame(frame: Frame) {
     let was_down = with_app(|app| app.connection_problem.is_some());
     let boot_id = frame.controls.boot_id.clone();
     let update = apply_controls(frame.controls);
@@ -225,21 +185,24 @@ async fn apply_frame(frame: LiveFrame) {
         return;
     }
     let canvas_changed = apply_canvas(&boot_id, frame.canvas);
+    let files_changed = follow_files(frame.asset_revision).await;
     with_app_mut(|app| app.frame = Some(frame.frame));
     if was_down {
         with_app_mut(|app| app.connection_problem = None);
-        // The link is back: the host hears it at once.
-        schedule_forced_report();
+        // The link is back: the host hears it at once, and a tap waiting on it goes now.
+        wake();
         spawn_local(voice::refresh_host_state());
     }
     let mut reloaded = false;
-    if with_app(|app| {
-        fixture_load_needed(
-            update.fixture_changed,
-            app.fixture.is_some(),
-            app.controls.fixture.is_some(),
-        )
-    }) {
+    if files_changed
+        || with_app(|app| {
+            fixture_load_needed(
+                update.fixture_changed,
+                app.fixture.is_some(),
+                app.controls.fixture.is_some(),
+            )
+        })
+    {
         load_selected_fixture().await;
         reloaded = true;
     }
@@ -250,7 +213,7 @@ async fn apply_frame(frame: LiveFrame) {
         with_app(|app| wants_live(app.shown.as_deref()) && app.controls.device.shows_tv());
     let action = frame_action(
         was_down,
-        update.changed,
+        update.changed || files_changed,
         reloaded,
         canvas_changed,
         live_on_tv,
@@ -270,7 +233,9 @@ async fn apply_frame(frame: LiveFrame) {
 async fn follow_frames() {
     loop {
         let address = with_app(|app| frame_address(path::FRAME, app.frame, app.gate.boot_id()));
-        let answer = fetch_text(&address)
+        // The host holds a frame request until something changes; a dead connection is given up
+        // after the hold, so the loop asks again.
+        let answer = text(Call::get(&address).within(FRAME_REQUEST_TIMEOUT_MS))
             .await
             .map_err(PageError::from)
             .and_then(|text| {
@@ -289,7 +254,7 @@ async fn follow_frames() {
                 });
                 if was_down {
                     render();
-                    schedule_forced_report();
+                    wake();
                     spawn_local(voice::refresh_host_state());
                 }
             }
@@ -307,7 +272,7 @@ async fn follow_frames() {
                     // poll failed.
                     schedule_forced_report();
                 }
-                wait_ms(retry_delay_ms(failures)).await;
+                wait_or_wake(retry_delay_ms(failures)).await;
             }
         }
     }
@@ -318,42 +283,10 @@ fn package_part(revision: &str) -> Option<&str> {
     revision.split_once('.').map(|(_, package)| package)
 }
 
-/// One slow look at the server: a rebuilt package reloads the page, changed files reload the
-/// theme, the fixture list and the fixture, and the controls are read once more in case a frame
-/// was lost.
-async fn poll() {
-    let Ok(revision) = fetch_text(path::REVISION).await else {
-        // The frame loop reports the host being unreachable.
-        return;
-    };
-    let package_changed = with_app(|app| {
-        matches!(
-            (package_part(&app.asset_revision), package_part(&revision)),
-            (Some(known), Some(now)) if known != now
-        )
-    });
-    if package_changed {
-        if let Some(Err(error)) = web_sys::window().map(|window| window.location().reload()) {
-            log_error(
-                ErrorSource::Asset,
-                &format!("could not reload the page: {}", js_message(&error)),
-            );
-        }
-        return;
-    }
-    let files_changed = with_app(|app| app.asset_revision != revision);
-    if files_changed {
-        refresh_assets().await;
-    }
-    let update = refresh_controls().await;
-    if files_changed || update.fixture_changed {
-        load_selected_fixture().await;
-    } else if update.changed {
-        sync_audio();
-    }
-    if files_changed || update.changed {
-        render();
-    }
+/// The page's heartbeat: it reports what it shows when that changed, and every `HEARTBEAT_POLLS`
+/// looks even when nothing did, so the host can tell the page is alive; with that beat it asks
+/// whether speech and the personas changed.
+async fn heartbeat() {
     let beat = with_app_mut(|app| {
         app.polls_since_report += 1;
         if app.polls_since_report >= HEARTBEAT_POLLS {
@@ -363,22 +296,21 @@ async fn poll() {
             false
         }
     });
-    // A change of the files is a change of the page's revision, which the host hears at once.
-    send_report(beat || files_changed).await;
+    send_report(beat).await;
     if beat {
         voice::refresh_host_state().await;
     }
 }
 
+/// Reads the theme and the scenario list, then follows the frames (the first answers at once,
+/// with the controls, the canvas and the files' revision) and beats.
 pub async fn run() {
     refresh_assets().await;
-    refresh_controls().await;
-    load_selected_fixture().await;
     render();
     spawn_local(follow_frames());
     loop {
-        wait_ms(POLL_MS.max(retry_delay_ms(with_app(|app| app.failures)))).await;
-        poll().await;
+        wait_or_wake(POLL_MS.max(retry_delay_ms(with_app(|app| app.failures)))).await;
+        heartbeat().await;
     }
 }
 
@@ -386,4 +318,56 @@ pub async fn run() {
 pub(super) fn wait_ms(ms: u64) -> TimeoutFuture {
     let held = ms.min(LONGEST_BROWSER_TIMER_MS);
     TimeoutFuture::new(u32::try_from(held).unwrap_or(u32::MAX))
+}
+
+thread_local! {
+    /// How many times the page has been woken (`wake`).
+    static WAKES: Cell<u64> = const { Cell::new(0) };
+}
+
+/// The page is in front again (a phone back from its lock screen or another app), back online, or
+/// its link to the host is back: every loop waiting out a backoff in `wait_or_wake` stops waiting
+/// and asks the host now (a seat action that did not get through is sent again), the failures in
+/// a row are forgotten, and a report goes at once, so the host hears the page is back (its
+/// `CLIENT link client= state=heard silent_ms=` line, when it had gone quiet).
+pub(super) fn wake() {
+    WAKES.with(|wakes| wakes.set(wakes.get().wrapping_add(1)));
+    with_app_mut(|app| app.failures = 0);
+    schedule_forced_report();
+}
+
+/// A seat route could not reach the host: the link line shows, as when the frame loop fails, and
+/// the host hears of it if the report gets through.
+pub(super) fn seat_link_lost(error: NetError) {
+    let first = with_app(|app| app.connection_problem.is_none());
+    set_problem(error);
+    if first {
+        render();
+        schedule_forced_report();
+    }
+}
+
+/// A seat route answered: the link line, when it shows, is over, and what waited on the link goes.
+pub(super) fn seat_link_back() {
+    let was_down = with_app_mut(|app| app.connection_problem.take().is_some());
+    if was_down {
+        render();
+        wake();
+    }
+}
+
+/// Waits `ms` milliseconds, or less when the page is woken meanwhile (`wake`): it looks every
+/// `WAKE_CHECK_MS`. Whether it was woken.
+pub(super) async fn wait_or_wake(ms: u64) -> bool {
+    let wakes_before = WAKES.with(Cell::get);
+    let mut left = ms;
+    while left > 0 {
+        let slice = left.min(WAKE_CHECK_MS);
+        wait_ms(slice).await;
+        left = left.saturating_sub(slice);
+        if WAKES.with(Cell::get) != wakes_before {
+            return true;
+        }
+    }
+    false
 }

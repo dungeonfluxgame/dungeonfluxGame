@@ -12,7 +12,9 @@
 mod assets;
 mod events;
 mod frames;
+mod look;
 mod page;
+pub(crate) mod pages;
 mod report;
 mod seat;
 mod sound;
@@ -46,6 +48,26 @@ const PHONE_NAME_KEY: &str = "df-phone-client";
 fn random_bits() -> u32 {
     // `Math.random()` is in [0, 1), so the product is below 2^32 and the cast keeps it whole.
     (js_sys::Math::random() * 4_294_967_296.0) as u32
+}
+
+/// How many frames a panic's JavaScript stack keeps: enough to pass the panic machinery and reach
+/// the browser call that went into Rust (the browser's default keeps ten).
+const PANIC_STACK_FRAMES: u32 = 100;
+
+/// The JavaScript stack where it is called, or `-` when the browser gives none.
+fn js_stack() -> String {
+    if let Ok(error_type) = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("Error")) {
+        // A browser that does not keep the setting only gives the shorter stack.
+        let _ = js_sys::Reflect::set(
+            &error_type,
+            &JsValue::from_str("stackTraceLimit"),
+            &JsValue::from(PANIC_STACK_FRAMES),
+        );
+    }
+    js_sys::Reflect::get(&js_sys::Error::new("panic"), &JsValue::from_str("stack"))
+        .ok()
+        .and_then(|stack| stack.as_string())
+        .unwrap_or_else(|| "-".to_owned())
 }
 
 /// The value a phone keeps across reloads under `storage_key`: the one in the browser's storage
@@ -144,7 +166,15 @@ fn draw_phone_gallery(
 /// Builds the page's skeleton, wires its listeners and starts the loop.
 pub fn start() -> Result<(), JsValue> {
     std::panic::set_hook(Box::new(|info| {
-        let forced = log_error(ErrorSource::Panic, &format!("playground panic: {info}"));
+        // The first panic carries the JavaScript stack it happened under, which names the browser
+        // call that reached Rust; a panic in the glue (`__wbindgen_realloc`) says nothing else.
+        let first = !PANICKED.with(std::cell::Cell::get);
+        let message = if first {
+            format!("playground panic: {info}\njs stack: {}", js_stack())
+        } else {
+            format!("playground panic: {info}")
+        };
+        let forced = log_error(ErrorSource::Panic, &message);
         if forced && !PANICKED.with(|panicked| panicked.replace(true)) {
             spawn_local(report::send_report(true));
         }
@@ -213,6 +243,10 @@ pub fn start() -> Result<(), JsValue> {
     let resized = Closure::<dyn FnMut(Event)>::new(|_: Event| place_bubbles());
     window.add_event_listener_with_callback("resize", resized.as_ref().unchecked_ref())?;
     resized.forget();
+    // Back on the network, the page asks the host at once instead of waiting out its backoff.
+    let online = Closure::<dyn FnMut(Event)>::new(|_: Event| frames::wake());
+    window.add_event_listener_with_callback("online", online.as_ref().unchecked_ref())?;
+    online.forget();
 
     crate::view::roll::preload_dice()?;
     let client_id = match role {

@@ -44,9 +44,14 @@ pub struct Page {
 
 /// What the page draws around the devices.
 enum Chrome {
-    /// The playground: the toolbar and the scenario strip. The strip is kept and only its words
-    /// are redrawn, so it stays open or closed.
-    Studio { toolbar: Element, notes: Notes },
+    /// The playground: the toolbar, the scenario strip and the live phones. The strip is kept and
+    /// only its words are redrawn, so it stays open or closed; the live phones are only shown or
+    /// hidden, so they never reload (`view::live_phone`).
+    Studio {
+        toolbar: Element,
+        notes: Notes,
+        live_phones: view::live_phone::LivePhones,
+    },
     /// A real phone: only the line that says its link is down, shown or hidden.
     Phone { link: Element },
 }
@@ -111,7 +116,29 @@ fn build_part(
         let (view, draft) = super::voice::composer_inputs(app);
         view::composer::build(document, &view, &draft).map(Some)
     } else {
-        view::phone::build_part(document, part, &fixture.phone, &app.controls, app.role)
+        // Only Act says which seat answered the party's ask.
+        let answered_by = (part == Part::PhoneChoices)
+            .then(super::seat::seat_view)
+            .flatten()
+            .and_then(|view| view.answered_by);
+        let live = view::phone::LivePhone {
+            act: app.seat_play.as_ref().map(|play| &play.act),
+            header: app.seat_header.as_ref(),
+            seen: app
+                .seat_play
+                .as_ref()
+                .map_or(&[], |play| play.seen.as_slice()),
+            tv: app.seat_play.as_ref().map(|_| &fixture.tv),
+            answered_by: answered_by.as_ref(),
+        };
+        view::phone::build_part(
+            document,
+            part,
+            &fixture.phone,
+            &app.controls,
+            app.role,
+            live,
+        )
     }
 }
 
@@ -144,10 +171,12 @@ fn build_devices(document: &Document, app: &App) -> Result<Devices, JsValue> {
         append(&stage, &shell.section)?;
         tv = Some(handles);
     }
-    if app.controls.device.shows_phone() {
+    // Beside the shared screen the playground shows the live phone, drawn apart from the devices.
+    let live_phone =
+        app.role == PageRole::Playground && view::live_phone::shows(app.controls.device);
+    if app.controls.device.shows_phone() && !live_phone {
         let shell = view::phone::shell(document, app.role)?;
-        let scene = fixture.tv.backdrop.as_ref().map(|image| image.media.as_str());
-        view::phone::paint_scene(&shell.section, app.role, scene)?;
+        view::phone::paint_scene(&shell.section, app.role, view::phone::scene_of(&fixture.tv))?;
         for (part, holder) in &shell.slots {
             fill(holder, build_part(document, *part, fixture, app)?)?;
         }
@@ -412,6 +441,9 @@ fn rebuild_devices(
     if let Some(copy) = copy {
         append(&page.wrap, &copy)?;
     }
+    if let Chrome::Studio { live_phones, .. } = &page.chrome {
+        live_phones.show(app.controls.device)?;
+    }
     Ok(leaving)
 }
 
@@ -435,6 +467,8 @@ fn redraw_parts(
                 Part::TvPanels => fill(slot, view::overlays::carry_over(document, slot, built)?)?,
                 // A note already on screen does not fade in again (`view::clues`).
                 Part::TvClues => fill(slot, view::clues::carry_over(slot, built)?)?,
+                // A strip that showed fades out in place when it is hidden (`view::seats`).
+                Part::TvParty if view::seats::fade_out(slot, fixture.tv.party_hidden)? => {}
                 // Bubbles that would vanish in a plate change fade out with the stage instead.
                 Part::TvAnchors if view::plate_fade::hold_anchors(slot, &built)? => {}
                 _ => fill(slot, built)?,
@@ -458,11 +492,17 @@ fn build_page(document: &Document, root: &Element, app: &App) -> Result<Page, Js
             let notes = Notes::new(document)?;
             fill_notes(document, &notes, app)?;
             append(&body, &notes.details)?;
-            append(&body, &wrap)?;
+            let stage = element(document, "div", "studio-stage")?;
+            append(&stage, &wrap)?;
+            let live_phones =
+                view::live_phone::LivePhones::build(document, &stage, app.controls.device)?;
+            live_phones.refit_on(&notes.details, "toggle")?;
+            append(&body, &stage)?;
             append(&shell, &body)?;
             let chrome = Chrome::Studio {
                 toolbar: bar,
                 notes,
+                live_phones,
             };
             (shell, chrome)
         }
@@ -541,7 +581,16 @@ fn draw(document: &Document, root: &Element, app: &mut App) -> Result<(), JsValu
         return Ok(());
     };
     let plan = DrawPlan::between(app.drawn.as_ref(), &now);
-    let result = apply_plan(document, &mut page, app, &plan);
+    let mut result = apply_plan(document, &mut page, app, &plan);
+    // A real phone's scene follows the shared screen's place as it changes, without a rebuild.
+    if result.is_ok()
+        && app.role == PageRole::Phone
+        && let Some(scene) =
+            shown_fixture(app).and_then(|fixture| view::phone::scene_of(&fixture.tv))
+        && let Err(error) = view::phone::fade_scene(&page.devices, scene)
+    {
+        result = Err(error);
+    }
     app.page = Some(page);
     app.drawn = Some(now);
     let change = result?;
@@ -562,6 +611,14 @@ fn draw(document: &Document, root: &Element, app: &mut App) -> Result<(), JsValu
     {
         // The room is back: the panel is drawn again, so the moves that came meanwhile flash now.
         redraw_parts(document, page, app, std::iter::once(Part::TvInventory))?;
+    }
+    // The toolbar or the scenario strip may have changed height: the live phones fit below them.
+    if let Some(Page {
+        chrome: Chrome::Studio { live_phones, .. },
+        ..
+    }) = &app.page
+    {
+        live_phones.refit()?;
     }
     note_draw(app, &change);
     observe_shown(app, change.transition);
@@ -631,14 +688,45 @@ pub fn place_bubbles() {
     with_app_mut(place_bubbles_of);
 }
 
+/// Gives the composer's box what the person had in it before a draw that built it anew: the text,
+/// the focus and the caret (`view::composer::restore_field`), so a draw never wipes a line being
+/// typed or takes the keyboard away.
+fn kept_back(kept: Option<&view::composer::KeptField>) -> Result<(), JsValue> {
+    match kept {
+        Some(kept) => view::composer::restore_field(kept),
+        None => Ok(()),
+    }
+}
+
 /// Draws what changed since the last draw.
+/// Draws the phone's `part` again from the state now: a live seat's Act page that changed while
+/// the scene it is drawn beside did not.
+pub fn redraw_part(part: Part) {
+    let kept = view::composer::keep_field();
+    let drawn = document().and_then(|document| {
+        with_app(|app| match &app.page {
+            Some(page) => redraw_parts(&document, page, app, std::iter::once(part)),
+            None => Ok(()),
+        })
+    });
+    let drawn = drawn.and_then(|()| kept_back(kept.as_ref()));
+    if let Err(error) = drawn {
+        log_error(
+            ErrorSource::Draw,
+            &format!("could not draw the phone again: {}", js_message(&error)),
+        );
+    }
+}
+
 pub fn render() {
+    let kept = view::composer::keep_field();
     let drawn = document().and_then(|document| {
         let root = document
             .get_element_by_id(ROOT_ID)
             .ok_or_else(|| JsValue::from_str("the playground root is missing"))?;
         with_app_mut(|app| draw(&document, &root, app))
     });
+    let drawn = drawn.and_then(|()| kept_back(kept.as_ref()));
     if let Err(error) = drawn {
         log_error(
             ErrorSource::Draw,

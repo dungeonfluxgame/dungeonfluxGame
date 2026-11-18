@@ -48,10 +48,16 @@ pub fn on_input(event: &Event) {
     voice::on_input(event);
 }
 
-/// The page was hidden or shown.
+/// The page was hidden or shown. Shown again, it asks the host at once (`frames::wake`).
 pub fn on_visibility_change() {
     voice::on_visibility_change();
     super::toolbar::refresh_plate();
+    let shown = web_sys::window()
+        .and_then(|window| window.document())
+        .is_some_and(|document| !document.hidden());
+    if shown {
+        super::frames::wake();
+    }
 }
 
 pub fn on_media_event(event: &Event, failed: bool) {
@@ -98,6 +104,12 @@ pub fn on_click(event: &Event) {
         return;
     };
     if crate::phone_kit::draw::nav::on_action(&action) {
+        return;
+    }
+    if super::seat::dispatch(&action) {
+        return;
+    }
+    if super::pages::dispatch(&action) {
         return;
     }
     if voice::on_action(&action) {
@@ -157,17 +169,20 @@ pub fn on_animation_ended(event: &Event) {
     }
 }
 
-/// The clue board's fold has settled at its new width: the bubbles are placed for that size.
+/// Whether `element` has the class `name` (`dom::class_attribute`, safe on an SVG element).
+pub(super) fn has_class(element: &Element, name: &str) -> bool {
+    crate::dom::class_attribute(element)
+        .split_whitespace()
+        .any(|class| class == name)
+}
+
+/// The clue board's fold has settled at its new width: the bubbles are placed for that size. Any
+/// element's transition ends here, an SVG icon's too.
 pub fn on_transition_ended(event: &Event) {
     let on_board = event
         .target()
         .and_then(|target| target.dyn_into::<Element>().ok())
-        .is_some_and(|target| {
-            target
-                .class_name()
-                .split_whitespace()
-                .any(|name| name == "kit-clues")
-        });
+        .is_some_and(|target| has_class(&target, "kit-clues"));
     if on_board {
         place_bubbles();
     }

@@ -9,7 +9,7 @@
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element, HtmlInputElement, HtmlSelectElement};
 
-use crate::composer::{ComposerView, MicLook};
+use crate::composer::{ComposerState, ComposerView, MicLook};
 use crate::dom::{append, button, document, element, option, select, text_element};
 
 const MAXIMUM_LEVEL_PERMILLE: u16 = 1_000;
@@ -119,6 +119,63 @@ pub fn sync(view: &ComposerView) -> Result<(), JsValue> {
     apply(&bar, view)
 }
 
+/// The attribute on the box while it is disabled after it had the focus: enabled again, it takes
+/// the focus back, so a box the table blocked for a moment does not drop the person typing.
+const REFOCUS_MARK: &str = "data-refocus";
+
+/// The composer's box as the person left it before a redraw: the element, its text, and the caret
+/// (its selection) when it had the focus or was waiting to take it back.
+pub struct KeptField {
+    field: HtmlInputElement,
+    text: String,
+    caret: Option<(u32, u32)>,
+}
+
+/// The box on the page now, as it is, when there is one.
+pub fn keep_field() -> Option<KeptField> {
+    let document = document().ok()?;
+    let field = document
+        .query_selector(".composer [data-composer=\"field\"]")
+        .ok()??
+        .dyn_into::<HtmlInputElement>()
+        .ok()?;
+    let focused = document
+        .active_element()
+        .is_some_and(|active| active.is_same_node(Some(&field)));
+    let caret = (focused || field.has_attribute(REFOCUS_MARK)).then(|| {
+        let start = field.selection_start().ok().flatten().unwrap_or(0);
+        let end = field.selection_end().ok().flatten().unwrap_or(start);
+        (start, end)
+    });
+    Some(KeptField {
+        text: field.value(),
+        caret,
+        field,
+    })
+}
+
+/// Gives the box a redraw built anew what `kept` held: the text the person had typed, and the
+/// focus and caret when it had them (taken back once it is enabled, when it is drawn disabled). A
+/// box the redraw left in place keeps all of it already.
+pub fn restore_field(kept: &KeptField) -> Result<(), JsValue> {
+    let Some(field) = document()?.query_selector(".composer [data-composer=\"field\"]")? else {
+        return Ok(());
+    };
+    if field.is_same_node(Some(&kept.field)) {
+        return Ok(());
+    }
+    let field = field.dyn_into::<HtmlInputElement>()?;
+    field.set_value(&kept.text);
+    let Some((start, end)) = kept.caret else {
+        return Ok(());
+    };
+    if field.disabled() {
+        return field.set_attribute(REFOCUS_MARK, "");
+    }
+    field.focus()?;
+    field.set_selection_range(start, end)
+}
+
 /// Puts `text` in the box (a transcript, or nothing after an answer) and, when asked, gives the
 /// box the focus so the person can read and change it.
 pub fn set_text(text: &str, focus: bool) -> Result<(), JsValue> {
@@ -145,8 +202,10 @@ fn apply(bar: &Element, view: &ComposerView) -> Result<(), JsValue> {
             u32::try_from(index)
                 .ok()
                 .and_then(|index| listed.item(index))
-                .and_then(|item| item.get_attribute("value"))
-                .is_some_and(|value| value == target.id)
+                .is_some_and(|item| {
+                    item.get_attribute("value").as_deref() == Some(target.id.as_str())
+                        && item.text_content().as_deref() == Some(target.name.as_str())
+                })
         });
     if !same {
         menu.set_text_content(None);
@@ -197,7 +256,31 @@ fn apply(bar: &Element, view: &ComposerView) -> Result<(), JsValue> {
 
     let field = find(bar, "field")?.dyn_into::<HtmlInputElement>()?;
     field.set_placeholder(view.field_placeholder);
+    // Blocked while the person types (the table asks nothing for a moment), the box takes the
+    // focus back when it is enabled again, unless they moved on to something else meanwhile. A
+    // box disabled for a question on its way does not: the answer leaves it empty.
+    let focused = document
+        .active_element()
+        .is_some_and(|active| active.is_same_node(Some(&field)));
+    let in_flight = matches!(
+        view.state,
+        ComposerState::Transcribing | ComposerState::Sending
+    );
+    if !view.field_enabled && focused && !in_flight {
+        field.set_attribute(REFOCUS_MARK, "")?;
+    }
     field.set_disabled(!view.field_enabled);
+    if view.field_enabled && field.has_attribute(REFOCUS_MARK) {
+        field.remove_attribute(REFOCUS_MARK)?;
+        let elsewhere = document.active_element().is_some_and(|active| {
+            document
+                .body()
+                .is_none_or(|body| !body.is_same_node(Some(&active)))
+        });
+        if !elsewhere {
+            field.focus()?;
+        }
+    }
     field.set_max_length(i32::try_from(view.field_limit).unwrap_or(i32::MAX));
 
     let send = find(bar, "send")?;

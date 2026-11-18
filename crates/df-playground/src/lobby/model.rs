@@ -46,10 +46,13 @@ pub const LOBBY_EYEBROW: &str = "Session lobby";
 pub const LOADING_LABEL: &str = "Initializing adventure";
 /// The word on a ready chip of the loading screen.
 pub const READY_WORD: &str = "Ready";
-/// The side of the square of cells the QR-like placeholder block draws.
-pub const QR_CELLS: usize = 21;
-/// The side of a finder square of that block.
-pub const QR_FINDER: usize = 7;
+/// How many characters a room code has.
+pub const ROOM_CODE_CHARACTERS: usize = 6;
+/// The characters a room code is made of: capitals and digits that cannot be read as another (no
+/// `0`/`O`, `1`/`I`/`L`).
+pub const ROOM_CODE_ALPHABET: &str = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+/// The widest QR code (version 40), in modules.
+pub const QR_MOST_MODULES: u16 = 177;
 /// How far a speech bubble's tail keeps from the corners of its box, in percent of the width.
 pub const TAIL_INSET_PERCENT: u8 = 12;
 
@@ -160,6 +163,55 @@ pub struct JoinCode {
     /// code and its QR picture only.
     pub join_link: Option<String>,
     pub game_code: Option<String>,
+    /// The QR code of the join link, as the host made it; the television draws it as given.
+    pub qr: Option<QrModules>,
+}
+
+/// A QR code's modules, made by the host from the join link: `width` by `width`, row by row,
+/// `1` for a dark module and `0` for a light one, without the light border around it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QrModules {
+    pub width: u16,
+    pub dark: String,
+}
+
+impl QrModules {
+    /// Whether the modules are a square of `width` from 1 to `QR_MOST_MODULES`, each `0` or `1`.
+    pub fn is_valid(&self) -> bool {
+        let width = usize::from(self.width);
+        (1..=QR_MOST_MODULES).contains(&self.width)
+            && self.dark.len() == width * width
+            && self
+                .dark
+                .bytes()
+                .all(|module| module == b'0' || module == b'1')
+    }
+
+    /// The dark modules, as (column, row) from the top left.
+    pub fn dark_cells(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        let width = usize::from(self.width).max(1);
+        self.dark
+            .bytes()
+            .enumerate()
+            .filter(|(_, module)| *module == b'1')
+            .map(move |(index, _)| (index % width, index / width))
+    }
+}
+
+/// The room code `typed` names, written as the table writes it (capitals, without the spaces or
+/// dashes a player may type between), or `None` when it is not one.
+pub fn room_code(typed: &str) -> Option<String> {
+    let code: String = typed
+        .chars()
+        .filter(|character| !character.is_whitespace() && *character != '-')
+        .map(|character| character.to_ascii_uppercase())
+        .collect();
+    (code.chars().count() == ROOM_CODE_CHARACTERS
+        && code
+            .chars()
+            .all(|character| ROOM_CODE_ALPHABET.contains(character)))
+    .then_some(code)
 }
 
 /// How many players are at the table and what they are doing: "4 of 6 Ready".
@@ -536,58 +588,6 @@ pub fn party_text(count: PartyCount) -> String {
 /// The text of the session pill, "Session: The Ember Roads".
 pub fn session_text(name: &str) -> String {
     format!("Session: {}", name.trim())
-}
-
-/// A placeholder for the join panel's QR picture: a square of cells that look like one (a finder
-/// square in three corners and a pattern between them) and are the same every time for the same
-/// code. It is NOT a code anyone can scan: the real one comes from the server. Row by row, `true`
-/// is dark.
-pub fn qr_like_cells(code: &str) -> Vec<bool> {
-    let size = QR_CELLS;
-    let mut state = code.bytes().fold(0x9E37_79B9_u32, |state, byte| {
-        state.rotate_left(5) ^ u32::from(byte).wrapping_mul(0x0100_0193)
-    }) | 1;
-    let far = size - QR_FINDER;
-    let mut cells = Vec::with_capacity(size * size);
-    for row in 0..size {
-        for column in 0..size {
-            state ^= state << 13;
-            state ^= state >> 17;
-            state ^= state << 5;
-            let inside = |from_row: usize, from_column: usize| {
-                row >= from_row
-                    && row < from_row + QR_FINDER
-                    && column >= from_column
-                    && column < from_column + QR_FINDER
-            };
-            let dark = if inside(0, 0) {
-                finder_cell(row, column)
-            } else if inside(0, far) {
-                finder_cell(row, column - far)
-            } else if inside(far, 0) {
-                finder_cell(row - far, column)
-            } else if row == QR_FINDER - 1 || column == QR_FINDER - 1 {
-                // the quiet line beside a finder square
-                false
-            } else if row == QR_FINDER + 1 && column < far {
-                column % 2 == 0
-            } else if column == QR_FINDER + 1 && row < far {
-                row % 2 == 0
-            } else {
-                state % 5 < 2
-            };
-            cells.push(dark);
-        }
-    }
-    cells
-}
-
-/// A cell of a finder square: a dark ring, a light ring and a dark centre.
-fn finder_cell(row: usize, column: usize) -> bool {
-    let edge = QR_FINDER - 1;
-    let outer = row == 0 || row == edge || column == 0 || column == edge;
-    let centre = (2..=edge - 2).contains(&row) && (2..=edge - 2).contains(&column);
-    outer || centre
 }
 
 /// Where a bubble's tail sits on its box.

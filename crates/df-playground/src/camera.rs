@@ -6,7 +6,7 @@
 //! edge allows. It never draws; `view::tv` puts these numbers into a style.
 
 use crate::controls::ZoomLimit;
-use crate::fixture::{Camera, StageElement};
+use crate::fixture::{Camera, ElementView};
 use crate::layout::stage_percent;
 use crate::limits::{MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT};
 
@@ -61,7 +61,7 @@ pub fn progress(elapsed_ms: f64, duration_ms: u64) -> f32 {
 
 /// The framing a camera asks for with the elements now on the stage. A camera without a target, a
 /// target that is not on the stage, or a zoom of 100 percent shows the whole stage.
-pub fn framing(camera: Option<&Camera>, elements: &[StageElement]) -> Framing {
+pub fn framing(camera: Option<&Camera>, elements: &[ElementView]) -> Framing {
     framing_within(camera, elements, MAXIMUM_ZOOM_PERCENT)
 }
 
@@ -105,7 +105,7 @@ pub fn clamped_zoom(requested: u16, ceiling: u16) -> (u16, Option<u16>) {
 /// `framing` with the zoom held to `zoom_ceiling` percent.
 pub fn framing_within(
     camera: Option<&Camera>,
-    elements: &[StageElement],
+    elements: &[ElementView],
     zoom_ceiling: u16,
 ) -> Framing {
     let Some(camera) = camera else {

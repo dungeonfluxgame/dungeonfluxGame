@@ -48,8 +48,8 @@ pub const MINIMUM_CAPTURE_MS: u64 = 100;
 /// Longest recording the speech-to-text adapter takes, in milliseconds (1,920,000 bytes of PCM).
 pub const MAXIMUM_CAPTURE_MS: u64 = 60_000;
 /// Most characters the question box takes: the most one synthesis voices, the speech supplier
-/// adapter's contract (`df-table-host` speech `MAXIMUM_TEXT_CHARACTERS`), so a transcribed draft
-/// is never cut below what the supplier takes.
+/// adapter's contract (the host's speech checks read this bound), so a transcribed draft is never
+/// cut below what the supplier takes.
 pub const MAXIMUM_QUESTION_CHARACTERS: usize = 4096;
 
 // Very large caps. Each only keeps memory bounded by design.
@@ -176,6 +176,26 @@ pub const HEARTBEAT_POLLS: u32 = 10;
 pub const FIRST_RETRY_MS: u64 = 1_000;
 /// The longest wait after failures to reach the host, in milliseconds.
 pub const LONGEST_RETRY_MS: u64 = 10_000;
+/// The longest a request to the host may take, from sending it to the last byte of its answer,
+/// before it is given up as `net::NetError::TimedOut` and asked again on the caller's backoff: a
+/// phone whose network changed under it can hold a dead connection for minutes otherwise.
+pub const REQUEST_TIMEOUT_MS: u64 = 10_000;
+/// The longest a frame request may take: the host holds one for up to its `FRAME_WAIT` (25 s)
+/// before it answers that nothing changed, plus a margin for the answer to arrive.
+pub const FRAME_REQUEST_TIMEOUT_MS: u64 = 30_000;
+/// The longest a request that waits on work may take (a recording written down, a look made, the
+/// game started): the host's own deadline for a picture (`imagegen` 15 minutes and its minute of
+/// grace) with a margin. It only ends a connection that died; the host keeps its own deadlines.
+pub const WORK_REQUEST_TIMEOUT_MS: u64 = 17 * 60_000;
+/// How long a signed media link a phone is given holds, in seconds: long enough for a picture on
+/// its pages to load, short enough that a link copied off the phone soon stops working. The host
+/// signs with it, and the page keeps a link until a newer one lasts half of it longer
+/// (`path::keeps_link`).
+pub const MEDIA_LINK_LIFETIME_S: u64 = 15 * 60;
+/// How often a wait between asks of the host looks whether the page was woken (shown again or
+/// back online), in milliseconds: a phone back from its lock screen asks the host within this,
+/// not after the rest of its backoff. Not zero.
+pub const WAKE_CHECK_MS: u64 = 250;
 /// How long a transition takes until one is chosen, in milliseconds.
 pub const DEFAULT_TRANSITION_MS: u64 = 700;
 /// How long the screen glides to a camera framing that is not a move (a retarget or a pull back),

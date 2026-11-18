@@ -174,7 +174,7 @@ fn member_problems(found: &mut Vec<Problem>, index: usize, member: &PartyMember)
         "name",
         checks::labelled("a party member's name", &member.name),
     );
-    if member.maximum_hit_points == 0 {
+    if member.health().is_some_and(|(_, maximum)| maximum == 0) {
         found.push(Problem::new(
             &at,
             Step::Key("maximum_hit_points"),

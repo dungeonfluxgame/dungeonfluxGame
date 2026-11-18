@@ -95,14 +95,20 @@ fn carry(
     if let Some(new) = &new
         && new.get_attribute(card.key) == old_key
     {
-        new.set_attribute("class", &format!("{} {}", new.class_name(), card.settled))?;
+        new.set_attribute(
+            "class",
+            &format!("{} {}", crate::dom::class_attribute(new), card.settled),
+        )?;
         return Ok(built);
     }
     let leaving = old
         .clone_node_with_deep(true)?
         .dyn_into::<Element>()
         .map_err(|_| JsValue::from_str("the copy of the card is not an element"))?;
-    leaving.set_attribute("class", &format!("{} {}", old.class_name(), card.out))?;
+    leaving.set_attribute(
+        "class",
+        &format!("{} {}", crate::dom::class_attribute(&old), card.out),
+    )?;
     leaving.set_attribute("aria-hidden", "true")?;
     leaving.remove_attribute("role")?;
     let layer = match built {

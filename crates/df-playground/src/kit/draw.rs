@@ -84,7 +84,7 @@ impl Shape {
 }
 
 /// Puts the kit's stylesheet in the page once.
-fn ensure_style(document: &Document) -> Result<(), JsValue> {
+pub(crate) fn ensure_style(document: &Document) -> Result<(), JsValue> {
     crate::dom::ensure_style(document, KIT_STYLE_ID, KIT_CSS)
 }
 

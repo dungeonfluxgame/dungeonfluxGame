@@ -16,7 +16,7 @@ use crate::scene::Track;
 #[serde(untagged)]
 pub enum ElementSource {
     /// The elements listed in the fixture.
-    Inline(Vec<StageElement>),
+    Inline(Vec<ElementView>),
     /// The elements on the running canvas, as the `df-table` host serves them.
     Live(LiveMarker),
 }
@@ -66,16 +66,17 @@ impl ElementShape {
     }
 }
 
-/// One thing drawn on the stage. The host's `/canvas.json` elements have this shape (plus fields
-/// the stage ignores), so a live element and an inline one are drawn the same way.
+/// One thing drawn on the stage, as the host writes it in a frame and `/canvas.json` and as a
+/// fixture lists it inline: one type on both sides, so a live element and an inline one are drawn
+/// the same way. The newer fields default, so an older fixture still reads.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StageElement {
+pub struct ElementView {
     pub id: String,
     pub kind: String,
-    pub label: String,
     /// Centre of the element, in canvas units (x from 0 to 100, y from 0 to 56.25).
     pub x: f32,
     pub y: f32,
+    pub label: String,
     pub color: Option<String>,
     pub shape: ElementShape,
     pub width_units: f32,
@@ -84,24 +85,39 @@ pub struct StageElement {
     /// media library draws that picture in the figure.
     #[serde(default)]
     pub fields: serde_json::Map<String, serde_json::Value>,
+    /// Why the element no longer fits its kind, when it does not.
+    #[serde(default)]
+    pub problem: Option<String>,
+    /// Where the element is heading, while it travels.
+    #[serde(default)]
+    pub travelling: Option<TravelView>,
     /// Clockwise turn in degrees, 0 to 359 (180 shows it upside down). Defaults to 0.
     #[serde(default)]
     pub rotation_degrees: u16,
     /// The point the figure turns about. Defaults to its centre.
     #[serde(default)]
-    pub pivot: StagePivot,
+    pub pivot: PivotView,
+}
+
+/// Where an element is heading and how fast, while it travels.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TravelView {
+    pub x: f32,
+    pub y: f32,
+    pub speed: f32,
 }
 
 /// The point a figure turns about, in whole percent of its own width and height from its top left
 /// corner: 50 and 50 is the centre, 0 and 50 a hinge on the left edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct StagePivot {
+pub struct PivotView {
     pub x_percent: u8,
     pub y_percent: u8,
 }
 
-impl Default for StagePivot {
+impl Default for PivotView {
+    /// The centre, which is also what an element from before pivots existed means.
     fn default() -> Self {
         Self {
             x_percent: 50,
@@ -110,7 +126,7 @@ impl Default for StagePivot {
     }
 }
 
-impl StageElement {
+impl ElementView {
     /// The media file of the element's portrait, when it has one.
     pub fn portrait(&self) -> Option<&str> {
         self.fields
@@ -142,15 +158,39 @@ pub struct Caption {
     pub text: String,
 }
 
+/// One card of the party strip. A hero's card names its character (`character`), and the host
+/// fills its hit points and Armor Class from the hero's sheet; until the hero has a sheet the card
+/// shows none, never a sample. A card with no character shows what it was given.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PartyMember {
     pub name: String,
-    pub hit_points: u32,
-    pub maximum_hit_points: u32,
+    /// The hero's character id (`hero-<id>`), whose sheet gives the card its numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character: Option<String>,
+    #[serde(default)]
+    pub hit_points: Option<u32>,
+    #[serde(default)]
+    pub maximum_hit_points: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub armor_class: Option<i16>,
+    /// The hero's own picture for the card, a media library file: the headshot of its pack once
+    /// it is made (the host's, for a card that names its character). It stands before the look's
+    /// portrait; the card shows an initial only when it has no picture at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portrait: Option<String>,
     #[serde(default)]
     pub conditions: Vec<String>,
     pub color: Option<String>,
+}
+
+impl PartyMember {
+    /// The hit points and their maximum, when the card knows them: a current without a maximum
+    /// is its own maximum, and a card that knows neither shows no hit points.
+    pub fn health(&self) -> Option<(u32, u32)> {
+        let maximum = self.maximum_hit_points.or(self.hit_points)?;
+        Some((self.hit_points.unwrap_or(maximum), maximum))
+    }
 }
 
 /// What the shared screen shows.
@@ -560,6 +600,10 @@ pub struct TvScene {
     /// How the party strip's heroes look, and how many open seats follow them.
     #[serde(default)]
     pub seats: Option<SeatStrip>,
+    /// Whether the party strip has faded out: the host hides it a while after each new place
+    /// and shows it again at the next (`PartyHidden`).
+    #[serde(default)]
+    pub party_hidden: bool,
     /// Whether the DungeonFlux logo is drawn at the top left; the place name moves under it.
     #[serde(default)]
     pub brand: bool,
@@ -592,6 +636,13 @@ pub struct TvScene {
     /// The roll card: one resolved roll, staged over the screen (see `roll`).
     #[serde(default)]
     pub roll: Option<crate::roll::ShownRoll>,
+    /// The clue of the clue board a player shows the whole table, by its id: drawn full screen
+    /// until a phone closes it or the scene moves on (a new plate).
+    #[serde(default)]
+    pub shown_clue: Option<String>,
+    /// The chapter title card over the screen, one at a time (see `kit::title_card`).
+    #[serde(default)]
+    pub title_card: Option<crate::kit::title_card::TitleCard>,
     pub elements: ElementSource,
 }
 

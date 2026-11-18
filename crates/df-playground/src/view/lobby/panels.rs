@@ -2,7 +2,7 @@
 //! party summary and the begin button.
 //!
 //! The join code is the text a player types on a phone, drawn large and as plain text; the picture
-//! beside it is a placeholder, not a scannable code (the real one comes from the server). The party
+//! beside it is the QR code of the join link the server made, drawn as given. The party
 //! summary says how many are at the table and what they are doing. The begin button is the one
 //! primary action of the screen; whether it may be pressed is the server's word, so a button that
 //! may not be pressed is drawn quiet with the note the scene gives. The shared screen takes no
@@ -16,7 +16,7 @@ use crate::lobby::model::{
     BEGIN_LABEL, BeginButton, JOIN_HINT, JoinCode, PartySummary, SummaryIcon, count_text,
     summary_word,
 };
-use crate::view::icons::{Icon, icon, qr_placeholder};
+use crate::view::icons::{Icon, icon, qr_picture};
 
 /// The join panel: the QR picture and, beside it, the words over the game code and the code.
 pub fn join(document: &Document, join: &JoinCode) -> Result<Element, JsValue> {
@@ -28,10 +28,9 @@ pub fn join(document: &Document, join: &JoinCode) -> Result<Element, JsValue> {
         .as_deref()
         .map(str::trim)
         .filter(|code| !code.is_empty());
-    let source = code.or(join.join_link.as_deref());
-    if let Some(source) = source {
+    if let Some(qr) = join.qr.as_ref().filter(|qr| qr.is_valid()) {
         let block = element(document, "div", "pl-qr")?;
-        append(&block, &qr_placeholder(document, source, "pl-qr-cells")?)?;
+        append(&block, &qr_picture(document, qr, "pl-qr-cells")?)?;
         append(&panel, &block)?;
     }
     let words = element(document, "div", "pl-join-words")?;

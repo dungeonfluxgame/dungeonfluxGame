@@ -65,6 +65,30 @@ pub fn strip_cards<'a>(
     cards
 }
 
+/// The portrait a hero's card shows: the hero's own headshot, else the scene's look of them.
+pub fn card_portrait<'a>(member: &'a PartyMember, look: Option<&'a PartyLook>) -> Option<&'a str> {
+    member
+        .portrait
+        .as_deref()
+        .or_else(|| look.and_then(|look| look.portrait.as_deref()))
+}
+
+/// The accent colour of a hero's card: the scene's look's, else the member's own colour.
+pub fn card_accent<'a>(member: &'a PartyMember, look: Option<&'a PartyLook>) -> Option<&'a str> {
+    look.and_then(|look| look.accent.as_deref())
+        .or(member.color.as_deref())
+}
+
+/// A card's hit points in words: "HP 42/42".
+pub fn hit_points_text(hit_points: u32, maximum: u32) -> String {
+    format!("HP {hit_points}/{maximum}")
+}
+
+/// A card's Armor Class in words: "AC 15".
+pub fn armor_class_text(armor_class: i16) -> String {
+    format!("AC {armor_class}")
+}
+
 /// "Fighter Lv. 3", "Fighter" or "Lv. 3"; `None` when there is neither.
 pub fn class_line(class: Option<&str>, level: Option<u8>) -> Option<String> {
     let class = class.map(str::trim).filter(|class| !class.is_empty());

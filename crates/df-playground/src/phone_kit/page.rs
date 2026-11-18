@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::kit::Rarity;
 use crate::overlay::Glyph;
 use crate::phone_kit::shell::{ButtonSpec, PillTone};
+use crate::speaker_card::PortraitCrop;
 
 /// A small word on a card or a row: a rarity, "Not in play yet", "Seen".
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -42,6 +43,10 @@ pub struct PickCard {
     /// What a tap asks for (`nav::page_action`), when the card goes somewhere.
     #[serde(default)]
     pub action: Option<String>,
+    /// The cut of `picture` the card shows, when it is a face cut from a room picture
+    /// (`speaker_card::portrait_crop`). Never read from a sample file.
+    #[serde(skip)]
+    pub crop: Option<PortraitCrop>,
 }
 
 /// One line of a list: a label with its value, the reason for it and a way to change it.
@@ -84,6 +89,19 @@ pub struct Swatch {
     pub color: String,
     #[serde(default)]
     pub selected: bool,
+    /// What a tap asks for, when the swatch can be picked.
+    #[serde(default)]
+    pub action: Option<String>,
+}
+
+/// A slider the player moves: its whole-number range and value, and the action its change sends
+/// with the new value after a colon (`look:slider:build` sends `look:slider:build:3`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SliderRange {
+    pub action: String,
+    pub min: u32,
+    pub max: u32,
+    pub value: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -116,6 +134,9 @@ pub struct StripItem {
     pub picture: Option<String>,
     #[serde(default)]
     pub selected: bool,
+    /// What a tap asks for, when the item can be gone back to.
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
 /// How far the player has come with a place on the map.
@@ -375,6 +396,9 @@ pub enum Block {
         percent: u8,
         low: String,
         high: String,
+        /// The input the player moves; a slider without one only shows its value.
+        #[serde(default)]
+        range: Option<SliderRange>,
     },
     Swatches {
         label: String,
@@ -389,6 +413,9 @@ pub enum Block {
         message: Option<String>,
         #[serde(default)]
         tall: bool,
+        /// The element id the page reads the typed value from.
+        #[serde(default)]
+        id: Option<String>,
     },
     Stats {
         stats: Vec<Stat>,
@@ -407,12 +434,17 @@ pub enum Block {
         #[serde(default)]
         state: StageState,
         caption: String,
+        /// What a tap on the picture asks for (opening it full screen).
+        #[serde(default)]
+        action: Option<String>,
     },
-    /// The new picture beside the kept one.
+    /// The new picture beside the kept one; each side may be tapped (`actions`: kept, new).
     Compare {
         kept: String,
         fresh: String,
         caption: String,
+        #[serde(default)]
+        actions: Option<[String; 2]>,
     },
     /// Pictures in a wrapping row: the versions of a look, the turn order of a fight.
     Strip {

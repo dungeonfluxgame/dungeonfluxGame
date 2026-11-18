@@ -10,10 +10,11 @@ use crate::overlay::Glyph;
 use crate::phone_kit::draw::{glyph, shell};
 use crate::phone_kit::glyph::PhoneGlyph;
 use crate::phone_kit::page::{
-    Block, Chip, Grid, MapNode, MapWay, Mark, NodeState, PickCard, Row, StageState, Stat,
-    StripItem, Swatch, TALLY_MARKS, Token, bar_share, tally_text,
+    Block, Chip, Grid, MapNode, MapWay, Mark, NodeState, PickCard, Row, SliderRange, StageState,
+    Stat, StripItem, Swatch, TALLY_MARKS, Token, bar_share, tally_text,
 };
 use crate::phone_kit::shell::{ButtonSpec, Pill, PillTone};
+use crate::speaker_card::PortraitCrop;
 use crate::style::css_color;
 use crate::view::icons::{Icon, icon};
 use crate::view::kit::{glyph as overlay_glyph, photo};
@@ -49,6 +50,27 @@ fn art(
     Ok(frame)
 }
 
+/// A card's face cut from a room picture: the whole picture, sized and moved inside the frame so
+/// only `crop` shows (`PortraitCrop::frame`), as the shared screen's speaker card cuts it.
+fn cut_art(
+    document: &Document,
+    media: &str,
+    crop: PortraitCrop,
+    name: &str,
+) -> Result<Element, JsValue> {
+    let frame = element(document, "span", "ph-pcard-art ph-art-cut")?;
+    let image = element(document, "img", "ph-art-cut-image")?;
+    image.set_attribute("src", &crate::path::media_file(media))?;
+    image.set_attribute("alt", name)?;
+    let (width, height, left, top) = crop.frame();
+    set_style(
+        &image,
+        &format!("width:{width:.2}%;height:{height:.2}%;left:{left:.2}%;top:{top:.2}%;"),
+    )?;
+    append(&frame, &image)?;
+    Ok(frame)
+}
+
 fn mark(document: &Document, mark: &Mark) -> Result<Element, JsValue> {
     shell::pill(
         document,
@@ -77,16 +99,11 @@ fn card(document: &Document, card: &PickCard, small: bool) -> Result<Element, Js
     if let Some(action) = &card.action {
         set_action(&button, action)?;
     }
-    append(
-        &button,
-        &art(
-            document,
-            "ph-pcard-art",
-            card.picture.as_deref(),
-            card.glyph,
-            &card.title,
-        )?,
-    )?;
+    let picture = match (card.picture.as_deref(), card.crop) {
+        (Some(media), Some(crop)) => cut_art(document, media, crop, &card.title)?,
+        (media, _) => art(document, "ph-pcard-art", media, card.glyph, &card.title)?,
+    };
+    append(&button, &picture)?;
     append(
         &button,
         &text_element(document, "span", "ph-pcard-title", &card.title)?,
@@ -182,8 +199,8 @@ fn slider(
     document: &Document,
     label: &str,
     percent: u8,
-    low: &str,
-    high: &str,
+    (low, high): (&str, &str),
+    range: Option<&SliderRange>,
 ) -> Result<Element, JsValue> {
     let wrap = labelled(document, "ph-slider", label)?;
     let track = element(document, "div", "ph-slider-track")?;
@@ -198,6 +215,17 @@ fn slider(
     let thumb = element(document, "div", "ph-slider-thumb")?;
     set_style(&thumb, &format!("left:{}%", bar_share(percent)))?;
     append(&track, &thumb)?;
+    if let Some(range) = range {
+        let input = element(document, "input", "ph-slider-input")?;
+        input.set_attribute("type", "range")?;
+        input.set_attribute("min", &range.min.to_string())?;
+        input.set_attribute("max", &range.max.to_string())?;
+        input.set_attribute("step", "1")?;
+        input.set_attribute("value", &range.value.to_string())?;
+        input.set_attribute("aria-label", label)?;
+        set_action(&input, &range.action)?;
+        append(&track, &input)?;
+    }
     append(&wrap, &track)?;
     let ends = element(document, "div", "ph-slider-ends")?;
     append(&ends, &text_element(document, "span", "", low)?)?;
@@ -218,6 +246,9 @@ fn swatch(document: &Document, swatch: &Swatch) -> Result<Element, JsValue> {
     if let Some(color) = css_color(&swatch.color) {
         set_style(&button, &format!("--swatch:{color}"))?;
     }
+    if let Some(action) = &swatch.action {
+        set_action(&button, action)?;
+    }
     Ok(button)
 }
 
@@ -227,7 +258,7 @@ fn field(
     value: &str,
     placeholder: &str,
     message: Option<&str>,
-    tall: bool,
+    (tall, id): (bool, Option<&str>),
 ) -> Result<Element, JsValue> {
     let wrap = labelled(document, "ph-field", label)?;
     let input = element(
@@ -237,6 +268,9 @@ fn field(
     )?;
     input.set_attribute("aria-label", label)?;
     input.set_attribute("placeholder", placeholder)?;
+    if let Some(id) = id {
+        input.set_attribute("id", id)?;
+    }
     if tall {
         input.set_attribute("rows", "3")?;
         input.set_text_content(Some(value));
@@ -300,12 +334,15 @@ fn meter(
 
 fn stage(
     document: &Document,
-    picture: Option<&str>,
-    state: StageState,
+    (picture, state): (Option<&str>, StageState),
     caption: &str,
+    action: Option<&str>,
 ) -> Result<Element, JsValue> {
     let wrap = element(document, "figure", "ph-stage-wrap")?;
     let stage = element(document, "div", "ph-stage")?;
+    if let Some(action) = action {
+        set_action(&stage, action)?;
+    }
     stage.set_attribute(
         "data-state",
         match state {
@@ -334,21 +371,27 @@ fn stage(
 
 fn compare(
     document: &Document,
-    kept: &str,
-    fresh: &str,
+    (kept, fresh): (&str, &str),
     caption: &str,
+    actions: Option<&[String; 2]>,
 ) -> Result<Element, JsValue> {
     let wrap = element(document, "figure", "ph-compare")?;
     let pair = element(document, "div", "ph-compare-pair")?;
-    for (label, media, class) in [
+    for (index, (label, media, class)) in [
         ("Kept", kept, "ph-compare-old"),
         ("New", fresh, "ph-compare-new"),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let side = element(
             document,
             "div",
             &format!("ph-glass ph-compare-side {class}"),
         )?;
+        if let Some(action) = actions.and_then(|actions| actions.get(index)) {
+            set_action(&side, action)?;
+        }
         append(
             &side,
             &art(document, "ph-compare-art", Some(media), None, label)?,
@@ -378,6 +421,9 @@ fn strip(document: &Document, label: &str, items: &[StripItem]) -> Result<Elemen
         };
         let cell = element(document, "button", class)?;
         cell.set_attribute("type", "button")?;
+        if let Some(action) = &item.action {
+            set_action(&cell, action)?;
+        }
         append(
             &cell,
             &art(
@@ -674,7 +720,8 @@ pub fn block(document: &Document, block: &Block) -> Result<Element, JsValue> {
             percent,
             low,
             high,
-        } => slider(document, label, *percent, low, high),
+            range,
+        } => slider(document, label, *percent, (low, high), range.as_ref()),
         Block::Swatches { label, swatches } => {
             let wrap = labelled(document, "ph-group", label)?;
             let row = element(document, "div", "ph-swatches")?;
@@ -690,13 +737,14 @@ pub fn block(document: &Document, block: &Block) -> Result<Element, JsValue> {
             placeholder,
             message,
             tall,
+            id,
         } => field(
             document,
             label,
             value,
             placeholder,
             message.as_deref(),
-            *tall,
+            (*tall, id.as_deref()),
         ),
         Block::Stats { stats } => {
             let grid = element(document, "div", "ph-stats")?;
@@ -714,12 +762,19 @@ pub fn block(document: &Document, block: &Block) -> Result<Element, JsValue> {
             picture,
             state,
             caption,
-        } => stage(document, picture.as_deref(), *state, caption),
+            action,
+        } => stage(
+            document,
+            (picture.as_deref(), *state),
+            caption,
+            action.as_deref(),
+        ),
         Block::Compare {
             kept,
             fresh,
             caption,
-        } => compare(document, kept, fresh, caption),
+            actions,
+        } => compare(document, (kept, fresh), caption, actions.as_ref()),
         Block::Strip { label, items } => strip(document, label, items),
         Block::Buttons { buttons: specs } => buttons(document, specs),
         Block::Notice { tone, text } => notice(document, *tone, text),

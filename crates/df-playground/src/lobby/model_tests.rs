@@ -4,9 +4,9 @@
 use crate::fixtures::assert_keys_are_serde_names;
 use crate::lobby::model::{
     BEGIN_FOCUS_ID, BeginButton, Bubble, BubbleTone, CHARACTER_STEPS, LobbyScreen, LobbySeat,
-    LogoStyle, PartyCount, PartySummary, QR_CELLS, SEATS_SHOWN, SeatState, SummaryIcon, count_text,
-    party_text, qr_like_cells, seat_focus_id, seat_size_key, seat_view, session_text, summary_word,
-    tail_of, title_size_key,
+    LogoStyle, PartyCount, PartySummary, QrModules, SEATS_SHOWN, SeatState, SummaryIcon,
+    count_text, party_text, room_code, seat_focus_id, seat_size_key, seat_view, session_text,
+    summary_word, tail_of, title_size_key,
 };
 
 fn seat(state: SeatState) -> LobbySeat {
@@ -172,16 +172,33 @@ fn a_long_title_steps_down_in_size() {
 }
 
 #[test]
-fn the_qr_like_block_is_square_deterministic_and_has_three_finder_squares() {
-    let first = qr_like_cells("AC7F-K8M2");
-    assert_eq!(first.len(), QR_CELLS * QR_CELLS);
-    assert_eq!(first, qr_like_cells("AC7F-K8M2"));
-    assert_ne!(first, qr_like_cells("ZZZZ-0000"));
-    let at = |row: usize, column: usize| first[row * QR_CELLS + column];
-    for (row, column) in [(0, 0), (0, QR_CELLS - 7), (QR_CELLS - 7, 0)] {
-        assert!(at(row, column) && at(row + 3, column + 3) && !at(row + 1, column + 1));
+fn a_room_code_is_six_unambiguous_characters_read_in_capitals() {
+    assert_eq!(room_code("abc-234").as_deref(), Some("ABC234"));
+    assert_eq!(room_code(" K7M 2PQ ").as_deref(), Some("K7M2PQ"));
+    // 0, O, 1, I and L are never in a code; a code is six characters.
+    for typed in ["ABC10Q", "ABCDEO", "ABCDE", "ABCDEFG", ""] {
+        assert_eq!(room_code(typed), None, "{typed}");
     }
-    assert!(!at(QR_CELLS - 1, QR_CELLS - 1) || at(QR_CELLS - 1, QR_CELLS - 1));
+}
+
+#[test]
+fn qr_modules_are_a_square_of_zeros_and_ones_and_list_their_dark_cells() {
+    let modules = QrModules {
+        width: 2,
+        dark: "1001".to_owned(),
+    };
+    assert!(modules.is_valid());
+    assert_eq!(
+        modules.dark_cells().collect::<Vec<_>>(),
+        vec![(0, 0), (1, 1)]
+    );
+    for (width, dark) in [(2, "100"), (2, "1002"), (0, "")] {
+        let wrong = QrModules {
+            width,
+            dark: dark.to_owned(),
+        };
+        assert!(!wrong.is_valid(), "{width} {dark}");
+    }
 }
 
 fn bubble(left: u8, top: u8, width: u8, tail_x: u8, tail_y: u8) -> Bubble {

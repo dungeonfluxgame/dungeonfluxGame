@@ -57,6 +57,15 @@ pub fn js_message(error: &JsValue) -> String {
         .unwrap_or_else(|| format!("{error:?}"))
 }
 
+/// The class names of `element`, read from its `class` attribute (empty when it has none). Never
+/// `className`: on an SVG element (an icon, a glyph, the map's lines) it is an
+/// `SVGAnimatedString`, not text, and handing that to Rust as a string aborts the page
+/// (`__wbindgen_realloc`'s `old_size > 0`); an animation or transition event can come from any of
+/// them.
+pub fn class_attribute(element: &Element) -> String {
+    element.get_attribute("class").unwrap_or_default()
+}
+
 /// A new element with a class list (space separated, may be empty).
 pub fn element(document: &Document, tag: &str, class: &str) -> Result<Element, JsValue> {
     let element = document.create_element(tag)?;

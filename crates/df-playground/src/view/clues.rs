@@ -15,13 +15,14 @@ use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element};
 
 use crate::clues::{BoardState, ClueBoard, Observed, Phase};
-use crate::dom::set_style;
+use crate::dom::{append, element, set_style, text_element};
 use crate::fixture::TvScene;
 use crate::kit::KitPanels;
 use crate::kit::clue_board::KitClues;
 use crate::limits::CLUE_BOARD_OPEN_MS;
 use crate::page_log::{now_ms, with_log};
 use crate::timeline::{EndReason, TimelineKind};
+use crate::view::kit::photo;
 
 /// The page's memory of the board between draws, and the timeline record that follows it (its
 /// expanded stretch, then its shut one).
@@ -80,8 +81,10 @@ fn observe(key: Option<String>) -> (Option<Phase>, u64) {
 /// stays so for `CLUE_BOARD_OPEN_MS`; the same board drawn again is as it was left. The kit draws
 /// every note whatever the phase: a shut board is the same elements folded by the theme.
 pub fn board(document: &Document, scene: &TvScene) -> Result<Option<Element>, JsValue> {
-    let (phase, open_for_ms) = observe(scene.clues.as_ref().map(ClueBoard::board_identity));
-    let (Some(clues), Some(phase)) = (&scene.clues, phase) else {
+    // The lobby shows no board: the last run's clues stay out of it.
+    let clues = scene.clues.as_ref().filter(|_| scene.lobby.is_none());
+    let (phase, open_for_ms) = observe(clues.map(ClueBoard::board_identity));
+    let (Some(clues), Some(phase)) = (clues, phase) else {
         return Ok(None);
     };
     let layer = crate::kit::draw::panels(
@@ -126,10 +129,47 @@ pub fn board(document: &Document, scene: &TvScene) -> Result<Option<Element>, Js
     Ok(Some(layer))
 }
 
+/// The clue a phone put up full screen (`shown`, an id on `clues`): its picture fitted whole, its
+/// name and what was found of it, over the whole screen until a phone takes it off or the scene
+/// moves on. None when no clue is up or the id is no longer on the board.
+pub fn shown(
+    document: &Document,
+    clues: Option<&ClueBoard>,
+    shown: Option<&str>,
+) -> Result<Option<Element>, JsValue> {
+    let Some(note) = clues.zip(shown).and_then(|(board, id)| board.note(id)) else {
+        return Ok(None);
+    };
+    let layer = element(document, "div", "tv-shown-clue")?;
+    layer.set_attribute("role", "dialog")?;
+    layer.set_attribute("aria-label", &note.name)?;
+    layer.set_attribute("data-clue-id", &note.id)?;
+    if let Some(picture) = photo(
+        document,
+        "tv-shown-clue-image",
+        note.picture.as_deref(),
+        &note.name,
+    )? {
+        append(&layer, &picture)?;
+    }
+    let words = element(document, "div", "tv-shown-clue-words")?;
+    append(
+        &words,
+        &text_element(document, "h2", "tv-shown-clue-name", &note.name)?,
+    )?;
+    if !note.detail.is_empty() {
+        append(
+            &words,
+            &text_element(document, "p", "tv-shown-clue-detail", &note.detail)?,
+        )?;
+    }
+    append(&layer, &words)?;
+    Ok(Some(layer))
+}
+
 /// Shuts the board when its hold has run out. Returns whether `target` was the board.
 pub fn on_animation_end(target: &Element) -> Result<bool, JsValue> {
-    if !target
-        .class_name()
+    if !crate::dom::class_attribute(target)
         .split_whitespace()
         .any(|name| name == "tv-clues")
         || target.closest(".scene-leaving")?.is_some()
@@ -169,10 +209,13 @@ pub fn carry_over(slot: &Element, built: Option<Element>) -> Result<Option<Eleme
     let Some(root) = &built else {
         return Ok(built);
     };
-    if root.class_name().contains("clue-open")
+    if crate::dom::class_attribute(root).contains("clue-open")
         && slot.query_selector(".tv-clues.clue-open")?.is_some()
     {
-        root.set_attribute("class", &format!("{} clue-redrawn", root.class_name()))?;
+        root.set_attribute(
+            "class",
+            &format!("{} clue-redrawn", crate::dom::class_attribute(root)),
+        )?;
     }
     let shown = slot.query_selector_all(".kit-note")?;
     for index in 0..shown.length() {
@@ -184,7 +227,10 @@ pub fn carry_over(slot: &Element, built: Option<Element>) -> Result<Option<Eleme
             continue;
         };
         if let Some(new) = find_note(root, &id)? {
-            new.set_attribute("class", &format!("{} clue-settled", new.class_name()))?;
+            new.set_attribute(
+                "class",
+                &format!("{} clue-settled", crate::dom::class_attribute(&new)),
+            )?;
         }
     }
     Ok(built)

@@ -26,10 +26,13 @@ pub enum Device {
     Both,
     Tv,
     Phone,
+    /// The shared screen with two live phones beside it, each from its own origin so each keeps
+    /// its own seat (`view::live_phone`).
+    Table,
 }
 
 impl Device {
-    pub const ALL: [Self; 3] = [Self::Both, Self::Tv, Self::Phone];
+    pub const ALL: [Self; 4] = [Self::Both, Self::Tv, Self::Phone, Self::Table];
 
     pub fn from_key(key: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|value| value.key() == key)
@@ -40,15 +43,16 @@ impl Device {
             Self::Both => "both",
             Self::Tv => "tv",
             Self::Phone => "phone",
+            Self::Table => "table",
         }
     }
 
     pub fn shows_tv(self) -> bool {
-        matches!(self, Self::Both | Self::Tv)
+        matches!(self, Self::Both | Self::Tv | Self::Table)
     }
 
     pub fn shows_phone(self) -> bool {
-        matches!(self, Self::Both | Self::Phone)
+        matches!(self, Self::Both | Self::Phone | Self::Table)
     }
 }
 

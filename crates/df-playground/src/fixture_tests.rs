@@ -1,8 +1,8 @@
 mod shipped;
 
 use crate::fixture::{
-    ElementShape, ElementSource, Fixture, FixtureTitle, LiveMarker, PlateKind, StageElement,
-    StagePivot, Status,
+    ElementShape, ElementSource, ElementView, Fixture, FixtureTitle, LiveMarker, PivotView,
+    PlateKind, Status,
 };
 use crate::fixtures::assert_keys_are_serde_names;
 
@@ -90,7 +90,7 @@ fn a_missing_required_key_is_refused_by_name() {
     assert!(error.message.contains("hero"), "got: {}", error.message);
 }
 
-fn inline_element(extra: &str) -> StageElement {
+fn inline_element(extra: &str) -> ElementView {
     let text = MINIMAL.replace(
         r#""elements": "live""#,
         &format!(
@@ -111,7 +111,7 @@ fn inline_element(extra: &str) -> StageElement {
 fn an_element_without_a_rotation_or_pivot_is_unturned_about_its_centre() {
     let element = inline_element("");
     assert_eq!(element.rotation_degrees, 0);
-    assert_eq!(element.pivot, StagePivot::default());
+    assert_eq!(element.pivot, PivotView::default());
     assert_eq!((element.pivot.x_percent, element.pivot.y_percent), (50, 50));
 }
 
@@ -122,7 +122,7 @@ fn an_element_with_a_rotation_and_a_pivot_keeps_both() {
     assert_eq!(element.rotation_degrees, 270);
     assert_eq!(
         element.pivot,
-        StagePivot {
+        PivotView {
             x_percent: 0,
             y_percent: 50
         }
@@ -134,7 +134,7 @@ fn a_pivot_with_one_coordinate_takes_the_centre_for_the_other_and_a_misspelt_key
     let element = inline_element(r#", "pivot": {"x_percent": 10}"#);
     assert_eq!(
         element.pivot,
-        StagePivot {
+        PivotView {
             x_percent: 10,
             y_percent: 50
         }

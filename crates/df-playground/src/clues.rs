@@ -80,6 +80,11 @@ impl ClueBoard {
             .collect()
     }
 
+    /// The note of the clue `id`, when it is on the board.
+    pub fn note(&self, id: &str) -> Option<&ClueNote> {
+        self.notes.iter().find(|note| note.id == id)
+    }
+
     /// The board's timeline id: it changes when a note comes, goes, is worked out or is worded
     /// differently, and never carries the words.
     pub fn board_identity(&self) -> String {

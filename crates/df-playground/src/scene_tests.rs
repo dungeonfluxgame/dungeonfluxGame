@@ -43,8 +43,11 @@ fn choice(label: &str) -> Choice {
 fn member(name: &str, hit_points: u32, maximum: u32) -> PartyMember {
     PartyMember {
         name: name.to_owned(),
-        hit_points,
-        maximum_hit_points: maximum,
+        character: None,
+        hit_points: Some(hit_points),
+        maximum_hit_points: Some(maximum),
+        armor_class: None,
+        portrait: None,
         conditions: Vec::new(),
         color: None,
     }
@@ -138,7 +141,7 @@ fn a_party_change_starts_from_the_fixtures_party() {
         .expect("applies");
     let party = drawn(&overlay).tv.party;
     assert_eq!(party.len(), 2);
-    assert_eq!((party[0].hit_points, party[0].maximum_hit_points), (3, 9));
+    assert_eq!(party[0].health(), Some((3, 9)));
     assert_eq!(party[0].conditions, vec!["Prone".to_owned()]);
     assert_eq!(party[1], base().tv.party[1]);
 }

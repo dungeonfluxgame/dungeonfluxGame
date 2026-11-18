@@ -1,5 +1,5 @@
 //! The files the page reads from the host that are not the controls or the canvas: the theme, the
-//! list of scenarios and the scenario chosen.
+//! list of scenarios and the scenario chosen. A frame says when they changed.
 
 use super::sound::sync_audio;
 use super::state::{
@@ -43,7 +43,8 @@ async fn read_titles(names: Vec<String>) -> Vec<FixtureTitle> {
     titles
 }
 
-/// Reads the theme and the fixture list, and remembers the revision they came from.
+/// Reads the theme and the fixture list. The revision of the files is the frame's
+/// (`frames::follow_files`).
 pub async fn refresh_assets() {
     match fetch_text(path::THEME).await {
         Ok(css) => {
@@ -68,15 +69,6 @@ pub async fn refresh_assets() {
             Err(error) => set_problem(PageError::not_read(path::FIXTURE_LIST, "a list")(error)),
         },
         Err(error) => set_problem(error),
-    }
-    match fetch_text(path::REVISION).await {
-        Ok(revision) => with_app_mut(|app| app.asset_revision = revision),
-        Err(error) => {
-            log_error(
-                ErrorSource::Net,
-                &format!("could not read the revision: {error}"),
-            );
-        }
     }
 }
 

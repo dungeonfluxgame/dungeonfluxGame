@@ -93,7 +93,7 @@ pub fn choice(choice: &Choice) -> Result<(), SceneError> {
 
 pub fn member(member: &PartyMember) -> Result<(), SceneError> {
     labelled("a party member's name", &member.name)?;
-    if member.maximum_hit_points == 0 {
+    if member.health().is_some_and(|(_, maximum)| maximum == 0) {
         return Err(SceneError::InvalidMaximum);
     }
     for condition in &member.conditions {

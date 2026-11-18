@@ -37,13 +37,13 @@ pub struct BubbleAnchor {
 /// The region targets of `layout` as stage elements the camera can follow, each at its place on
 /// the screen under the picture's fit. They are positions only: they are handed to the camera,
 /// never drawn as figures.
-pub fn region_target_elements(layout: &ImageLayout) -> Vec<crate::fixture::StageElement> {
+pub fn region_target_elements(layout: &ImageLayout) -> Vec<crate::fixture::ElementView> {
     let fit = PlateFit::of_picture(layout.picture());
     region_targets(layout)
         .into_iter()
         .map(|(id, point)| {
             let (x, y) = fit.stage_units(point);
-            crate::fixture::StageElement {
+            crate::fixture::ElementView {
                 label: id.clone(),
                 id,
                 kind: "region".to_owned(),
@@ -54,8 +54,10 @@ pub fn region_target_elements(layout: &ImageLayout) -> Vec<crate::fixture::Stage
                 width_units: 0.0,
                 height_units: 0.0,
                 fields: serde_json::Map::new(),
+                problem: None,
+                travelling: None,
                 rotation_degrees: 0,
-                pivot: crate::fixture::StagePivot::default(),
+                pivot: crate::fixture::PivotView::default(),
             }
         })
         .collect()

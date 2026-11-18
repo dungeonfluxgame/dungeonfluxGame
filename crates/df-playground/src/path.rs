@@ -51,17 +51,68 @@ pub const PLAY_ROOM: &str = "/play/room";
 pub const PLAY_HELLO: &str = "/play/hello";
 /// A phone asks for a seat (POST a `seat::wire::JoinRequest`, a `seat::wire::JoinStatus`).
 pub const PLAY_JOIN: &str = "/play/join";
+/// A phone checks the room code typed at Next, before the join choices, under the same wait as a
+/// join (POST a `seat::wire::CodeCheck`, a `seat::wire::CodeTaken`).
+pub const PLAY_JOIN_CODE: &str = "/play/join/code";
 /// Where a phone's request for a seat stands (GET, a `seat::wire::JoinStatus`).
 pub const PLAY_JOIN_STATUS: &str = "/play/join/status";
 /// The heroes the player at this phone may play (GET, a `seat::wire::HeroesReply`).
 pub const PLAY_HEROES: &str = "/play/heroes";
-/// The hero the player plays at their seat (POST a `seat::wire::HeroChoice`, a
-/// `seat::wire::SeatCard`).
-pub const PLAY_HERO: &str = "/play/hero";
 /// The seat's view of the table (GET, a `seat::wire::SeatView`).
 pub const PLAY_SEAT_VIEW: &str = "/play/seat/view";
-/// A lobby action of the seat (POST a `seat::wire::SeatIntent`, a `seat::wire::SeatIntentReply`).
-pub const PLAY_SEAT_INTENT: &str = "/play/seat/intent";
+/// Everything a seated phone does at the table, one typed action with its own id (POST a
+/// `seat::wire::SeatAction`, a `seat::wire::SeatOutcome`; refusals are the
+/// `seat::wire::SeatActionErrorKind` family). The one route for a seat's actions: only the
+/// recording (`PLAY_SEAT_TRANSCRIBE`, a binary body) and the keyless entry routes stand apart.
+pub const PLAY_SEAT_ACTION: &str = "/play/seat/action";
+/// A recording of the seat's player written down (POST 16 kHz 16-bit mono PCM as
+/// `SPEECH_CONTENT_TYPE`, a `voice_wire::Transcript`), while the seat's switch is on.
+pub const PLAY_SEAT_TRANSCRIBE: &str = "/play/seat/transcribe";
+/// What the seat's live pages show: its bag, the people here, its notebook, its map and the things
+/// in sight (GET, a `pages::wire::SeatPages`).
+pub const PLAY_SEAT_PAGES: &str = "/play/seat/pages";
+/// A check of the seat's hero sheet rolled by the host (POST a `seat::wire::SeatRoll`, a
+/// `seat::wire::SeatRolled`): the phone names the check, never a number.
+pub const PLAY_SEAT_ROLL: &str = "/play/seat/roll";
+/// What a new hero may be started as (GET, a `look::wire::LookStartOptions`), or a new hero for
+/// the seat with its look studio afresh (POST a `look::wire::LookStartAsk`, a
+/// `look::wire::LookStudioView`).
+pub const PLAY_LOOK_START: &str = "/play/look/start";
+/// A random look for the seat's hero, spending nothing (POST a `look::wire::LookRollAsk`, a
+/// `look::wire::LookDraft`).
+pub const PLAY_LOOK_ROLL: &str = "/play/look/roll";
+/// The seat's look studio (GET, a `look::wire::LookStudioView`).
+pub const PLAY_LOOK: &str = "/play/look";
+/// The look controls of the seat's hero (GET, a `look::wire::LookControls`).
+pub const PLAY_LOOK_CONTROLS: &str = "/play/look/controls";
+/// The player's words read into details (POST a `look::wire::LookDetailsAsk`, a
+/// `look::wire::LookDetails`).
+pub const PLAY_LOOK_DETAILS: &str = "/play/look/details";
+/// One new version (POST a `look::wire::LookRefineAsk`, a `look::wire::LookVersion`).
+pub const PLAY_LOOK_REFINE: &str = "/play/look/refine";
+/// Keep a version, or go back to one (POST a `look::wire::LookVersionAsk`).
+pub const PLAY_LOOK_KEEP: &str = "/play/look/keep";
+/// Keep the old version over a new one (POST a `look::wire::LookVersionAsk`).
+pub const PLAY_LOOK_DISCARD: &str = "/play/look/discard";
+/// Start again from the base pose (POST a `look::wire::LookAgainAsk`).
+pub const PLAY_LOOK_AGAIN: &str = "/play/look/again";
+/// Lock the look in (POST a `look::wire::LookLockAsk`, a `look::wire::LookStudioView`).
+pub const PLAY_LOOK_LOCK: &str = "/play/look/lock";
+/// The seat's hero build (GET, a `pages::creation::CreationView`).
+pub const PLAY_CREATION: &str = "/play/creation";
+/// Set and clear picks, then the rest is filled ("random unless chosen"); with nothing in it, it
+/// starts the seat's build from its look-studio hero (POST a `pages::creation::BuildChoose`, a
+/// `pages::creation::CreationView`).
+pub const PLAY_CREATION_CHOOSE: &str = "/play/creation/choose";
+/// "Surprise me": a new build from the hero's species and class (POST a
+/// `pages::creation::BuildStep`, a `pages::creation::CreationView`).
+pub const PLAY_CREATION_SURPRISE: &str = "/play/creation/surprise";
+/// The reviewed build becomes the hero and the seat is ready in the lobby (POST a
+/// `pages::creation::BuildStep`, a `pages::creation::CreationView`).
+pub const PLAY_CREATION_SUBMIT: &str = "/play/creation/submit";
+/// A ready seat goes back to reviewing and is not ready in the lobby (POST a
+/// `pages::creation::BuildStep`, a `pages::creation::CreationView`).
+pub const PLAY_CREATION_REOPEN: &str = "/play/creation/reopen";
 /// The header that carries a phone's seat key on the `PLAY_*` routes, and never anywhere else:
 /// not in an address, not in a log.
 pub const SEAT_KEY_HEADER: &str = "x-df-seat-key";
@@ -81,9 +132,65 @@ pub fn fixture_file(file_name: &str) -> String {
     FIXTURE_FILE.replace(NAME_PLACEHOLDER, file_name)
 }
 
-/// The address of the media file `name`.
+/// The header in which the player listener gives a phone short-lived signed links to the media
+/// its answer names, as `name=link;name=link`: the player listener serves a media file only with
+/// its link (`MEDIA_LINK_PARAM`). The loopback dev listener gives none and needs none.
+pub const MEDIA_LINKS_HEADER: &str = "x-df-media-links";
+/// The query parameter that carries a media file's signed link.
+pub const MEDIA_LINK_PARAM: &str = "ml";
+
+thread_local! {
+    /// The signed links the page was given, by media name (`keeps_link` says which one is kept).
+    static MEDIA_LINKS: std::cell::RefCell<std::collections::BTreeMap<String, String>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+/// The expiry of a signed link (`<expiry, unix seconds>.<signature>`), read on the host's clock.
+fn link_expiry(link: &str) -> Option<u64> {
+    link.split_once('.')?.0.parse().ok()
+}
+
+/// Whether the page keeps the link `kept` it has for a file over the link `offered` in a newer
+/// answer. Every answer signs anew, so taking each new link would give the file a new address on
+/// every poll and the browser would fetch the whole picture again; the kept link is changed only
+/// once the offered one lasts at least half a lifetime (`MEDIA_LINK_LIFETIME_S`) longer, so a kept
+/// link always has half a lifetime left. Both expiries are the host's, so the phone's own clock
+/// does not matter. A link that cannot be read is replaced.
+pub fn keeps_link(kept: &str, offered: &str) -> bool {
+    match (link_expiry(kept), link_expiry(offered)) {
+        (Some(kept), Some(offered)) => {
+            offered < kept.saturating_add(crate::limits::MEDIA_LINK_LIFETIME_S / 2)
+        }
+        _ => false,
+    }
+}
+
+/// Keeps the signed links of a `MEDIA_LINKS_HEADER` value: a file's link only changes when
+/// `keeps_link` lets it, so its address stays the same and the browser's copy is used.
+pub fn remember_media_links(header: &str) {
+    MEDIA_LINKS.with(|links| {
+        let mut links = links.borrow_mut();
+        for (name, link) in header.split(';').filter_map(|pair| pair.split_once('=')) {
+            if links.get(name).is_some_and(|kept| keeps_link(kept, link)) {
+                continue;
+            }
+            links.insert(name.to_owned(), link.to_owned());
+        }
+    });
+}
+
+/// Forgets every signed link: the host restarted, and its links died with it.
+pub fn forget_media_links() {
+    MEDIA_LINKS.with(|links| links.borrow_mut().clear());
+}
+
+/// The address of the media file `name`, with its signed link when the page was given one.
 pub fn media_file(name: &str) -> String {
-    MEDIA_FILE.replace(NAME_PLACEHOLDER, name)
+    let address = MEDIA_FILE.replace(NAME_PLACEHOLDER, name);
+    match MEDIA_LINKS.with(|links| links.borrow().get(name).cloned()) {
+        Some(link) => format!("{address}?{MEDIA_LINK_PARAM}={link}"),
+        None => address,
+    }
 }
 
 /// One page's timeline, `CLIENT_PLACEHOLDER` standing for the page's name (GET, with the

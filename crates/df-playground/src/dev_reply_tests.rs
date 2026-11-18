@@ -36,7 +36,7 @@ fn another_modules_error_tag_has_no_speech_kind_but_keeps_the_sentence() {
 
 #[test]
 fn the_guards_refusal_has_a_sentence_and_no_kind() {
-    let text = r#"{"outcome":"rejected","cause":null,"message":"not here","problems":[]}"#;
+    let text = r#"{"outcome":"rejected","error":{"error":"foreign_host"},"message":"not here"}"#;
     let reply: HostReply<u32> = serde_json::from_str(text).expect("reads");
     assert_eq!(
         reply.into_result(),

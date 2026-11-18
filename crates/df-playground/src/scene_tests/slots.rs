@@ -10,6 +10,7 @@ use crate::fixture::{
 };
 use crate::home::model::HomeScene;
 use crate::inventory::{InventoryPanel, InventoryRow, RowUse};
+use crate::kit::title_card::TitleCard;
 use crate::lobby::model::{LoadingScreen, LobbyScreen, RoleplayScene, TopBar};
 use crate::overlay::{
     Edit, NarrationBox, NarrationPlacement, PartyLook, Progress, SeatStrip, StoryMark,
@@ -38,8 +39,11 @@ fn caption(text: &str) -> Caption {
 fn member(name: &str) -> PartyMember {
     PartyMember {
         name: name.to_owned(),
-        hit_points: 3,
-        maximum_hit_points: 5,
+        character: None,
+        hit_points: Some(3),
+        maximum_hit_points: Some(5),
+        armor_class: None,
+        portrait: None,
         conditions: Vec::new(),
         color: None,
     }
@@ -265,6 +269,7 @@ fn all_set() -> SceneOverlay {
         camera: Edit::Set(camera("live-door")),
         narration: Edit::Set(narration("Live narration.")),
         seats: Edit::Set(seats("Vex", 2)),
+        party_hidden: Edit::Set(true),
         brand: Edit::Set(false),
         lobby: Edit::Set(lobby("Live hall")),
         loading: Edit::Set(loading("Live wait")),
@@ -280,6 +285,11 @@ fn all_set() -> SceneOverlay {
         story: Edit::Set(story_mark("Live story")),
         inventory: Edit::Set(inventory_panel("live-owner")),
         roll: Edit::Set(shown_roll("live-roll")),
+        shown_clue: Edit::Set("live-clue".to_owned()),
+        title_card: Edit::Set(TitleCard {
+            title: Some("Live chapter".to_owned()),
+            ..TitleCard::default()
+        }),
         cue_count: 0,
         slide_count: 0,
         camera_count: 0,
@@ -298,6 +308,7 @@ fn all_clear() -> SceneOverlay {
         camera: Edit::Clear,
         narration: Edit::Clear,
         seats: Edit::Clear,
+        party_hidden: Edit::Clear,
         brand: Edit::Clear,
         lobby: Edit::Clear,
         loading: Edit::Clear,
@@ -313,6 +324,8 @@ fn all_clear() -> SceneOverlay {
         story: Edit::Clear,
         inventory: Edit::Clear,
         roll: Edit::Clear,
+        shown_clue: Edit::Clear,
+        title_card: Edit::Clear,
         cue_count: 0,
         slide_count: 0,
         camera_count: 0,
@@ -364,6 +377,7 @@ fn every_tv_field_is_patched_or_fixture_only() {
         party,
         narration,
         seats,
+        party_hidden,
         brand,
         lobby,
         loading,
@@ -374,6 +388,8 @@ fn every_tv_field_is_patched_or_fixture_only() {
         story,
         inventory,
         roll,
+        shown_clue,
+        title_card,
         elements: _,
     } = tv;
     let PhoneScene {
@@ -394,6 +410,7 @@ fn every_tv_field_is_patched_or_fixture_only() {
     assert_eq!(camera.as_ref(), overlay.camera.set_value());
     assert_eq!(narration.as_ref(), overlay.narration.set_value());
     assert_eq!(seats.as_ref(), overlay.seats.set_value());
+    assert_eq!(Some(&party_hidden), overlay.party_hidden.set_value());
     assert_eq!(Some(&brand), overlay.brand.set_value());
     assert_eq!(lobby.as_ref(), overlay.lobby.set_value());
     assert_eq!(loading.as_ref(), overlay.loading.set_value());
@@ -404,6 +421,8 @@ fn every_tv_field_is_patched_or_fixture_only() {
     assert_eq!(story.as_ref(), overlay.story.set_value());
     assert_eq!(inventory.as_ref(), overlay.inventory.set_value());
     assert_eq!(roll.as_ref(), overlay.roll.set_value());
+    assert_eq!(shown_clue.as_ref(), overlay.shown_clue.set_value());
+    assert_eq!(title_card.as_ref(), overlay.title_card.set_value());
     assert_eq!(Some(&suggested), overlay.suggested.set_value());
     assert_eq!(Some(&groups), overlay.groups.set_value());
     assert_eq!(Some(&unavailable), overlay.unavailable.set_value());
@@ -432,6 +451,7 @@ fn every_slot_clears() {
         party,
         narration,
         seats,
+        party_hidden,
         brand,
         lobby,
         loading,
@@ -442,6 +462,8 @@ fn every_slot_clears() {
         story,
         inventory,
         roll,
+        shown_clue,
+        title_card,
         elements: _,
     } = tv;
     let PhoneScene {
@@ -462,6 +484,7 @@ fn every_slot_clears() {
     assert_eq!(camera, None);
     assert_eq!(narration, None);
     assert_eq!(seats, None);
+    assert!(!party_hidden);
     assert!(!brand);
     assert_eq!(lobby, None);
     assert_eq!(loading, None);
@@ -472,6 +495,8 @@ fn every_slot_clears() {
     assert_eq!(story, None);
     assert_eq!(inventory, None);
     assert_eq!(roll, None);
+    assert_eq!(shown_clue, None);
+    assert_eq!(title_card, None);
     assert!(suggested.is_empty());
     assert!(groups.is_empty());
     assert!(unavailable.is_empty());
@@ -496,11 +521,11 @@ fn changed_slots_match_wire_names() {
         })
         .collect();
     let mut slots = overlay.changed_slots();
-    assert_eq!(slots.len(), 22, "{slots:?}");
+    assert_eq!(slots.len(), 25, "{slots:?}");
     slots.sort_unstable();
     keys.sort_unstable();
     assert_eq!(slots, keys);
-    assert_eq!(all_clear().changed_slots().len(), 22);
+    assert_eq!(all_clear().changed_slots().len(), 25);
     assert!(!overlay.is_empty() && !all_clear().is_empty());
 }
 

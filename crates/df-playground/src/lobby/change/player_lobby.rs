@@ -16,8 +16,8 @@ use crate::fixture::TvScene;
 use crate::home::model::is_focus_id;
 use crate::limits::MAXIMUM_LOBBY_SEATS;
 use crate::lobby::model::{
-    BEGIN_FOCUS_ID, CHARACTER_STEPS, JoinCode, LobbyScreen, LobbySeat, PartySummary, SeatState,
-    SummaryIcon, seat_marker,
+    BEGIN_FOCUS_ID, CHARACTER_STEPS, JoinCode, LobbyScreen, LobbySeat, PartySummary, QrModules,
+    SeatState, SummaryIcon, seat_marker,
 };
 use crate::overlay::Glyph;
 use crate::scene::{SceneError, SceneOverlay};
@@ -74,6 +74,8 @@ pub struct JoinEdit {
     pub hint: Option<String>,
     pub join_link: Option<String>,
     pub game_code: Option<String>,
+    /// The QR code of the join link, made by the host; it replaces the one shown.
+    pub qr: Option<QrModules>,
 }
 
 /// A change to the party summary: who is at the table and what they are doing.
@@ -223,6 +225,12 @@ impl JoinEdit {
         put(&mut join.hint, self.hint, "the join hint")?;
         put(&mut join.join_link, self.join_link, "a join link")?;
         put(&mut join.game_code, self.game_code, "a game code")?;
+        if let Some(qr) = self.qr {
+            if !qr.is_valid() {
+                return Err(ScreenError::InvalidQr.into());
+            }
+            join.qr = Some(qr);
+        }
         Ok(())
     }
 }
@@ -296,6 +304,7 @@ pub(super) fn join_pairs(join: &JoinEdit) -> Vec<(&'static str, String)> {
     present(&mut pairs, "link", join.join_link.as_ref());
     present(&mut pairs, "code", join.game_code.as_ref());
     present(&mut pairs, "hint", join.hint.as_ref());
+    // The QR code is the host's picture of the link, never typed: the link stands for it.
     pairs
 }
 

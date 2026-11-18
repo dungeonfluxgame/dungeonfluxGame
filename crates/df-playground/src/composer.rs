@@ -124,6 +124,25 @@ pub enum SpeechAvailability {
     TurnedOff,
 }
 
+impl SpeechAvailability {
+    /// Why speech is not set up, when the host said so: the words the composer and the toolbar's
+    /// voice switches show.
+    pub fn not_set_up(&self) -> Option<String> {
+        match self {
+            Self::NotConfigured {
+                missing: Some(missing),
+            } => Some(format!(
+                "Voice is not set up on the host (missing {})",
+                missing.variable()
+            )),
+            Self::NotConfigured { missing: None } => {
+                Some("Voice is not set up on the host".to_owned())
+            }
+            Self::Checking | Self::Ready | Self::HostDown | Self::TurnedOff => None,
+        }
+    }
+}
+
 /// A character the composer can talk to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
@@ -166,6 +185,8 @@ pub enum TranscribeFailure {
     TooShort,
     /// The speech service heard nothing it could write down.
     NothingHeard,
+    /// Speech to text is turned off (the seat's own switch, or the playground's).
+    TurnedOff,
     /// The host or the speech service failed.
     Host,
     /// The host could not be reached.
@@ -178,6 +199,7 @@ impl TranscribeFailure {
         match kind {
             Some(SpeechErrorKind::NotConfigured) => Self::NotConfigured,
             Some(SpeechErrorKind::AudioTooShort | SpeechErrorKind::AudioEmpty) => Self::TooShort,
+            Some(SpeechErrorKind::Disabled) => Self::TurnedOff,
             _ => Self::Host,
         }
     }
@@ -188,6 +210,7 @@ impl TranscribeFailure {
             Self::NotConfigured => "not_configured",
             Self::TooShort => "too_short",
             Self::NothingHeard => "nothing_heard",
+            Self::TurnedOff => "turned_off",
             Self::Host => "host",
             Self::Unreachable => "unreachable",
         }
@@ -241,6 +264,9 @@ impl Note {
             }
             Self::Transcribe(TranscribeFailure::NothingHeard) => {
                 "Couldn't make that out. Type it instead.".to_owned()
+            }
+            Self::Transcribe(TranscribeFailure::TurnedOff) => {
+                "Speech to text is turned off. Type instead.".to_owned()
             }
             Self::Transcribe(TranscribeFailure::Host) => {
                 "The host could not write that down. Type it instead.".to_owned()
@@ -347,13 +373,7 @@ fn unavailable_reason(inputs: &ComposerInputs<'_>, has_target: bool) -> Option<S
         SpeechAvailability::Checking => Some("Checking the microphone...".to_owned()),
         SpeechAvailability::HostDown => Some("The host could not be reached".to_owned()),
         SpeechAvailability::TurnedOff => Some("Speech to text is turned off".to_owned()),
-        SpeechAvailability::NotConfigured { missing } => Some(match missing {
-            Some(missing) => format!(
-                "Voice is not set up on the host (missing {})",
-                missing.variable()
-            ),
-            None => "Voice is not set up on the host".to_owned(),
-        }),
+        SpeechAvailability::NotConfigured { .. } => inputs.speech.not_set_up(),
         SpeechAvailability::Ready if !has_target => {
             Some("No one here has a persona to talk to".to_owned())
         }

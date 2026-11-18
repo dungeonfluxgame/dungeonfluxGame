@@ -33,6 +33,9 @@ const PHONE_CSS: &str = include_str!("../../../../assets/playground/phone.css");
 
 /// Puts the phone kit's stylesheet in the page once.
 pub fn ensure_style(document: &Document) -> Result<(), JsValue> {
+    // The shared screen's parts the phone mirrors (the roll card, the party strip, the clue board)
+    // are the kit's: its sheet goes in first, so the phone's wins ties.
+    crate::kit::draw::ensure_style(document)?;
     crate::dom::ensure_style(document, PHONE_STYLE_ID, PHONE_CSS)
 }
 

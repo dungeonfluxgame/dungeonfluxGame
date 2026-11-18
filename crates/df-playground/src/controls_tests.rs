@@ -27,7 +27,7 @@ fn a_chosen_status_replaces_the_fixtures() {
 
 #[test]
 fn a_device_key_round_trips_and_an_unknown_key_is_refused() {
-    for device in [Device::Both, Device::Tv, Device::Phone] {
+    for device in Device::ALL {
         assert_eq!(Device::from_key(device.key()), Some(device));
     }
     assert_eq!(Device::from_key("watch"), None);
@@ -294,7 +294,7 @@ fn a_change_reply_reads_the_controls_when_done_and_the_hosts_sentence_when_rejec
     let read: ControlsChangeReply = serde_json::from_str(rejected).expect("a refusal reads");
     assert_eq!(read.into_result(), Err("no".to_owned()));
     // The guard in front of every route refuses with the host's general reply.
-    let guarded = r#"{"outcome":"rejected","cause":null,"message":"not here","problems":[]}"#;
+    let guarded = r#"{"outcome":"rejected","error":{"error":"foreign_host"},"message":"not here"}"#;
     let read: ControlsChangeReply = serde_json::from_str(guarded).expect("a guard refusal reads");
     assert_eq!(read.into_result(), Err("not here".to_owned()));
 }

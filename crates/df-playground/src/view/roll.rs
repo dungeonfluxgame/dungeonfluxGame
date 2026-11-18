@@ -175,6 +175,46 @@ pub fn card(document: &Document, scene: &TvScene) -> Result<Option<Element>, JsV
     Ok(Some(layer))
 }
 
+thread_local! {
+    /// The phone's last roll card: its roll id, when the phone first drew it, and its tumble, so a
+    /// redraw carries on where it was and the dice move as they first did.
+    static PHONE_SHOWN: RefCell<Option<(String, u64, TumblePlan)>> = const { RefCell::new(None) };
+}
+
+/// How long the phone keeps its last roll card up: as long as it is the seat's last roll.
+const PHONE_HOLD_MS: u64 = 24 * 60 * 60 * 1_000;
+
+/// The seat's last roll on its phone: the shared screen's card (`kit::roll_card`), drawn by the
+/// same renderer, staged from when the phone first drew it, and kept up (no leaving).
+pub fn phone_card(
+    document: &Document,
+    roll: &crate::fixture::RollView,
+) -> Result<Element, JsValue> {
+    let now = now_ms();
+    let (first, plan) = PHONE_SHOWN.with(|shown| {
+        let mut shown = shown.borrow_mut();
+        match &*shown {
+            Some((id, first, plan)) if *id == roll.id => (*first, plan.clone()),
+            _ => {
+                let plan = TumblePlan::new(fresh_seed(), roll.dice.len() * 2 + 1);
+                *shown = Some((roll.id.clone(), now, plan.clone()));
+                (now, plan)
+            }
+        }
+    });
+    let schedule = RollSchedule::new(plan.tumble_ms, PHONE_HOLD_MS);
+    // The card keeps the shared screen's proportions: its layer is a container three times the
+    // phone column wide, so the card's own width (a third of it, as on the screen) is the column,
+    // and the frame around it clips what is left over.
+    let frame = element(document, "div", "ph-roll-mirror")?;
+    let layer = element(document, "div", &format!("kit {CARD} ph-roll-scale"))?;
+    set_style(&layer, &staging_vars(schedule, now.saturating_sub(first)))?;
+    layer.set_attribute("data-roll", &roll.id)?;
+    append(&layer, &draw(document, &RollCard::from(roll), &plan)?)?;
+    append(&frame, &layer)?;
+    Ok(frame)
+}
+
 /// Whether the card is up and has not begun to leave, so the screen's other panels stay aside.
 pub fn is_up(scene: &TvScene) -> bool {
     with_driver(|driver| covers_panels(scene.roll.as_ref(), driver.left))
@@ -182,8 +222,7 @@ pub fn is_up(scene: &TvScene) -> bool {
 
 /// The stage of the card an invisible stage timer (`roll-clock-<stage>`) belongs to.
 fn stage_of(target: &Element) -> Option<String> {
-    target
-        .class_name()
+    crate::dom::class_attribute(target)
         .split_whitespace()
         .find_map(|name| name.strip_prefix("roll-clock-").map(str::to_owned))
 }

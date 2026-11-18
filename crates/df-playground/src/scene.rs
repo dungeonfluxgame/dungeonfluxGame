@@ -19,6 +19,7 @@ use crate::fixture::{
     Slide, UnavailableChoice,
 };
 use crate::inventory::InventoryPanel;
+use crate::kit::title_card::TitleCard;
 use crate::limits::{
     MAXIMUM_CAMERA_MS, MAXIMUM_PARTY_MEMBERS, MAXIMUM_PIVOT_PERCENT, MAXIMUM_ROTATION_DEGREES,
     MAXIMUM_SLIDE_MS, MAXIMUM_VOLUME_PERCENT, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT,
@@ -136,6 +137,9 @@ pub struct SceneOverlay {
     /// The looks of the party strip's heroes and its open seats.
     #[serde(skip_serializing_if = "Edit::is_keep")]
     pub seats: Edit<SeatStrip>,
+    /// Whether the party strip has faded out.
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub party_hidden: Edit<bool>,
     /// Whether the logo is drawn.
     #[serde(skip_serializing_if = "Edit::is_keep")]
     pub brand: Edit<bool>,
@@ -180,6 +184,12 @@ pub struct SceneOverlay {
     /// The roll card on the shared screen: set by the host, which stamps it, or cleared.
     #[serde(skip_serializing_if = "Edit::is_keep")]
     pub roll: Edit<ShownRoll>,
+    /// The clue a player shows the whole table, by its id on the clue board; a new plate clears it.
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub shown_clue: Edit<String>,
+    /// The chapter title card over the shared screen, set by the host, or cleared.
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub title_card: Edit<TitleCard>,
     /// How many cues there have ever been. It only rises, so a page can tell a new cue from one it
     /// has played even after a reset.
     pub cue_count: u64,
@@ -293,6 +303,19 @@ pub enum SceneChange {
     },
     /// Takes the roll card away at once.
     ClearRoll {},
+    /// Shows the clue `clue` of the clue board shown now to the whole table, full screen, in
+    /// place of the one shown. A new plate (a backdrop picture) takes it away.
+    ShowClue {
+        clue: String,
+    },
+    /// Takes the clue shown to the whole table away.
+    ClearShownClue {},
+    /// Puts a chapter title card over the shared screen, replacing the one shown.
+    TitleCard {
+        card: TitleCard,
+    },
+    /// Takes the title card away.
+    ClearTitleCard {},
     /// Plays a sound once.
     Sound {
         media: String,
@@ -323,9 +346,13 @@ pub enum SceneChange {
     /// Takes the narration box away (the caption, if there is one, shows instead).
     ClearNarration {},
     /// Sets how a hero of the party strip looks, and their hit points. A hero who is not in the
-    /// party yet is added (it needs `hit_points`); a field left out stays as it is.
+    /// party yet is added, with no hit points until it is given some or its `character` has a
+    /// sheet; a field left out stays as it is.
     SeatSet {
         name: String,
+        /// The hero's character id, whose sheet gives the card its numbers.
+        #[serde(default)]
+        character: Option<String>,
         #[serde(default)]
         class: Edit<String>,
         #[serde(default)]
@@ -353,6 +380,11 @@ pub enum SceneChange {
     /// Draws or hides the logo at the top left.
     Brand {
         on: bool,
+    },
+    /// Fades the party strip out (`hidden`) or brings it back. The host shows it at each new place
+    /// and hides it a while later.
+    PartyHidden {
+        hidden: bool,
     },
     /// Changes the lobby, the loading screen, the roleplay card or the top bar (`lobby::change`).
     Screen {
@@ -405,6 +437,8 @@ pub enum SceneError {
     UnknownRow(String),
     /// A roll's id is not a plain name.
     InvalidRollId(String),
+    /// The clue to show is not on the clue board shown now.
+    UnknownClue(String),
     /// A roll holds a die the page cannot draw, or a face the die does not have.
     InvalidDie {
         sides: u8,
@@ -424,8 +458,6 @@ pub enum SceneError {
     },
     /// A scene has both a caption and a narration box, which share one place.
     NarrationAndCaption,
-    /// A hero who is not in the party was given no hit points.
-    NeedsHitPoints(String),
     /// A narration box was asked for with no text and there is none to change.
     NoNarrationYet,
     /// A change to the lobby, loading screen, roleplay card or top bar is out of range.
@@ -443,6 +475,7 @@ impl fmt::Display for SceneError {
             }
             Self::DuplicateMember(name) => write!(formatter, "'{name}' is already in the party"),
             Self::DuplicateClue(id) => write!(formatter, "the clue board has '{id}' twice"),
+            Self::UnknownClue(id) => write!(formatter, "the clue board shown has no '{id}'"),
             Self::DuplicateRow(id) => write!(formatter, "the inventory has '{id}' twice"),
             Self::UnknownRow(id) => {
                 write!(
@@ -518,10 +551,6 @@ impl fmt::Display for SceneError {
             Self::NarrationAndCaption => formatter.write_str(
                 "a scene has a caption or a narration box, not both: they share one place",
             ),
-            Self::NeedsHitPoints(name) => write!(
-                formatter,
-                "'{name}' is not in the party yet: give hp=N to add them"
-            ),
             Self::NoNarrationYet => formatter
                 .write_str("there is no narration box to change: give the text to make one"),
             Self::Screen(error) => write!(formatter, "{error}"),
@@ -567,6 +596,7 @@ impl SceneOverlay {
             camera,
             narration,
             seats,
+            party_hidden,
             brand,
             lobby,
             loading,
@@ -582,6 +612,8 @@ impl SceneOverlay {
             story,
             inventory,
             roll,
+            shown_clue,
+            title_card,
             cue_count: _,
             slide_count: _,
             camera_count: _,
@@ -596,6 +628,7 @@ impl SceneOverlay {
             ("camera", camera.is_keep()),
             ("narration", narration.is_keep()),
             ("seats", seats.is_keep()),
+            ("party_hidden", party_hidden.is_keep()),
             ("brand", brand.is_keep()),
             ("lobby", lobby.is_keep()),
             ("loading", loading.is_keep()),
@@ -611,6 +644,8 @@ impl SceneOverlay {
             ("story", story.is_keep()),
             ("inventory", inventory.is_keep()),
             ("roll", roll.is_keep()),
+            ("shown_clue", shown_clue.is_keep()),
+            ("title_card", title_card.is_keep()),
         ]
         .into_iter()
         .filter_map(|(name, kept)| (!kept).then_some(name))
@@ -657,6 +692,7 @@ impl SceneOverlay {
             camera,
             narration,
             seats,
+            party_hidden,
             brand,
             lobby,
             loading,
@@ -672,6 +708,8 @@ impl SceneOverlay {
             story,
             inventory,
             roll,
+            shown_clue,
+            title_card,
             cue_count: _,
             slide_count: _,
             camera_count: _,
@@ -686,6 +724,7 @@ impl SceneOverlay {
         camera.apply_to(&mut tv.camera);
         narration.apply_to(&mut tv.narration);
         seats.apply_to(&mut tv.seats);
+        party_hidden.apply_to_value(&mut tv.party_hidden);
         brand.apply_to_value(&mut tv.brand);
         lobby.apply_to(&mut tv.lobby);
         loading.apply_to(&mut tv.loading);
@@ -702,5 +741,7 @@ impl SceneOverlay {
         story.apply_to(&mut fixture.tv.story);
         inventory.apply_to(&mut fixture.tv.inventory);
         roll.apply_to(&mut fixture.tv.roll);
+        shown_clue.apply_to(&mut fixture.tv.shown_clue);
+        title_card.apply_to(&mut fixture.tv.title_card);
     }
 }

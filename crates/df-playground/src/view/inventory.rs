@@ -98,7 +98,10 @@ fn look(
         let look = inventory.look_of(&row.id, flashing);
         let classes = look.classes();
         if !classes.is_empty() {
-            item.set_attribute("class", &format!("{} {classes}", item.class_name()))?;
+            item.set_attribute(
+                "class",
+                &format!("{} {classes}", crate::dom::class_attribute(&item)),
+            )?;
         }
         if let Some(flash) = look.flash {
             set_style(&item, &format!("--inv-age:{}ms", look.age_ms))?;
@@ -120,7 +123,7 @@ pub fn settle_cover(document: &Document, covered: bool) -> Result<bool, JsValue>
     };
     if covered {
         COVER.with(|cover| cover.set(true));
-        let classes = layer.class_name();
+        let classes = crate::dom::class_attribute(&layer);
         if !classes.split_whitespace().any(|class| class == COVERED) {
             layer.set_attribute("class", &format!("{classes} {COVERED}"))?;
         }

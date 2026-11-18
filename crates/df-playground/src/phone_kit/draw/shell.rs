@@ -252,7 +252,11 @@ fn tab_button(
         &button,
         &text_element(document, "span", "ph-tab-label", tab.label())?,
     )?;
-    if let Some(count) = bar.badge(tab) {
+    if bar.waits(tab) {
+        let dot = element(document, "span", "ph-badge ph-badge-wait")?;
+        dot.set_attribute("aria-label", "Waiting for you")?;
+        append(&button, &dot)?;
+    } else if let Some(count) = bar.badge(tab) {
         append(
             &button,
             &text_element(document, "span", "ph-badge", &count.to_string())?,

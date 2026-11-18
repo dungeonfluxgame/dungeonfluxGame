@@ -89,9 +89,27 @@ pub fn inventory_differ(before: &TvScene, after: &TvScene) -> bool {
     before.inventory != after.inventory
 }
 
-/// Whether the clue board differs; the board reads nothing but itself.
+/// Whether the clue board differs; the board reads itself and whether the lobby is up (the lobby
+/// shows no board).
 pub fn clues_differ(before: &TvScene, after: &TvScene) -> bool {
-    before.clues != after.clues
+    before.clues != after.clues || before.lobby.is_some() != after.lobby.is_some()
+}
+
+/// Whether the chapter title card differs.
+pub fn title_differ(before: &TvScene, after: &TvScene) -> bool {
+    before.title_card != after.title_card
+}
+
+/// Whether the clue shown full screen differs: another clue, or its note on the board changed.
+pub fn shown_clue_differs(before: &TvScene, after: &TvScene) -> bool {
+    let note = |scene: &TvScene| {
+        scene
+            .clues
+            .as_ref()
+            .zip(scene.shown_clue.as_deref())
+            .and_then(|(board, id)| board.note(id).cloned())
+    };
+    before.shown_clue != after.shown_clue || note(before) != note(after)
 }
 
 /// Whether the roll card differs: another roll, by its serial. The host's stamps of how far along

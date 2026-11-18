@@ -1,19 +1,29 @@
-//! Fetching text from, and posting JSON to, the page's own server.
+//! Asking the page's own server: one typed call (`call`) for every route that answers with the
+//! host's reply envelope (`dev_reply::HostReply`), and plain text (`text`, `fetch_text`,
+//! `post_json`) for the files, the controls and the frame.
 //!
 //! It owns one request at a time and reports a failure as a typed error that names the address and
 //! carries the exception the browser threw, so the page can show it and a bug is not mistaken for
-//! a refusal. Every request names the page (`path::CLIENT_HEADER`). It never retries; the caller's
+//! a refusal. Every request names the page (`path::CLIENT_HEADER`), carries the phone's seat key
+//! only when asked (`path::SEAT_KEY_HEADER`), and is given up after its timeout
+//! (`limits::REQUEST_TIMEOUT_MS` unless the call says otherwise) as `NetError::TimedOut`, so a
+//! connection that died under a phone does not hold its poll loop. It never retries; the caller's
 //! poll loop does that.
 
 use std::cell::RefCell;
 use std::fmt;
 
+use gloo_timers::callback::Timeout;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{Headers, RequestInit, Response};
+use web_sys::{AbortController, Headers, RequestInit, Response};
 
+use crate::dev_reply::{ErrorTag, HostReply, Rejection};
 use crate::dom::BrowserError;
-use crate::path::{CLIENT_HEADER, SEAT_KEY_HEADER};
+use crate::limits::{LONGEST_BROWSER_TIMER_MS, REQUEST_TIMEOUT_MS};
+use crate::path::{CLIENT_HEADER, MEDIA_LINKS_HEADER, SEAT_KEY_HEADER};
 
 /// Why a request did not give text.
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +55,8 @@ pub enum NetError {
         status: u16,
         body: String,
     },
+    /// No whole answer came within `after_ms`, so the request was given up.
+    TimedOut { address: String, after_ms: u64 },
 }
 
 impl fmt::Display for NetError {
@@ -67,6 +79,9 @@ impl fmt::Display for NetError {
                 status,
                 body,
             } => write!(formatter, "{address} answered with status {status}: {body}"),
+            Self::TimedOut { address, after_ms } => {
+                write!(formatter, "{address} did not answer within {after_ms} ms")
+            }
         }
     }
 }
@@ -81,6 +96,10 @@ fn request_error(what: &'static str) -> impl Fn(JsValue) -> NetError {
 }
 
 async fn read_body(address: &str, response: Response) -> Result<String, NetError> {
+    // The signed links to the media the answer names (the player listener's), kept for the page.
+    if let Ok(Some(links)) = response.headers().get(MEDIA_LINKS_HEADER) {
+        crate::path::remember_media_links(&links);
+    }
     let status = response.status();
     let ok = response.ok();
     let unreadable = |cause: JsValue| NetError::Unreadable {
@@ -141,77 +160,236 @@ fn request_headers() -> Result<Headers, NetError> {
     Ok(headers)
 }
 
-/// The headers of a seat route's request: the page's name and, when given, the phone's seat key,
-/// which travels in this header only (never in an address).
-fn seat_headers(seat_key: Option<&str>) -> Result<Headers, NetError> {
+/// What a request sends.
+enum Body<'a> {
+    /// Nothing: a `GET`.
+    Empty,
+    /// JSON, or why the value could not be written as JSON.
+    Json(Result<String, String>),
+    /// Bytes of `content_type`, zeroed in the browser's copy once the answer is in: a recording
+    /// lives only as long as its request.
+    Bytes {
+        content_type: &'a str,
+        bytes: &'a [u8],
+    },
+}
+
+/// One request to the host: its address, what it sends, the phone's seat key when it is a seat's
+/// and how long it may take.
+pub struct Call<'a> {
+    address: &'a str,
+    body: Body<'a>,
+    seat_key: Option<&'a str>,
+    timeout_ms: u64,
+}
+
+impl<'a> Call<'a> {
+    /// A `GET` of `address`.
+    pub fn get(address: &'a str) -> Self {
+        Self::of(address, Body::Empty)
+    }
+
+    /// A `POST` of `body` as JSON to `address`.
+    pub fn post(address: &'a str, body: &impl Serialize) -> Self {
+        let json = serde_json::to_string(body).map_err(|cause| cause.to_string());
+        Self::of(address, Body::Json(json))
+    }
+
+    /// A `POST` of JSON text already written to `address`.
+    pub fn post_text(address: &'a str, json: &str) -> Self {
+        Self::of(address, Body::Json(Ok(json.to_owned())))
+    }
+
+    /// A `POST` of `bytes` as `content_type` to `address`.
+    pub fn post_bytes(address: &'a str, content_type: &'a str, bytes: &'a [u8]) -> Self {
+        Self::of(
+            address,
+            Body::Bytes {
+                content_type,
+                bytes,
+            },
+        )
+    }
+
+    fn of(address: &'a str, body: Body<'a>) -> Self {
+        Self {
+            address,
+            body,
+            seat_key: None,
+            timeout_ms: REQUEST_TIMEOUT_MS,
+        }
+    }
+
+    /// The address it asks.
+    pub fn address(&self) -> &'a str {
+        self.address
+    }
+
+    /// Sends the phone's seat key with it (in its header only, never in an address).
+    pub fn with_seat_key(mut self, seat_key: &'a str) -> Self {
+        self.seat_key = Some(seat_key);
+        self
+    }
+
+    /// Gives the request `timeout_ms` instead of `REQUEST_TIMEOUT_MS`.
+    pub fn within(mut self, timeout_ms: u64) -> Self {
+        self.timeout_ms = timeout_ms;
+        self
+    }
+}
+
+/// Why a call gave no value.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CallError<K> {
+    /// The host refused: the kind of its typed error, when one of `K`, and its own sentence.
+    Refused(Rejection<K>),
+    /// The host could not be asked, did not answer in time, or answered with something else than
+    /// its reply (a guard's refusal, a proxy's page).
+    Net(NetError),
+    /// The host's success is not the reply the page expects.
+    Unreadable { address: String, cause: String },
+    /// The request's body could not be written.
+    Unwritable { address: String, cause: String },
+}
+
+impl<K> fmt::Display for CallError<K> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Refused(rejection) => write!(formatter, "refused: {}", rejection.message),
+            Self::Net(error) => error.fmt(formatter),
+            Self::Unreadable { address, cause } => {
+                write!(formatter, "{address} did not answer as expected: {cause}")
+            }
+            Self::Unwritable { address, cause } => {
+                write!(
+                    formatter,
+                    "the request to {address} could not be written: {cause}"
+                )
+            }
+        }
+    }
+}
+
+/// Asks the host and reads its reply envelope: the value, or the refusal with its kind of `K`. A
+/// refusal arrives with an error status, so the body of one is read as a reply too; an error
+/// status whose body is not a reply keeps its network error.
+pub async fn call<T: DeserializeOwned, K: ErrorTag>(call: Call<'_>) -> Result<T, CallError<K>> {
+    let address = call.address;
+    if let Body::Json(Err(cause)) = &call.body {
+        return Err(CallError::Unwritable {
+            address: address.to_owned(),
+            cause: cause.clone(),
+        });
+    }
+    let (body, status_error) = match text(call).await {
+        Ok(body) => (body, None),
+        Err(NetError::Status {
+            address,
+            status,
+            body,
+        }) => (
+            body.clone(),
+            Some(NetError::Status {
+                address,
+                status,
+                body,
+            }),
+        ),
+        Err(error) => return Err(CallError::Net(error)),
+    };
+    match serde_json::from_str::<HostReply<T, K>>(&body) {
+        Ok(reply) => reply.into_result().map_err(CallError::Refused),
+        Err(cause) => Err(match status_error {
+            Some(error) => CallError::Net(error),
+            None => CallError::Unreadable {
+                address: address.to_owned(),
+                cause: cause.to_string(),
+            },
+        }),
+    }
+}
+
+/// Asks the host and reads its answer as text. A non-success status is an error that names the
+/// address and status and carries the host's own explanation.
+pub async fn text(call: Call<'_>) -> Result<String, NetError> {
+    let Call {
+        address,
+        body,
+        seat_key,
+        timeout_ms,
+    } = call;
+    let window = web_sys::window().ok_or(NetError::NoWindow)?;
     let headers = request_headers()?;
     if let Some(key) = seat_key {
         headers
             .set(SEAT_KEY_HEADER, key)
             .map_err(request_error("put the seat key in the request"))?;
     }
-    Ok(headers)
-}
-
-/// Reads `address` as text. A non-success status is an error that names the address and status.
-pub async fn fetch_text(address: &str) -> Result<String, NetError> {
-    fetch_seat_text(address, None).await
-}
-
-/// Reads `address` as text, with the phone's seat key when given.
-pub async fn fetch_seat_text(address: &str, seat_key: Option<&str>) -> Result<String, NetError> {
-    let window = web_sys::window().ok_or(NetError::NoWindow)?;
     let init = RequestInit::new();
-    let headers = seat_headers(seat_key)?;
+    let mut sent_bytes = None;
+    match body {
+        Body::Empty => {}
+        Body::Json(json) => {
+            let json = json.map_err(|cause| NetError::Request {
+                what: "write the request body",
+                cause: JsValue::from_str(&cause).into(),
+            })?;
+            headers
+                .set("Content-Type", "application/json")
+                .map_err(request_error("set the content type"))?;
+            init.set_method("POST");
+            init.set_body(&JsValue::from_str(&json));
+        }
+        Body::Bytes {
+            content_type,
+            bytes,
+        } => {
+            headers
+                .set("Content-Type", content_type)
+                .map_err(request_error("set the content type"))?;
+            let array = js_sys::Uint8Array::from(bytes);
+            init.set_method("POST");
+            init.set_body(&array);
+            sent_bytes = Some(array);
+        }
+    }
     init.set_headers(&headers);
-    let response = response_of(address, window.fetch_with_str_and_init(address, &init)).await?;
-    read_body(address, response).await
-}
-
-/// Posts `body` (JSON) to `address` and reads the answer as text. A refusal is an error that
-/// carries the host's own explanation.
-pub async fn post_json(address: &str, body: &str) -> Result<String, NetError> {
-    post_seat_json(address, None, body).await
-}
-
-/// Posts `body` (JSON) to `address`, with the phone's seat key when given.
-pub async fn post_seat_json(
-    address: &str,
-    seat_key: Option<&str>,
-    body: &str,
-) -> Result<String, NetError> {
-    let window = web_sys::window().ok_or(NetError::NoWindow)?;
-    let headers = seat_headers(seat_key)?;
-    headers
-        .set("Content-Type", "application/json")
-        .map_err(request_error("set the content type"))?;
-    let init = RequestInit::new();
-    init.set_method("POST");
-    init.set_headers(&headers);
-    init.set_body(&JsValue::from_str(body));
-    let response = response_of(address, window.fetch_with_str_and_init(address, &init)).await?;
-    read_body(address, response).await
-}
-
-/// Posts `bytes` to `address` as `content_type` and reads the answer as text. A refusal is an error
-/// that carries the host's own explanation. The browser's copy of the bytes is zeroed once the
-/// answer is in: a recording lives only as long as its request.
-pub async fn post_bytes(
-    address: &str,
-    content_type: &str,
-    bytes: &[u8],
-) -> Result<String, NetError> {
-    let window = web_sys::window().ok_or(NetError::NoWindow)?;
-    let headers = request_headers()?;
-    headers
-        .set("Content-Type", content_type)
-        .map_err(request_error("set the content type"))?;
-    let body = js_sys::Uint8Array::from(bytes);
-    let init = RequestInit::new();
-    init.set_method("POST");
-    init.set_headers(&headers);
-    init.set_body(&body);
+    // The request is given up when its timer ends; the timer is cancelled when it is dropped with
+    // the answer.
+    let controller = AbortController::new().map_err(request_error("make the request's timer"))?;
+    init.set_signal(Some(&controller.signal()));
+    let abort = controller.clone();
+    let held_ms = timeout_ms.min(LONGEST_BROWSER_TIMER_MS);
+    let _timer = Timeout::new(u32::try_from(held_ms).unwrap_or(u32::MAX), move || {
+        abort.abort();
+    });
     let answer = response_of(address, window.fetch_with_str_and_init(address, &init)).await;
-    body.fill(0, 0, body.length());
-    read_body(address, answer?).await
+    if let Some(array) = &sent_bytes {
+        array.fill(0, 0, array.length());
+    }
+    let read = match answer {
+        Ok(response) => read_body(address, response).await,
+        Err(error) => Err(error),
+    };
+    match read {
+        Err(error)
+            if controller.signal().aborted() && !matches!(error, NetError::Status { .. }) =>
+        {
+            Err(NetError::TimedOut {
+                address: address.to_owned(),
+                after_ms: timeout_ms,
+            })
+        }
+        read => read,
+    }
+}
+
+/// Reads `address` as text.
+pub async fn fetch_text(address: &str) -> Result<String, NetError> {
+    text(Call::get(address)).await
+}
+
+/// Posts `body` (JSON already written) to `address` and reads the answer as text.
+pub async fn post_json(address: &str, body: &str) -> Result<String, NetError> {
+    text(Call::post_text(address, body)).await
 }

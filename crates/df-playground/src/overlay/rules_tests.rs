@@ -2,16 +2,20 @@
 
 use crate::fixture::PartyMember;
 use crate::overlay::rules::{
-    DEFAULT_NARRATOR_LABEL, HealthTier, StripCard, bar_percent, class_line, health_tier,
-    narrator_label, progress_text, strip_cards,
+    DEFAULT_NARRATOR_LABEL, HealthTier, StripCard, armor_class_text, bar_percent, card_accent,
+    card_portrait, class_line, health_tier, hit_points_text, narrator_label, progress_text,
+    strip_cards,
 };
 use crate::overlay::{NarrationBox, PartyLook, Progress, SeatStrip};
 
 fn member(name: &str, hit_points: u32, maximum: u32) -> PartyMember {
     PartyMember {
         name: name.to_owned(),
-        hit_points,
-        maximum_hit_points: maximum,
+        character: None,
+        hit_points: Some(hit_points),
+        maximum_hit_points: Some(maximum),
+        armor_class: None,
+        portrait: None,
         conditions: Vec::new(),
         color: None,
     }
@@ -147,4 +151,20 @@ fn a_bar_fills_to_its_share_and_never_past_full() {
     assert!((bar_percent(22, 28) - 78.5).abs() < 0.001);
     assert!((bar_percent(40, 28) - 100.0).abs() < 0.001);
     assert!(bar_percent(3, 0).abs() < 0.001);
+}
+
+#[test]
+fn a_card_shows_the_heros_own_portrait_and_the_looks_accent_first_and_words_its_numbers() {
+    let mut hero = member("Maud", 7, 8);
+    hero.color = Some("#112233".to_owned());
+    let mut seen = look("Maud");
+    seen.portrait = Some("look.png".to_owned());
+    seen.accent = Some("#445566".to_owned());
+    assert_eq!(card_portrait(&hero, Some(&seen)), Some("look.png"));
+    hero.portrait = Some("head.png".to_owned());
+    assert_eq!(card_portrait(&hero, Some(&seen)), Some("head.png"));
+    assert_eq!(card_accent(&hero, Some(&seen)), Some("#445566"));
+    assert_eq!(card_accent(&hero, None), Some("#112233"));
+    assert_eq!(hit_points_text(7, 8), "HP 7/8");
+    assert_eq!(armor_class_text(12), "AC 12");
 }

@@ -4,13 +4,13 @@
 use crate::camera::Framing;
 use crate::continuity::{Admit, CameraClock, Continuity, ReplyGate, SlideClock, canvas_accepts};
 use crate::controls::{Controls, ControlsReply};
-use crate::fixture::{Camera, ElementShape, PlateKind, StageElement, StagePivot};
+use crate::fixture::{Camera, ElementShape, ElementView, PivotView, PlateKind};
 use crate::limits::{MAXIMUM_REMEMBERED_SLIDES, MAXIMUM_ZOOM_PERCENT};
 use crate::overlay::Edit;
 use crate::scene::{ImageSlot, SceneChange, SceneOverlay};
 
-fn element(id: &str, x: f32, y: f32) -> StageElement {
-    StageElement {
+fn element(id: &str, x: f32, y: f32) -> ElementView {
+    ElementView {
         id: id.to_owned(),
         kind: "character".to_owned(),
         label: id.to_owned(),
@@ -21,8 +21,10 @@ fn element(id: &str, x: f32, y: f32) -> StageElement {
         width_units: 5.0,
         height_units: 5.0,
         fields: serde_json::Map::new(),
+        problem: None,
+        travelling: None,
         rotation_degrees: 0,
-        pivot: StagePivot::default(),
+        pivot: PivotView::default(),
     }
 }
 
@@ -48,7 +50,7 @@ fn slide(serial: u64, duration_ms: u64, elapsed_ms: u64) -> crate::fixture::Slid
     }
 }
 
-fn finn() -> Vec<StageElement> {
+fn finn() -> Vec<ElementView> {
     vec![element("finn", 50.0, 28.125)]
 }
 
@@ -327,7 +329,7 @@ mod camera_moves {
         clock: &mut CameraClock,
         now: f64,
         camera: &Camera,
-        elements: &[StageElement],
+        elements: &[ElementView],
     ) -> crate::continuity::CameraPlan {
         clock.plan(now, Some(camera), Some(elements))
     }

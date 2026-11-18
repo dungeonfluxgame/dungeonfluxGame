@@ -35,6 +35,24 @@ pub fn private_note(document: &Document, text: &str) -> Result<Element, JsValue>
     Ok(note)
 }
 
+/// The private note with what the character saw as a short list under it, in their own words and
+/// with no label.
+pub fn private_note_seen(
+    document: &Document,
+    text: &str,
+    seen: &[String],
+) -> Result<Element, JsValue> {
+    let note = private_note(document, text)?;
+    if !seen.is_empty() {
+        let list = element(document, "ul", "ph-note-seen")?;
+        for what in seen {
+            append(&list, &text_element(document, "li", "", what)?)?;
+        }
+        append(&note, &list)?;
+    }
+    Ok(note)
+}
+
 /// One action card: its mark, its label and the line that explains it.
 pub fn card(document: &Document, card: &ActionCard) -> Result<Element, JsValue> {
     let button = element(

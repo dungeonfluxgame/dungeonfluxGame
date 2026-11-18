@@ -33,6 +33,10 @@ pub enum Part {
     TvStory,
     TvInventory,
     TvRoll,
+    /// The chapter title card over the screen (`TvScene::title_card`).
+    TvTitle,
+    /// The clue a phone put up full screen (`TvScene::shown_clue`).
+    TvShownClue,
     PhoneHead,
     PhoneStatus,
     PhoneImage,
@@ -62,6 +66,8 @@ impl Part {
             Self::TvStory => "tv-story",
             Self::TvInventory => "tv-inventory",
             Self::TvRoll => "tv-roll",
+            Self::TvTitle => "tv-title",
+            Self::TvShownClue => "tv-shown-clue",
             Self::PhoneHead => "phone-head",
             Self::PhoneStatus => "phone-status",
             Self::PhoneImage => "phone-image",
@@ -219,7 +225,10 @@ impl DrawPlan {
         );
         self.mark(
             Part::TvParty,
-            before.tv.party != after.tv.party || before.tv.seats != after.tv.seats,
+            before.tv.party != after.tv.party
+                || before.tv.seats != after.tv.seats
+                || before.tv.party_hidden != after.tv.party_hidden
+                || before.tv.lobby.is_some() != after.tv.lobby.is_some(),
         );
         self.mark(
             Part::TvClues,
@@ -237,6 +246,14 @@ impl DrawPlan {
             Part::TvRoll,
             crate::overlay::changes::roll_differ(&before.tv, &after.tv),
         );
+        self.mark(
+            Part::TvTitle,
+            crate::overlay::changes::title_differ(&before.tv, &after.tv),
+        );
+        self.mark(
+            Part::TvShownClue,
+            crate::overlay::changes::shown_clue_differs(&before.tv, &after.tv),
+        );
     }
 
     /// The pieces of a phone that differ. Returns whether the choices differ.
@@ -249,9 +266,11 @@ impl DrawPlan {
             (&before.phone.hero, &before.phone.goal) != (&after.phone.hero, &after.phone.goal),
         );
         self.mark(Part::PhoneStatus, status_before != status_after);
+        // A live phone's Story page mirrors the shared screen's chapter title over its picture.
         self.mark(
             Part::PhoneImage,
-            !same_image(before.phone.image.as_ref(), after.phone.image.as_ref()),
+            !same_image(before.phone.image.as_ref(), after.phone.image.as_ref())
+                || crate::overlay::changes::title_differ(&before.tv, &after.tv),
         );
         self.mark(
             Part::PhoneNarration,

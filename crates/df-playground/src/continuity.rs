@@ -9,7 +9,7 @@
 //! clock, so native tests cover it all.
 
 use crate::camera::{Framing, framing_within, progress};
-use crate::fixture::{Camera, Slide, StageElement};
+use crate::fixture::{Camera, ElementView, Slide};
 use crate::limits::{MAXIMUM_REMEMBERED_SLIDES, MAXIMUM_ZOOM_PERCENT, OLDER_RUN_STRIKES};
 
 /// What the page does with an answer from the host.
@@ -209,7 +209,7 @@ impl CameraClock {
         &mut self,
         now: f64,
         camera: Option<&Camera>,
-        elements: Option<&[StageElement]>,
+        elements: Option<&[ElementView]>,
     ) -> CameraPlan {
         self.plan_within(now, camera, elements, MAXIMUM_ZOOM_PERCENT)
     }
@@ -219,7 +219,7 @@ impl CameraClock {
         &mut self,
         now: f64,
         camera: Option<&Camera>,
-        elements: Option<&[StageElement]>,
+        elements: Option<&[ElementView]>,
         zoom_ceiling: u16,
     ) -> CameraPlan {
         let Some(camera) = camera else {
@@ -302,7 +302,7 @@ impl Continuity {
         &mut self,
         now: f64,
         camera: Option<&Camera>,
-        elements: Option<&[StageElement]>,
+        elements: Option<&[ElementView]>,
         zoom_ceiling: u16,
     ) -> CameraPlan {
         self.camera.plan_within(now, camera, elements, zoom_ceiling)

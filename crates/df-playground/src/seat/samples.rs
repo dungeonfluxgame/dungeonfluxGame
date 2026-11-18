@@ -2,6 +2,7 @@
 //! join screen, driven there by the host answers a real phone would get. A reviewer opens it on
 //! the phone page with `?phone_kit=join`. Sample data, not a scene the host plays.
 
+use crate::look::wire::HeroPack;
 use crate::path::query_value;
 use crate::phone_kit::gallery::GALLERY_QUERY_KEY;
 use crate::seat::wire::{
@@ -33,13 +34,16 @@ fn seat() -> SeatCard {
         name: "Mara Vell".to_owned(),
         kind: PlayerKind::Guest,
         hero: None,
+        hero_locked: false,
+        plays: None,
     }
 }
 
-/// The seat once its player chose a hero.
+/// The seat once its player chose a hero and locked in its look.
 fn seat_with_hero() -> SeatCard {
     SeatCard {
         hero: Some(1),
+        hero_locked: true,
         ..seat()
     }
 }
@@ -89,17 +93,29 @@ fn seated_view(ready: bool) -> SeatView {
         present,
         ready,
         you,
+        hero: None,
     };
     SeatView {
         revision: 4,
         stage: TableStage::Gathering,
         ready,
         can_toggle_ready: true,
+        can_start: true,
         players: vec![
             player("Danny", true, true, false),
             player("Lyra", false, false, false),
             player("Mara Vell", true, ready, true),
         ],
+        ask: None,
+        story: None,
+        day_end: None,
+        start_problem: None,
+        talk_waiting: 0,
+        stt: Default::default(),
+        notice: None,
+        pending_roll: None,
+        last_roll: None,
+        answered_by: None,
     }
 }
 
@@ -120,6 +136,7 @@ pub fn join_samples() -> Vec<(&'static str, SeatMachine)> {
         species: "Elf".to_owned(),
         class: "Fighter".to_owned(),
         portrait: None,
+        pack: HeroPack::default(),
         last_played_ms: None,
     };
     vec![

@@ -186,7 +186,7 @@ impl BubbleLayout {
     fn settle_repeats(&mut self, bubbles: &[Measured]) {
         let mut shown = HashMap::new();
         for bubble in bubbles {
-            let classes = bubble.element.class_name();
+            let classes = crate::dom::class_attribute(&bubble.element);
             let has = |wanted: &str| classes.split_whitespace().any(|class| class == wanted);
             let content = (
                 has("rp-tone-thought"),
@@ -218,7 +218,7 @@ impl BubbleLayout {
                 continue;
             };
             if self.outlined.contains(&character) {
-                let classes = element.class_name();
+                let classes = crate::dom::class_attribute(&element);
                 element.set_class_name(&format!("{classes} rp-settled"));
             }
             outlined.insert(character);
@@ -256,7 +256,7 @@ impl BubbleLayout {
             let Some(drawn) = element.dyn_ref::<HtmlElement>() else {
                 continue;
             };
-            let thought = element.class_name().contains("rp-tone-thought");
+            let thought = crate::dom::class_attribute(&element).contains("rp-tone-thought");
             // The kit bubble inside the frame is as wide as its words (at most the frame): that
             // width is measured, so the box is the bubble's and its tail stays on the head. A
             // bubble narrower than its frame keeps a little room, so it does not wrap again once
@@ -340,7 +340,10 @@ impl BubbleLayout {
             )?;
             bubble.element.set_attribute(
                 "class",
-                &class_for_side(&bubble.element.class_name(), placement.side),
+                &class_for_side(
+                    &crate::dom::class_attribute(&bubble.element),
+                    placement.side,
+                ),
             )?;
             follow_side(&bubble.element, placement.side)?;
             bubble.element.set_attribute("data-placed", &marker)?;
@@ -372,7 +375,7 @@ fn follow_side(frame: &Element, side: BubbleSide) -> Result<(), JsValue> {
         BubbleSide::LeftOfFace => TailSide::Right,
         BubbleSide::RightOfFace => TailSide::Left,
     };
-    let classes = shape.class_name();
+    let classes = crate::dom::class_attribute(&shape);
     let kept: Vec<&str> = classes
         .split_whitespace()
         .filter(|class| !class.starts_with("kit-shape-tail-"))
@@ -397,7 +400,7 @@ fn settle_clue_board(
     let Some(board) = layer.query_selector(".kit-clues")? else {
         return Ok(());
     };
-    let classes = layer.class_name();
+    let classes = crate::dom::class_attribute(&layer);
     let has = |wanted: &str| classes.split_whitespace().any(|class| class == wanted);
     let folded = has("clue-shut") || stage.query_selector(".kit-tc")?.is_some();
     let mut boxes = rects_of(stage, LOWER_THIRD, to_stage)?;
@@ -478,7 +481,7 @@ fn rects_of(
 
 /// Adds `name` to `element`'s classes, or takes it away, writing only a change.
 fn set_class(element: &Element, name: &str, on: bool) -> Result<(), JsValue> {
-    let current = element.class_name();
+    let current = crate::dom::class_attribute(element);
     if current.split_whitespace().any(|class| class == name) == on {
         return Ok(());
     }

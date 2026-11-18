@@ -68,6 +68,7 @@ impl S {
     fn go(self, name: &str) -> SceneChange {
         SceneChange::SeatSet {
             name: name.to_owned(),
+            character: None,
             class: self.class,
             level: self.level,
             portrait: self.portrait,
@@ -219,7 +220,8 @@ fn a_hero_who_is_in_the_party_gets_a_look_and_keeps_their_hit_points() {
     assert_eq!(look.portrait.as_deref(), Some("brakka.webp"));
     assert_eq!(look.accent.as_deref(), Some("#e0675a"));
     assert_eq!(
-        scene.party[0].hit_points, 10,
+        scene.party[0].hit_points,
+        Some(10),
         "hit points are the party's own"
     );
     assert_eq!(scene.seats.expect("seats").open, 1, "open seats stay");
@@ -236,18 +238,20 @@ fn hit_points_conditions_and_the_maximum_of_a_hero_change_through_the_seat_verb(
     };
     overlay.apply(hurt.go("Kael"), &base()).expect("set");
     let member = &drawn(&overlay).tv.party[0];
-    assert_eq!((member.hit_points, member.maximum_hit_points), (4, 20));
+    assert_eq!(member.health(), Some((4, 20)));
     assert_eq!(member.conditions, ["Poisoned"]);
 }
 
 #[test]
-fn a_new_hero_needs_hit_points_and_the_maximum_defaults_to_them() {
+fn a_new_hero_joins_with_no_hit_points_and_a_current_given_is_its_own_maximum() {
     let mut overlay = SceneOverlay::default();
-    assert_eq!(
-        overlay.apply(S::default().go("Lyra"), &base()),
-        Err(SceneError::NeedsHitPoints("Lyra".to_owned()))
-    );
-    assert!(overlay.is_empty());
+    overlay
+        .apply(S::default().go("Mira"), &base())
+        .expect("added");
+    let mira = &drawn(&overlay).tv.party[1];
+    assert_eq!(mira.name, "Mira");
+    assert_eq!(mira.health(), None, "no sample hit points");
+    let mut overlay = SceneOverlay::default();
     let added = S {
         class: Edit::Set("Ranger".to_owned()),
         hit_points: Some(9),
@@ -257,7 +261,7 @@ fn a_new_hero_needs_hit_points_and_the_maximum_defaults_to_them() {
     let scene = drawn(&overlay).tv;
     assert_eq!(scene.party.len(), 2);
     assert_eq!(scene.party[1].name, "Lyra");
-    assert_eq!(scene.party[1].maximum_hit_points, 9);
+    assert_eq!(scene.party[1].health(), Some((9, 9)));
     assert_eq!(scene.seats.expect("seats").looks.len(), 2);
 }
 

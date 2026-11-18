@@ -342,8 +342,52 @@ fn a_host_refusal_kind_maps_to_a_transcribe_failure() {
         TranscribeFailure::TooShort
     );
     assert_eq!(
+        failure(Some(SpeechErrorKind::Disabled)),
+        TranscribeFailure::TurnedOff
+    );
+    assert_eq!(
         failure(Some(SpeechErrorKind::Stopped)),
         TranscribeFailure::Host
     );
     assert_eq!(failure(None), TranscribeFailure::Host);
+}
+
+#[test]
+fn only_a_host_that_says_speech_is_not_set_up_gives_a_reason_for_the_voice_switches() {
+    let missing = SpeechAvailability::NotConfigured {
+        missing: Some(MissingSetting::SpeechKey),
+    };
+    assert_eq!(
+        missing.not_set_up().as_deref(),
+        Some("Voice is not set up on the host (missing DF_ELEVENLABS_API_KEY)")
+    );
+    assert_eq!(
+        SpeechAvailability::NotConfigured { missing: None }
+            .not_set_up()
+            .as_deref(),
+        Some("Voice is not set up on the host")
+    );
+    for other in [
+        SpeechAvailability::Checking,
+        SpeechAvailability::Ready,
+        SpeechAvailability::HostDown,
+        SpeechAvailability::TurnedOff,
+    ] {
+        assert_eq!(other.not_set_up(), None);
+    }
+}
+
+#[test]
+fn a_seated_act_line_with_no_pick_goes_to_the_room_not_to_a_person_picked_elsewhere() {
+    // A seat's Act composer is given its own pick, else the room's id (""): the Talk page's
+    // choice and the innkeeper default never decide whom an Act line is put to.
+    let targets = vec![target(""), target("innkeeper"), target("produce_vendor")];
+    assert_eq!(
+        resolve_target(&targets, Some("")).map(|target| target.id.as_str()),
+        Some("")
+    );
+    assert_eq!(
+        resolve_target(&targets, Some("produce_vendor")).map(|target| target.id.as_str()),
+        Some("produce_vendor")
+    );
 }

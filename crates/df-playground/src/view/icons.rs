@@ -1,15 +1,15 @@
 //! The small pictures of the lobby, the pills and the loading screen: a fixed set of drawings
-//! built as `svg` elements, and the QR-like placeholder block.
+//! built as `svg` elements, and the join code's QR picture.
 //!
 //! Each drawing is a constant of this crate, never text from a scene file, and is set as the
 //! inside of an `svg` made here. The icons take the current text colour, so a state recolours
-//! them with CSS and no script. The QR block is a placeholder: its cells come from the code's
-//! text (`lobby::model::qr_like_cells`) and it is not a code anyone can scan.
+//! them with CSS and no script. The QR picture draws the modules the host made of the join link
+//! (`lobby::model::QrModules`), dark on light with the light border a camera needs.
 
 use wasm_bindgen::JsValue;
 use web_sys::{Document, Element};
 
-use crate::lobby::model::{QR_CELLS, qr_like_cells};
+use crate::lobby::model::QrModules;
 
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
 
@@ -111,31 +111,40 @@ pub fn icon(document: &Document, which: Icon, class: &str) -> Result<Element, Js
     Ok(svg)
 }
 
-/// The QR-like placeholder block for `code`: white cells on the dark block, one path. It is not
-/// scannable: the real code comes from the server.
-pub fn qr_placeholder(document: &Document, code: &str, class: &str) -> Result<Element, JsValue> {
+/// The light modules around a QR code that a camera needs to find it.
+const QR_QUIET_MODULES: usize = 4;
+
+/// The QR picture of `qr`: its dark modules, one path, on a light square with the quiet border, so
+/// a phone's camera reads it whatever the panel's colours.
+pub fn qr_picture(document: &Document, qr: &QrModules, class: &str) -> Result<Element, JsValue> {
     let svg = document.create_element_ns(Some(SVG_NAMESPACE), "svg")?;
+    let size = usize::from(qr.width) + 2 * QR_QUIET_MODULES;
     svg.set_attribute(
         "viewBox",
-        &format!("-1 -1 {} {}", QR_CELLS + 2, QR_CELLS + 2),
+        &format!("-{QR_QUIET_MODULES} -{QR_QUIET_MODULES} {size} {size}"),
     )?;
     svg.set_attribute("class", class)?;
     svg.set_attribute("role", "img")?;
-    svg.set_attribute("aria-label", "A placeholder for the join code's QR picture")?;
+    svg.set_attribute("aria-label", "QR code of the join link")?;
     svg.set_attribute("shape-rendering", "crispEdges")?;
+    let light = document.create_element_ns(Some(SVG_NAMESPACE), "rect")?;
+    for (name, value) in [
+        ("x", format!("-{QR_QUIET_MODULES}")),
+        ("y", format!("-{QR_QUIET_MODULES}")),
+        ("width", size.to_string()),
+        ("height", size.to_string()),
+        ("fill", "#fff".to_owned()),
+    ] {
+        light.set_attribute(name, &value)?;
+    }
+    svg.append_child(&light)?;
     let mut path = String::new();
-    for (index, dark) in qr_like_cells(code).into_iter().enumerate() {
-        if dark {
-            path.push_str(&format!(
-                "M{} {}h1v1h-1z",
-                index % QR_CELLS,
-                index / QR_CELLS
-            ));
-        }
+    for (column, row) in qr.dark_cells() {
+        path.push_str(&format!("M{column} {row}h1v1h-1z"));
     }
     let cells = document.create_element_ns(Some(SVG_NAMESPACE), "path")?;
     cells.set_attribute("d", &path)?;
-    cells.set_attribute("fill", "currentColor")?;
+    cells.set_attribute("fill", "#000")?;
     svg.append_child(&cells)?;
     Ok(svg)
 }

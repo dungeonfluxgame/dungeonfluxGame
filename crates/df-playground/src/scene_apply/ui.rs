@@ -73,6 +73,7 @@ impl SceneOverlay {
             }
             SceneChange::SeatSet {
                 name,
+                character,
                 class,
                 level,
                 portrait,
@@ -103,19 +104,22 @@ impl SceneOverlay {
                 }
                 first_error(seat_strip(&[], &strip))?;
                 let mut party = self.party_now(base);
-                let changes_member =
-                    hit_points.is_some() || maximum_hit_points.is_some() || conditions.is_some();
+                let changes_member = character.is_some()
+                    || hit_points.is_some()
+                    || maximum_hit_points.is_some()
+                    || conditions.is_some();
                 let position = party.iter().position(|member| member.name == name);
                 if position.is_none() || changes_member {
                     let index = match position {
                         Some(index) => index,
                         None => {
-                            let hit_points = hit_points
-                                .ok_or_else(|| SceneError::NeedsHitPoints(name.clone()))?;
                             party.push(PartyMember {
                                 name: name.clone(),
-                                hit_points,
-                                maximum_hit_points: maximum_hit_points.unwrap_or(hit_points),
+                                character: None,
+                                hit_points: None,
+                                maximum_hit_points: None,
+                                armor_class: None,
+                                portrait: None,
                                 conditions: Vec::new(),
                                 color: None,
                             });
@@ -123,11 +127,14 @@ impl SceneOverlay {
                         }
                     };
                     let member = &mut party[index];
-                    if let Some(hit_points) = hit_points {
+                    if character.is_some() {
+                        member.character = character;
+                    }
+                    if hit_points.is_some() {
                         member.hit_points = hit_points;
                     }
-                    if let Some(maximum) = maximum_hit_points {
-                        member.maximum_hit_points = maximum;
+                    if maximum_hit_points.is_some() {
+                        member.maximum_hit_points = maximum_hit_points;
                     }
                     if let Some(conditions) = conditions {
                         member.conditions = conditions;
@@ -166,6 +173,10 @@ impl SceneOverlay {
             }
             SceneChange::Brand { on } => {
                 self.brand = Edit::Set(on);
+                Ok(())
+            }
+            SceneChange::PartyHidden { hidden } => {
+                self.party_hidden = Edit::Set(hidden);
                 Ok(())
             }
             // The dispatcher in `scene_apply` sends only the changes above.

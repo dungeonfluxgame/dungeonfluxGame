@@ -1,10 +1,10 @@
 //! The camera: what it frames, held on the screen, and how a move is blended.
 
 use crate::camera::{Framing, framing, progress};
-use crate::fixture::{Camera, ElementShape, StageElement, StagePivot};
+use crate::fixture::{Camera, ElementShape, ElementView, PivotView};
 
-fn figure(id: &str, x: f32, y: f32) -> StageElement {
-    StageElement {
+fn figure(id: &str, x: f32, y: f32) -> ElementView {
+    ElementView {
         id: id.to_owned(),
         kind: "avatar".to_owned(),
         label: id.to_owned(),
@@ -15,8 +15,10 @@ fn figure(id: &str, x: f32, y: f32) -> StageElement {
         width_units: 9.0,
         height_units: 9.0,
         fields: serde_json::Map::new(),
+        problem: None,
+        travelling: None,
         rotation_degrees: 0,
-        pivot: StagePivot::default(),
+        pivot: PivotView::default(),
     }
 }
 
@@ -123,7 +125,7 @@ fn progress_runs_from_nothing_to_all_and_a_move_of_no_length_is_done() {
 }
 
 mod overlay {
-    use crate::fixture::{Camera, Fixture, StageElement};
+    use crate::fixture::{Camera, ElementView, Fixture};
     use crate::limits::{MAXIMUM_CAMERA_MS, MAXIMUM_NAME_CHARACTERS, MAXIMUM_ZOOM_PERCENT};
     use crate::scene::{SceneChange, SceneError, SceneOverlay};
 
@@ -278,7 +280,7 @@ mod overlay {
 
     #[test]
     fn a_figure_has_a_portrait_only_when_its_portrait_field_names_one() {
-        let parse = |fields: &str| -> StageElement {
+        let parse = |fields: &str| -> ElementView {
             serde_json::from_str(&format!(
                 r#"{{"id":"a","kind":"avatar","label":"A","x":1,"y":1,"color":null,"shape":"circle","width_units":9,"height_units":9{fields}}}"#
             ))
@@ -297,7 +299,7 @@ mod overlay {
 
 mod ceiling {
     use crate::camera::{clamped_zoom, framing_within, zoom_ceiling_percent};
-    use crate::fixture::{Camera, ElementShape, StageElement, StagePivot};
+    use crate::fixture::{Camera, ElementShape, ElementView, PivotView};
     use crate::limits::{MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT};
 
     #[test]
@@ -337,7 +339,7 @@ mod ceiling {
 
     #[test]
     fn the_framing_is_drawn_at_the_ceiling() {
-        let finn = StageElement {
+        let finn = ElementView {
             id: "finn".to_owned(),
             kind: "avatar".to_owned(),
             label: "Finn".to_owned(),
@@ -348,8 +350,10 @@ mod ceiling {
             width_units: 10.0,
             height_units: 10.0,
             fields: serde_json::Map::new(),
+            problem: None,
+            travelling: None,
             rotation_degrees: 0,
-            pivot: StagePivot::default(),
+            pivot: PivotView::default(),
         };
         let look = Camera {
             target: Some("finn".to_owned()),

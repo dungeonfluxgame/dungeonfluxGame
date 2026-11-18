@@ -16,12 +16,14 @@ use crate::continuity::ReplyGate;
 use crate::controls::{Controls, Transition};
 use crate::dom::BrowserError;
 use crate::draw_plan::Snapshot;
-use crate::fixture::{ElementSource, Fixture, FixtureError, FixtureTitle, StageElement};
-use crate::frame::LiveCanvas;
+use crate::fixture::{ElementSource, ElementView, Fixture, FixtureError, FixtureTitle};
+use crate::frame::FrameCanvas;
 use crate::net::NetError;
 use crate::page_log;
 use crate::role::PageRole;
 use crate::scene::SceneOverlay;
+use crate::seat::play::SeatPlay;
+use crate::seat::screen::HeroHeader;
 use crate::timeline::{ErrorSource, FixtureLoadCause};
 
 pub const ROOT_ID: &str = "playground";
@@ -138,7 +140,7 @@ pub struct App {
     /// The loaded fixture with the scene's live changes drawn on it, made when either changes and
     /// shared with what was drawn, so a frame does not copy a fixture.
     pub shown: Option<Rc<Result<Fixture, String>>>,
-    pub live: Option<LiveCanvas>,
+    pub live: Option<FrameCanvas>,
     /// The run of the host `live` came from.
     pub live_boot: String,
     /// The count of the newest frame drawn, which the next frame request names.
@@ -167,6 +169,12 @@ pub struct App {
     pub page: Option<Page>,
     /// The phone's composer: its box, the microphone and the question.
     pub voice: Voice,
+    /// A real phone whose seat plays a character: the live story and asks, which take the place
+    /// of the fixture's phone (`seat::play`).
+    pub seat_play: Option<SeatPlay>,
+    /// A seated phone's header: its player's own hero (`seat::screen::hero_header`), in place of
+    /// the fixture's.
+    pub seat_header: Option<HeroHeader>,
 }
 
 thread_local! {
@@ -209,6 +217,9 @@ impl App {
                 Ok(fixture) => {
                     let mut fixture = fixture.clone();
                     self.scene.apply_to(&mut fixture);
+                    if let Some(play) = &self.seat_play {
+                        fixture.phone = play.phone.clone();
+                    }
                     Ok(fixture)
                 }
                 Err(problem) => Err(problem.to_string()),
@@ -231,7 +242,7 @@ impl App {
 
     /// The elements the shared screen draws now: the scenario's own, or the live canvas's. `None`
     /// when the scenario wants the live canvas and none has arrived.
-    pub fn stage_elements(&self) -> Option<&[StageElement]> {
+    pub fn stage_elements(&self) -> Option<&[ElementView]> {
         stage_elements_of(self.shown.as_deref(), self.live.as_ref())
     }
 }
@@ -239,8 +250,8 @@ impl App {
 /// The elements the shared screen of `shown` draws: the scenario's own, or the live canvas's.
 pub fn stage_elements_of<'a>(
     shown: Option<&'a Result<Fixture, String>>,
-    live: Option<&'a LiveCanvas>,
-) -> Option<&'a [StageElement]> {
+    live: Option<&'a FrameCanvas>,
+) -> Option<&'a [ElementView]> {
     match shown {
         Some(Ok(fixture)) => match &fixture.tv.elements {
             ElementSource::Inline(inline) => Some(inline),

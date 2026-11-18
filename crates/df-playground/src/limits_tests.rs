@@ -33,8 +33,11 @@ fn values_the_old_caps_refused_are_accepted() {
                 SceneChange::PartyAdd {
                     member: PartyMember {
                         name: format!("member {index}"),
-                        hit_points: 1,
-                        maximum_hit_points: 1,
+                        character: None,
+                        hit_points: Some(1),
+                        maximum_hit_points: Some(1),
+                        armor_class: None,
+                        portrait: None,
                         conditions: Vec::new(),
                         color: None,
                     },

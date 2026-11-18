@@ -1,0 +1,947 @@
+{
+  "frames": {
+    "small": {
+      "figure": "a plain wooden artist's posing mannequin, a jointed figure with no face, no hair and no clothes"
+    },
+    "medium": {
+      "figure": "a plain wooden artist's posing mannequin, a jointed figure with no face, no hair and no clothes"
+    },
+    "tall": {
+      "figure": "a plain wooden artist's posing mannequin, a jointed figure with no face, no hair and no clothes"
+    }
+  },
+  "prompts": {
+    "pose": "One full-body figure, {figure}, standing on a plain light grey studio background. It only shows the pose: the whole figure from the top of the head to the feet is in the picture, with a little space above and below. Facing the camera, standing relaxed and straight with the weight on both feet, arms hanging a little away from the body, hands open. Soft even studio light, no shadow on the background, no props, no text. A clean pose reference picture.",
+    "pose_aspect": "2:3",
+    "sheet": "A character reference sheet of the person in the reference picture: three views side by side on one plain light grey studio background, the same person in each, from left to right: a front close-up of the head and shoulders, a three-quarter view from the knees up, and a full-length view from head to feet facing the camera, standing relaxed. Soft even studio light, no props, no text, no labels.",
+    "sheet_aspect": "16:9",
+    "first": "Edit this picture: make the person this fantasy hero: {description}. Keep the exact pose, the framing from the top of the head to the feet, the plain light studio background and the light. Dress them as described, or in simple adventuring clothes that suit them when no clothes are described.",
+    "edit": "Edit this picture of the hero. Change only this: {changes}. Keep everything else exactly as it is: the pose, the framing from head to feet, the face, the body, the clothes, the background and the light.",
+    "pose_shows": "the base pose and framing every version keeps",
+    "lock_sheet": "Edit this reference sheet: put the hero of the reference picture into all three views, the same person in each, with their face, hair, skin, build, height, marks, clothes and gear exactly as the reference shows them: on the left a front close-up of the head and shoulders, in the middle a three-quarter view from the knees up, on the right a full-length view from head to feet. Keep the three framings and the plain studio background. No text, no labels.",
+    "context": "species {species}, class {class}",
+    "detail": "{what} ({kind} on the {region})",
+    "add": "add {detail}",
+    "remove": "remove {detail}",
+    "change": "{noun} from {old} to {new}",
+    "example_species": "A photographic half-body portrait of {what}, in simple adventuring clothes, against a softly blurred fantasy village street. Looking toward the camera. Natural light.",
+    "example_class": "A dramatic photographic half-body action shot of {what}, against a softly blurred fantasy landscape. Cinematic natural light; any magic is clearly visible.",
+    "ready": "Edit this picture: show this same hero, full body from head to feet, in a ready stance: {pose}. Keep their face, hair, skin, build, height, marks, clothes and gear exactly as the reference sheet and this picture show them. A dramatic three-quarter view on a plain dark studio ground with a soft rim light; the whole figure in the picture, nothing cut off. No text.",
+    "headshot": "Edit this picture: a square head-and-shoulders portrait of this same hero, facing the viewer, the face sharp and well lit; keep their face, hair, skin, marks and clothes exactly as the reference sheet and this picture show them. A plain dark studio ground. No text.",
+    "headshot_aspect": "1:1",
+    "half_portrait": "Edit this picture: a half-body portrait of this same hero from the waist up, turned slightly, at ease; keep their face, hair, skin, build, marks, clothes and gear exactly as the reference sheet and this picture show them. A plain dark studio ground with a soft rim light. No text.",
+    "half_portrait_aspect": "3:4"
+  },
+  "roll_details": [
+    {
+      "kind": "scar",
+      "where": "face",
+      "what": "a thin pale scar across the left cheek"
+    },
+    {
+      "kind": "scar",
+      "where": "face",
+      "what": "a scar through the right eyebrow"
+    },
+    {
+      "kind": "body",
+      "where": "face",
+      "what": "a dusting of freckles across the nose"
+    },
+    {
+      "kind": "piercing",
+      "where": "ears",
+      "what": "a small silver ring in one ear"
+    },
+    {
+      "kind": "jewellery",
+      "where": "neck",
+      "what": "a leather cord with a carved bone charm"
+    },
+    {
+      "kind": "tattoo",
+      "where": "left_arm",
+      "what": "a band of knotwork tattooed around the upper arm"
+    },
+    {
+      "kind": "marking",
+      "where": "face",
+      "what": "a faded line of war paint under the eyes"
+    },
+    {
+      "kind": "clothing",
+      "where": "shoulders",
+      "what": "a travel-worn hooded cloak"
+    },
+    {
+      "kind": "body",
+      "where": "left_hand",
+      "what": "a missing tip of the little finger"
+    },
+    {
+      "kind": "jewellery",
+      "where": "right_hand",
+      "what": "a heavy signet ring"
+    }
+  ],
+  "classes": [
+    {
+      "id": "barbarian",
+      "label": "Barbarian",
+      "example": {
+        "picture": "look-class-barbarian.png",
+        "line": "Fury and a great axe",
+        "look": "a broad-shouldered woman barbarian in a roaring rage, mid-swing of a great axe, fur mantle, teeth bared, dust flying"
+      },
+      "ready_pose": "great axe raised two-handed over one shoulder, braced to charge, teeth bared"
+    },
+    {
+      "id": "bard",
+      "label": "Bard",
+      "example": {
+        "picture": "look-class-bard.png",
+        "line": "Songs that work magic",
+        "look": "a young man bard playing a lute mid-song, shimmering golden motes of magic rising from the strings"
+      },
+      "ready_pose": "lute held ready in one hand, the other raised mid-flourish, light on the toes"
+    },
+    {
+      "id": "cleric",
+      "label": "Cleric",
+      "example": {
+        "picture": "look-class-cleric.png",
+        "line": "A god's power in armour",
+        "look": "an older woman cleric in chain mail raising a holy sun symbol that blazes with radiant golden light, a mace in her other hand"
+      },
+      "ready_pose": "holy symbol raised high and glowing, mace ready at the side, feet planted"
+    },
+    {
+      "id": "druid",
+      "label": "Druid",
+      "example": {
+        "picture": "look-class-druid.png",
+        "line": "Nature's magic and wild shapes",
+        "look": "a druid with long grey hair, hands outstretched as twisting vines and leaves spiral up around them, soft green light in the palms"
+      },
+      "ready_pose": "gnarled staff planted, one hand open with green light and leaves swirling around it"
+    },
+    {
+      "id": "fighter",
+      "label": "Fighter",
+      "example": {
+        "picture": "look-class-fighter.png",
+        "line": "Trained steel, any weapon",
+        "look": "a man fighter in chain mail in a braced combat stance, longsword raised and round shield forward"
+      },
+      "ready_pose": "sword drawn and shield raised, braced in a guard stance"
+    },
+    {
+      "id": "monk",
+      "label": "Monk",
+      "example": {
+        "picture": "look-class-monk.png",
+        "line": "Swift fists and inner calm",
+        "look": "a woman monk caught mid flying kick, simple robes flaring, forearms wrapped in cloth"
+      },
+      "ready_pose": "low fighting stance, one open hand forward and the other drawn back, perfectly balanced"
+    },
+    {
+      "id": "paladin",
+      "label": "Paladin",
+      "example": {
+        "picture": "look-class-paladin.png",
+        "line": "A holy oath and heavy plate",
+        "look": "a paladin in polished plate armour lifting a longsword wreathed in bright radiant light"
+      },
+      "ready_pose": "longsword held upright before the face, shield on the arm, standing firm"
+    },
+    {
+      "id": "ranger",
+      "label": "Ranger",
+      "example": {
+        "picture": "look-class-ranger.png",
+        "line": "Bow and blade of the wilds",
+        "look": "a woman ranger in a green hooded cloak drawing a longbow to full draw, arrow nocked, eyes on the target"
+      },
+      "ready_pose": "bow drawn with an arrow nocked, half turned, eyes on a distant target"
+    },
+    {
+      "id": "rogue",
+      "label": "Rogue",
+      "example": {
+        "picture": "look-class-rogue.png",
+        "line": "Quiet steps and a quick knife",
+        "look": "a rogue crouched low in shadow, hood up, two daggers drawn and ready"
+      },
+      "ready_pose": "crouched low, two daggers drawn, weight on the toes"
+    },
+    {
+      "id": "sorcerer",
+      "label": "Sorcerer",
+      "example": {
+        "picture": "look-class-sorcerer.png",
+        "line": "Magic born in the blood",
+        "look": "a young woman sorcerer with crackling fire pouring from both hands, hair lifted by the heat"
+      },
+      "ready_pose": "one hand thrust forward crackling with raw magic, hair lifting in its wind"
+    },
+    {
+      "id": "warlock",
+      "label": "Warlock",
+      "example": {
+        "picture": "look-class-warlock.png",
+        "line": "Power bargained from the dark",
+        "look": "a man warlock in dark layered robes thrusting out one hand that hurls a crackling beam of green eldritch energy"
+      },
+      "ready_pose": "one hand raised wreathed in violet eldritch fire, a pact token glinting at the throat"
+    },
+    {
+      "id": "wizard",
+      "label": "Wizard",
+      "example": {
+        "picture": "look-class-wizard.png",
+        "line": "Spellbooks and arcane study",
+        "look": "an old wizard with a carved staff casting a spell, glowing blue runes circling an open spellbook"
+      },
+      "ready_pose": "staff raised, blue runes circling one hand"
+    }
+  ],
+  "species": {
+    "dragonborn": {
+      "label": "Dragonborn",
+      "frame": "medium",
+      "height_in": [
+        60,
+        84
+      ],
+      "extras": [
+        "scale_colour"
+      ],
+      "example": {
+        "picture": "look-species-dragonborn.png",
+        "line": "Scaled and proud, with a dragon's breath",
+        "look": "a dragonborn: a tall humanoid with a dragon's head and snout, small horns and fine bronze scales over the whole body, no tail"
+      }
+    },
+    "dwarf": {
+      "label": "Dwarf",
+      "frame": "medium",
+      "height_in": [
+        48,
+        60
+      ],
+      "example": {
+        "picture": "look-species-dwarf.png",
+        "line": "Short, sturdy and stubborn",
+        "look": "a dwarf: a short, stocky, broad-shouldered person about four and a half feet tall with a thick braided beard"
+      }
+    },
+    "elf": {
+      "label": "Elf",
+      "frame": "medium",
+      "height_in": [
+        60,
+        72
+      ],
+      "extras": [
+        "ear_shape"
+      ],
+      "example": {
+        "picture": "look-species-elf.png",
+        "line": "Tall, graceful and long-lived",
+        "look": "an elf: a slender, graceful person with long pointed ears and fine, ageless features"
+      }
+    },
+    "gnome": {
+      "label": "Gnome",
+      "frame": "small",
+      "height_in": [
+        36,
+        48
+      ],
+      "example": {
+        "picture": "look-species-gnome.png",
+        "line": "Tiny, curious and quick-witted",
+        "look": "a gnome: a small, lively person about three and a half feet tall with a large nose and bright curious eyes"
+      }
+    },
+    "goliath": {
+      "label": "Goliath",
+      "frame": "tall",
+      "height_in": [
+        84,
+        96
+      ],
+      "example": {
+        "picture": "look-species-goliath.png",
+        "line": "Towering and strong as stone",
+        "look": "a goliath: a towering, heavily muscled person over seven feet tall with grey stone-like skin marked with darker patches"
+      }
+    },
+    "halfling": {
+      "label": "Halfling",
+      "frame": "small",
+      "height_in": [
+        24,
+        36
+      ],
+      "example": {
+        "picture": "look-species-halfling.png",
+        "line": "Small, nimble and lucky",
+        "look": "a halfling: a small, evenly proportioned person about three feet tall with curly hair and a friendly face"
+      }
+    },
+    "human": {
+      "label": "Human",
+      "frame": "medium",
+      "height_in": [
+        48,
+        84
+      ],
+      "example": {
+        "picture": "look-species-human.png",
+        "line": "Every shape and every story",
+        "look": "a human: an ordinary weathered adult traveller"
+      }
+    },
+    "orc": {
+      "label": "Orc",
+      "frame": "medium",
+      "height_in": [
+        72,
+        84
+      ],
+      "extras": [
+        "tusks"
+      ],
+      "example": {
+        "picture": "look-species-orc.png",
+        "line": "Tusked, tough and relentless",
+        "look": "an orc: a tall, powerfully built person with grey-green skin, small tusks from the lower jaw and a heavy brow"
+      }
+    },
+    "tiefling": {
+      "label": "Tiefling",
+      "frame": "medium",
+      "height_in": [
+        48,
+        84
+      ],
+      "extras": [
+        "horns",
+        "tail"
+      ],
+      "example": {
+        "picture": "look-species-tiefling.png",
+        "line": "Horned and tailed, touched by fiends",
+        "look": "a tiefling: a person with curving horns, deep red skin, solid golden eyes and a long thin tail"
+      }
+    }
+  },
+  "controls": [
+    {
+      "id": "presentation",
+      "label": "Presentation",
+      "noun": "presentation",
+      "phrase": "{value}",
+      "kind": {
+        "type": "chip",
+        "default": "androgynous",
+        "options": [
+          {
+            "id": "woman",
+            "label": "Woman",
+            "words": "a woman"
+          },
+          {
+            "id": "man",
+            "label": "Man",
+            "words": "a man"
+          },
+          {
+            "id": "androgynous",
+            "label": "Androgynous",
+            "words": "an androgynous person"
+          }
+        ]
+      }
+    },
+    {
+      "id": "height",
+      "label": "Height",
+      "noun": "height",
+      "phrase": "about {value} tall",
+      "kind": {
+        "type": "height"
+      }
+    },
+    {
+      "id": "build",
+      "label": "Build",
+      "noun": "build",
+      "phrase": "a {value} build",
+      "kind": {
+        "type": "steps",
+        "words": [
+          "slight",
+          "lean",
+          "average",
+          "sturdy",
+          "broad",
+          "massive"
+        ],
+        "default": 2
+      }
+    },
+    {
+      "id": "age",
+      "label": "Age",
+      "noun": "age",
+      "phrase": "{value}",
+      "kind": {
+        "type": "steps",
+        "words": [
+          "a young adult",
+          "an adult in their prime",
+          "middle-aged",
+          "older, greying",
+          "elderly"
+        ],
+        "default": 1
+      }
+    },
+    {
+      "id": "hair_length",
+      "label": "Hair length",
+      "noun": "hair length",
+      "phrase": "{value} hair",
+      "kind": {
+        "type": "steps",
+        "words": [
+          "shaved",
+          "cropped",
+          "short",
+          "chin-length",
+          "shoulder-length",
+          "long",
+          "very long"
+        ],
+        "default": 2
+      }
+    },
+    {
+      "id": "skin",
+      "label": "Skin",
+      "noun": "skin",
+      "phrase": "{value} skin",
+      "kind": {
+        "type": "swatch",
+        "default": "light",
+        "options": [
+          {
+            "id": "pale",
+            "label": "Pale",
+            "words": "pale",
+            "colour": "#f3dccb"
+          },
+          {
+            "id": "light",
+            "label": "Light",
+            "words": "light",
+            "colour": "#e6bf9f"
+          },
+          {
+            "id": "olive",
+            "label": "Olive",
+            "words": "olive",
+            "colour": "#c49a6c"
+          },
+          {
+            "id": "tan",
+            "label": "Tan",
+            "words": "tanned",
+            "colour": "#b07d52"
+          },
+          {
+            "id": "brown",
+            "label": "Brown",
+            "words": "brown",
+            "colour": "#8a5a3b"
+          },
+          {
+            "id": "deep",
+            "label": "Deep",
+            "words": "deep brown",
+            "colour": "#5a3825"
+          },
+          {
+            "id": "charcoal",
+            "label": "Charcoal",
+            "words": "charcoal-black",
+            "colour": "#2b2a2c"
+          },
+          {
+            "id": "grey",
+            "label": "Grey",
+            "words": "stone grey",
+            "colour": "#8e9192"
+          },
+          {
+            "id": "green",
+            "label": "Green",
+            "words": "grey-green",
+            "colour": "#7b8f63"
+          },
+          {
+            "id": "red",
+            "label": "Red",
+            "words": "deep red",
+            "colour": "#9c3b32"
+          },
+          {
+            "id": "blue",
+            "label": "Blue",
+            "words": "pale blue",
+            "colour": "#7f9cc0"
+          }
+        ]
+      }
+    },
+    {
+      "id": "hair_colour",
+      "label": "Hair",
+      "noun": "hair colour",
+      "phrase": "{value} hair",
+      "kind": {
+        "type": "swatch",
+        "default": "brown",
+        "options": [
+          {
+            "id": "black",
+            "label": "Black",
+            "words": "black",
+            "colour": "#1d1b1a"
+          },
+          {
+            "id": "brown",
+            "label": "Brown",
+            "words": "brown",
+            "colour": "#5b3a24"
+          },
+          {
+            "id": "auburn",
+            "label": "Auburn",
+            "words": "auburn",
+            "colour": "#8c3b1f"
+          },
+          {
+            "id": "red",
+            "label": "Red",
+            "words": "bright red",
+            "colour": "#b5381f"
+          },
+          {
+            "id": "blond",
+            "label": "Blond",
+            "words": "blond",
+            "colour": "#d8b768"
+          },
+          {
+            "id": "grey",
+            "label": "Grey",
+            "words": "grey",
+            "colour": "#9a9a98"
+          },
+          {
+            "id": "white",
+            "label": "White",
+            "words": "white",
+            "colour": "#ece9e2"
+          },
+          {
+            "id": "blue_black",
+            "label": "Blue-black",
+            "words": "blue-black",
+            "colour": "#1b2133"
+          }
+        ]
+      }
+    },
+    {
+      "id": "eyes",
+      "label": "Eyes",
+      "noun": "eye colour",
+      "phrase": "{value} eyes",
+      "kind": {
+        "type": "swatch",
+        "default": "brown",
+        "options": [
+          {
+            "id": "brown",
+            "label": "Brown",
+            "words": "brown",
+            "colour": "#5a3a22"
+          },
+          {
+            "id": "hazel",
+            "label": "Hazel",
+            "words": "hazel",
+            "colour": "#8d7340"
+          },
+          {
+            "id": "green",
+            "label": "Green",
+            "words": "green",
+            "colour": "#4f7a46"
+          },
+          {
+            "id": "blue",
+            "label": "Blue",
+            "words": "blue",
+            "colour": "#4f74a8"
+          },
+          {
+            "id": "grey",
+            "label": "Grey",
+            "words": "grey",
+            "colour": "#8a9096"
+          },
+          {
+            "id": "amber",
+            "label": "Amber",
+            "words": "amber",
+            "colour": "#c98a22"
+          },
+          {
+            "id": "violet",
+            "label": "Violet",
+            "words": "violet",
+            "colour": "#7a4f9c"
+          },
+          {
+            "id": "black",
+            "label": "Black",
+            "words": "solid black",
+            "colour": "#111111"
+          }
+        ]
+      }
+    },
+    {
+      "id": "face_shape",
+      "label": "Face",
+      "noun": "face shape",
+      "phrase": "a {value} face",
+      "kind": {
+        "type": "chip",
+        "default": "oval",
+        "options": [
+          {
+            "id": "oval",
+            "label": "Oval",
+            "words": "oval"
+          },
+          {
+            "id": "round",
+            "label": "Round",
+            "words": "round"
+          },
+          {
+            "id": "square",
+            "label": "Square",
+            "words": "square-jawed"
+          },
+          {
+            "id": "long",
+            "label": "Long",
+            "words": "long"
+          },
+          {
+            "id": "heart",
+            "label": "Heart",
+            "words": "heart-shaped"
+          },
+          {
+            "id": "angular",
+            "label": "Angular",
+            "words": "sharp, angular"
+          }
+        ]
+      }
+    },
+    {
+      "id": "hair_style",
+      "label": "Hair style",
+      "noun": "hair style",
+      "phrase": "hair worn {value}",
+      "kind": {
+        "type": "chip",
+        "default": "loose",
+        "options": [
+          {
+            "id": "loose",
+            "label": "Loose",
+            "words": "loose"
+          },
+          {
+            "id": "braided",
+            "label": "Braided",
+            "words": "in braids"
+          },
+          {
+            "id": "tied",
+            "label": "Tied back",
+            "words": "tied back"
+          },
+          {
+            "id": "bun",
+            "label": "Bun",
+            "words": "in a bun"
+          },
+          {
+            "id": "curly",
+            "label": "Curly",
+            "words": "in loose curls"
+          },
+          {
+            "id": "mohawk",
+            "label": "Crest",
+            "words": "as a shaved-sided crest"
+          }
+        ]
+      }
+    },
+    {
+      "id": "facial_hair",
+      "label": "Facial hair",
+      "noun": "facial hair",
+      "phrase": "{value}",
+      "kind": {
+        "type": "chip",
+        "default": "none",
+        "options": [
+          {
+            "id": "none",
+            "label": "None",
+            "words": "no facial hair"
+          },
+          {
+            "id": "stubble",
+            "label": "Stubble",
+            "words": "stubble"
+          },
+          {
+            "id": "moustache",
+            "label": "Moustache",
+            "words": "a moustache"
+          },
+          {
+            "id": "short_beard",
+            "label": "Short beard",
+            "words": "a short beard"
+          },
+          {
+            "id": "long_beard",
+            "label": "Long beard",
+            "words": "a long beard"
+          },
+          {
+            "id": "braided_beard",
+            "label": "Braided beard",
+            "words": "a braided beard"
+          }
+        ]
+      }
+    },
+    {
+      "id": "scale_colour",
+      "label": "Scales",
+      "noun": "scale colour",
+      "phrase": "{value} scales",
+      "extra": true,
+      "kind": {
+        "type": "swatch",
+        "default": "bronze",
+        "options": [
+          {
+            "id": "red",
+            "label": "Red",
+            "words": "red",
+            "colour": "#9c2b22"
+          },
+          {
+            "id": "blue",
+            "label": "Blue",
+            "words": "blue",
+            "colour": "#2c5a9c"
+          },
+          {
+            "id": "green",
+            "label": "Green",
+            "words": "green",
+            "colour": "#2f7a3e"
+          },
+          {
+            "id": "black",
+            "label": "Black",
+            "words": "black",
+            "colour": "#1a1a1a"
+          },
+          {
+            "id": "white",
+            "label": "White",
+            "words": "white",
+            "colour": "#e8e8e8"
+          },
+          {
+            "id": "brass",
+            "label": "Brass",
+            "words": "brass",
+            "colour": "#b38b3c"
+          },
+          {
+            "id": "bronze",
+            "label": "Bronze",
+            "words": "bronze",
+            "colour": "#8c5a2b"
+          },
+          {
+            "id": "copper",
+            "label": "Copper",
+            "words": "copper",
+            "colour": "#b0643a"
+          },
+          {
+            "id": "gold",
+            "label": "Gold",
+            "words": "gold",
+            "colour": "#d4a72c"
+          },
+          {
+            "id": "silver",
+            "label": "Silver",
+            "words": "silver",
+            "colour": "#b8bcc2"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ear_shape",
+      "label": "Ears",
+      "noun": "ears",
+      "phrase": "{value} ears",
+      "extra": true,
+      "kind": {
+        "type": "chip",
+        "default": "long",
+        "options": [
+          {
+            "id": "short",
+            "label": "Short points",
+            "words": "short pointed"
+          },
+          {
+            "id": "long",
+            "label": "Long points",
+            "words": "long pointed"
+          },
+          {
+            "id": "swept",
+            "label": "Swept back",
+            "words": "long swept-back"
+          }
+        ]
+      }
+    },
+    {
+      "id": "tusks",
+      "label": "Tusks",
+      "noun": "tusks",
+      "phrase": "{value}",
+      "extra": true,
+      "kind": {
+        "type": "chip",
+        "default": "small",
+        "options": [
+          {
+            "id": "small",
+            "label": "Small",
+            "words": "small lower tusks"
+          },
+          {
+            "id": "large",
+            "label": "Large",
+            "words": "large lower tusks"
+          },
+          {
+            "id": "chipped",
+            "label": "Chipped",
+            "words": "chipped lower tusks"
+          }
+        ]
+      }
+    },
+    {
+      "id": "horns",
+      "label": "Horns",
+      "noun": "horns",
+      "phrase": "{value}",
+      "extra": true,
+      "kind": {
+        "type": "chip",
+        "default": "curled",
+        "options": [
+          {
+            "id": "curled",
+            "label": "Curled",
+            "words": "horns curling back from the brow"
+          },
+          {
+            "id": "straight",
+            "label": "Straight",
+            "words": "straight horns rising from the brow"
+          },
+          {
+            "id": "ram",
+            "label": "Ram",
+            "words": "heavy ram's horns"
+          },
+          {
+            "id": "small",
+            "label": "Small",
+            "words": "small stubby horns"
+          }
+        ]
+      }
+    },
+    {
+      "id": "tail",
+      "label": "Tail",
+      "noun": "tail",
+      "phrase": "{value}",
+      "extra": true,
+      "kind": {
+        "type": "chip",
+        "default": "long",
+        "options": [
+          {
+            "id": "long",
+            "label": "Long",
+            "words": "a long thin tail"
+          },
+          {
+            "id": "short",
+            "label": "Short",
+            "words": "a short tail"
+          },
+          {
+            "id": "tufted",
+            "label": "Tufted",
+            "words": "a long tail with a tufted tip"
+          }
+        ]
+      }
+    }
+  ]
+}

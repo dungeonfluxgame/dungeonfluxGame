@@ -71,6 +71,8 @@ pub enum ScreenError {
     JoinedOverCapacity { joined: u8, capacity: u8 },
     /// A focus id that is neither `begin` nor `seat:<n>` for a seat number in range.
     InvalidFocus(String),
+    /// A join QR code is not a square of dark and light modules (`QrModules::is_valid`).
+    InvalidQr,
 }
 
 impl fmt::Display for ScreenError {
@@ -117,6 +119,8 @@ impl fmt::Display for ScreenError {
                 formatter,
                 "the lobby's focus is `{BEGIN_FOCUS_ID}` or `seat:<n>` for a seat from 1 to {MAXIMUM_LOBBY_SEATS}, not `{id}`"
             ),
+            Self::InvalidQr => formatter
+                .write_str("a join QR code is a square of at most 177 modules a side, each 0 or 1"),
         }
     }
 }

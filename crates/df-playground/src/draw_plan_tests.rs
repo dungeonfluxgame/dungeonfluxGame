@@ -126,8 +126,11 @@ fn a_party_change_a_picture_and_a_choice_each_redraw_their_own_piece() {
         SceneChange::PartyAdd {
             member: crate::fixture::PartyMember {
                 name: "Pip".to_owned(),
-                hit_points: 3,
-                maximum_hit_points: 9,
+                character: None,
+                hit_points: Some(3),
+                maximum_hit_points: Some(9),
+                armor_class: None,
+                portrait: None,
                 conditions: Vec::new(),
                 color: None,
             },
@@ -564,4 +567,34 @@ fn live_changes_starting_or_ending_redraw_the_notes() {
     assert!(DrawPlan::between(Some(&quiet), &live).notes);
     assert!(DrawPlan::between(Some(&live), &quiet).notes);
     assert!(!DrawPlan::between(Some(&live), &live).notes);
+}
+
+#[test]
+fn a_clue_put_on_the_table_and_a_chapter_title_each_redraw_their_own_piece() {
+    let mut before = fixture();
+    before.tv.clues = Some(crate::clues::ClueBoard {
+        notes: vec![crate::clues::ClueNote {
+            id: "seal".to_owned(),
+            name: "The seal".to_owned(),
+            detail: "A crowned serpent.".to_owned(),
+            worked_out: false,
+            picture: None,
+        }],
+    });
+    let old = snapshot(&before);
+    let mut shown = before.clone();
+    shown.tv.shown_clue = Some("seal".to_owned());
+    let plan = DrawPlan::between(Some(&old), &snapshot(&shown));
+    assert_eq!(parts(&plan), BTreeSet::from([Part::TvShownClue]));
+    let mut titled = before;
+    titled.tv.title_card = Some(crate::kit::title_card::TitleCard {
+        kicker: Some("Entering".to_owned()),
+        ..crate::kit::title_card::TitleCard::default()
+    });
+    let plan = DrawPlan::between(Some(&old), &snapshot(&titled));
+    // The live phone's Story page mirrors the title over its picture.
+    assert_eq!(
+        parts(&plan),
+        BTreeSet::from([Part::TvTitle, Part::PhoneImage])
+    );
 }

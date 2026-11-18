@@ -15,7 +15,7 @@ use crate::bubble_place::BubbleSide;
 use crate::clues::ClueBoard;
 use crate::controls::TransitionStyle;
 use crate::copy::{ReadingPace, caption_dwell_ms, result_card_dwell_ms, word_count};
-use crate::fixture::{Fixture, StageElement};
+use crate::fixture::{ElementView, Fixture};
 use crate::image_layout::speaker_masks;
 use crate::limits::{
     MAXIMUM_REPORTED_ERROR_CHARACTERS, MAXIMUM_REPORTED_ERRORS, MAXIMUM_TIMELINE_ID_CHARACTERS,
@@ -384,7 +384,7 @@ impl Showing {
     pub fn of(
         scene: Option<&str>,
         fixture: Option<&Fixture>,
-        elements: Option<&[StageElement]>,
+        elements: Option<&[ElementView]>,
         pace: ReadingPace,
         shows_tv: bool,
     ) -> Self {

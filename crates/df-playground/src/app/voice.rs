@@ -20,25 +20,28 @@ mod capture;
 // TODO(DEV-12): a browser-target test of the composer redraw keeping the draft, focus and caret.
 
 use gloo_timers::future::TimeoutFuture;
-use serde::de::{DeserializeOwned, IgnoredAny};
+use serde::de::IgnoredAny;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{Event, HtmlInputElement, KeyboardEvent};
 
 use self::capture::Capture;
-use super::state::{App, log_error, try_with_app, with_app_mut};
+use super::state::{App, log_error, try_with_app, with_app, with_app_mut};
 use crate::composer::{
     ComposerEvent, ComposerInputs, ComposerState, ComposerView, MicLook, Note, SpeechAvailability,
     TranscribeFailure, step, targets_for,
 };
 use crate::copy::status_blocks_input;
-use crate::dev_reply::{HostReply, Rejection};
 use crate::dom::js_message;
 use crate::image_layout::cast;
-use crate::limits::{CAPTURE_REFRESH_MS, COMPOSER_NOTE_MS, MAXIMUM_QUESTION_CHARACTERS};
-use crate::net::{NetError, fetch_text, post_bytes, post_json};
+use crate::limits::{
+    CAPTURE_REFRESH_MS, COMPOSER_NOTE_MS, MAXIMUM_QUESTION_CHARACTERS, WORK_REQUEST_TIMEOUT_MS,
+};
+use crate::net::{Call, CallError, NetError, call};
 use crate::page_log::{now_ms, with_log};
+use crate::pages::screens::TalkMic;
 use crate::path;
+use crate::seat::wire::{SayKind, SeatErrorKind, SeatStt};
 use crate::timeline::{EndReason, ErrorSource, TimelineKind, cut};
 use crate::view;
 use crate::voice_capture::MicrophoneError;
@@ -50,6 +53,15 @@ const CAPTURE_RECORD_ID: &str = "microphone";
 const TRANSCRIBE_RECORD_ID: &str = "speech";
 /// Longest refusal sentence from the host shown in the composer, in characters.
 const MAXIMUM_REFUSAL_CHARACTERS: usize = 240;
+
+/// Where a recording's words go: the composer's box, or a seated phone's Talk field. The phone has
+/// one recorder, so one recording at a time, for one of them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum MicTarget {
+    #[default]
+    Composer,
+    Talk,
+}
 
 /// The composer's memory, part of the page's state. The draft is the box's text, kept here so a
 /// redraw of the phone gives the box back what was in it.
@@ -72,6 +84,10 @@ pub struct Voice {
     capture_record: Option<u64>,
     transcribe_record: Option<u64>,
     ask_record: Option<u64>,
+    /// Where the recording's words go.
+    target: MicTarget,
+    /// The Talk page's microphone as it was last drawn, so it is drawn again only when it changes.
+    talk_drawn: TalkMic,
 }
 
 impl Voice {
@@ -87,6 +103,10 @@ fn with_voice<R>(change: impl FnOnce(&mut Voice) -> R) -> R {
 /// What the composer shows now and the text in its box, read from the page's state and the
 /// composer's memory.
 pub fn composer_inputs(app: &App) -> (ComposerView, String) {
+    // A seat that plays a character speaks to the room or to someone in the scene, never to
+    // itself. The Act composer's line goes to whom the player picked with it, else to the room:
+    // the Talk page's choice is that page's own and never carries over to an Act line.
+    let seated = app.seat_play.is_some();
     let (blocked, cast_names) = match app.shown.as_deref() {
         Some(Ok(fixture)) => (
             status_blocks_input(&app.controls.status_for(&fixture.phone.status)),
@@ -99,23 +119,82 @@ pub fn composer_inputs(app: &App) -> (ComposerView, String) {
         _ => (true, Vec::new()),
     };
     let voice = &app.voice;
-    let targets = targets_for(&cast_names, &voice.personas);
+    // A seat talks by voice by its own switch, which the host keeps; the dev bar's is the
+    // playground's.
+    let seat_speech;
+    let speech = if seated {
+        seat_speech = seat_speech_of(super::pages::seat_stt());
+        &seat_speech
+    } else if app.controls.stt_on {
+        &voice.speech
+    } else {
+        &SpeechAvailability::TurnedOff
+    };
+    let (targets, chosen) = if seated {
+        (
+            super::pages::targets(),
+            Some(voice.chosen.as_deref().unwrap_or(super::pages::ROOM_TARGET)),
+        )
+    } else {
+        (
+            targets_for(&cast_names, &voice.personas),
+            voice.chosen.as_deref(),
+        )
+    };
     let view = ComposerView::of(&ComposerInputs {
         state: voice.state,
         has_text: voice.has_text(),
         blocked,
-        speech: if app.controls.stt_on {
-            &voice.speech
-        } else {
-            &SpeechAvailability::TurnedOff
-        },
+        speech,
         targets: &targets,
-        chosen: voice.chosen.as_deref(),
+        chosen,
         elapsed_ms: voice.elapsed_ms,
         level_permille: voice.level_permille,
         note: voice.note.as_ref(),
     });
     (view, voice.draft.clone())
+}
+
+/// Whether a seat can talk by voice, from the host's word on its switch and the table's speech.
+fn seat_speech_of(stt: SeatStt) -> SpeechAvailability {
+    match (stt.available, stt.on) {
+        (false, _) => SpeechAvailability::NotConfigured { missing: None },
+        (true, false) => SpeechAvailability::TurnedOff,
+        (true, true) => SpeechAvailability::Ready,
+    }
+}
+
+/// The Talk page's microphone: the seat's switch, and whether the one recorder is free or
+/// recording for Talk.
+pub(super) fn talk_mic(stt: SeatStt) -> TalkMic {
+    if !stt.available {
+        return TalkMic::Unavailable;
+    }
+    if !stt.on {
+        return TalkMic::Off;
+    }
+    let (state, target) =
+        try_with_app(|app| (app.voice.state, app.voice.target)).unwrap_or_default();
+    match (state, target) {
+        (ComposerState::Recording, MicTarget::Talk) => TalkMic::Recording,
+        (ComposerState::Idle | ComposerState::Draft, _) => TalkMic::Ready,
+        _ => TalkMic::Busy,
+    }
+}
+
+/// The player tapped the Talk page's microphone: it starts a recording for the Talk field, or
+/// stops the one it started.
+pub(super) fn talk_mic_pressed() {
+    match with_voice(|voice| (voice.state, voice.target)) {
+        (ComposerState::Recording, MicTarget::Talk) => stop_recording(false),
+        (ComposerState::Idle | ComposerState::Draft, _) => begin_recording(MicTarget::Talk),
+        _ => {}
+    }
+}
+
+/// Brings the composer up to date with whom it may speak to: the scene's people changed.
+pub(super) fn refresh() {
+    sync();
 }
 
 /// Brings the composer's elements up to date, in place, so the box keeps its focus and caret.
@@ -128,6 +207,11 @@ fn sync() {
             ErrorSource::Draw,
             &format!("could not update the composer: {}", js_message(&error)),
         );
+    }
+    // The Talk page shares the recorder: it is drawn again when its microphone changes.
+    let mic = talk_mic(super::pages::seat_stt());
+    if with_voice(|voice| std::mem::replace(&mut voice.talk_drawn, mic) != mic) {
+        super::pages::refresh_talk();
     }
 }
 
@@ -156,6 +240,25 @@ fn close_record(record: Option<u64>, reason: EndReason) {
 /// Notes a failure for the report by its closed key. Nothing the person said goes in it.
 fn note_failure(source: ErrorSource, what: &str, key: &str) {
     crate::page_log::note_error(source, &format!("{what}: {key}"));
+}
+
+/// Shows under the box, for a while, why the table did not take a line sent another way (a
+/// suggested card), in the player's words.
+pub(super) fn show_refusal(message: &str) {
+    let mut message = message.to_owned();
+    cut(&mut message, MAXIMUM_REFUSAL_CHARACTERS);
+    show_note(Note::AskRefused(message));
+}
+
+/// Shows what became of a recording where its words were going: under the composer's box, or on
+/// the Talk page.
+fn show_mic_note(note: Note) {
+    if with_voice(|voice| voice.target) == MicTarget::Talk {
+        super::pages::note_problem(Some(note.text()));
+        sync();
+    } else {
+        show_note(note);
+    }
 }
 
 /// Shows `note` under the box for a while.
@@ -201,7 +304,8 @@ pub fn on_action(action: &str) -> bool {
     }
 }
 
-/// The person chose someone else to talk to.
+/// The person chose someone else to talk to with the composer's line (the Talk page keeps its own
+/// choice).
 pub fn select(id: String) {
     with_voice(|voice| voice.chosen = Some(id));
     sync();
@@ -210,20 +314,21 @@ pub fn select(id: String) {
 fn on_mic() {
     match with_voice(|voice| voice.state) {
         ComposerState::Recording => stop_recording(false),
-        ComposerState::Idle | ComposerState::Draft => begin_recording(),
+        ComposerState::Idle | ComposerState::Draft => begin_recording(MicTarget::Composer),
         _ => {}
     }
 }
 
-/// Asks the browser for the microphone. This is called from the click, so the browser may ask the
-/// person.
-fn begin_recording() {
+/// Asks the browser for the microphone, for the words of `target`. This is called from the click,
+/// so the browser may ask the person.
+fn begin_recording(target: MicTarget) {
     let ready = try_with_app(|app| composer_inputs(app).0.mic == MicLook::Ready).unwrap_or(false);
     if !ready {
         return;
     }
     let generation = with_voice(|voice| {
         voice.state = step(voice.state, ComposerEvent::MicPressed, voice.has_text());
+        voice.target = target;
         voice.generation += 1;
         voice.note = None;
         voice.elapsed_ms = 0;
@@ -312,7 +417,7 @@ fn fail_capture(error: MicrophoneError) {
     });
     close_record(record, EndReason::Failed);
     note_failure(ErrorSource::Audio, "microphone", error.key());
-    show_note(Note::Capture(error));
+    show_mic_note(Note::Capture(error));
 }
 
 /// The person stopped the recording (or it reached the longest): it is sent to be written down.
@@ -340,45 +445,30 @@ fn stop_recording(reached_longest: bool) {
             });
             sync();
             if reached_longest {
-                show_note(Note::ClippedAtLongest);
+                show_mic_note(Note::ClippedAtLongest);
             }
             spawn_local(transcribe(recording, generation));
         }
     }
 }
 
-/// Why a host request did not give a value.
-enum ReplyProblem {
-    /// The host refused, with the kind of its typed error and its own sentence.
-    Refused(Rejection),
-    /// The host could not be reached.
-    Unreachable,
-    /// The host answered with something that is not a reply.
-    Unreadable,
-}
-
-/// Reads the host's answer to a request. A refusal arrives with an error status, so the body of
-/// one is read as a reply too.
-fn read_reply<T: DeserializeOwned>(answer: Result<String, NetError>) -> Result<T, ReplyProblem> {
-    let text = match answer {
-        Ok(text) => text,
-        Err(NetError::Status { body, .. }) => body,
-        Err(_) => return Err(ReplyProblem::Unreachable),
-    };
-    serde_json::from_str::<HostReply<T>>(&text)
-        .map_err(|_| ReplyProblem::Unreadable)?
-        .into_result()
-        .map_err(ReplyProblem::Refused)
-}
-
-/// Sends a recording to the host and puts the text it writes down in the box as a draft.
+/// Sends a recording to the host and puts the text it writes down in the box as a draft. A
+/// seated phone sends it on its seat's route, by its own switch.
 async fn transcribe(mut recording: Vec<u8>, generation: u64) {
-    let answer = post_bytes(
-        path::SPEECH_TRANSCRIBE,
-        path::SPEECH_CONTENT_TYPE,
-        &recording,
-    )
-    .await;
+    let seated = with_app(|app| app.seat_play.is_some());
+    let address = if seated {
+        path::PLAY_SEAT_TRANSCRIBE
+    } else {
+        path::SPEECH_TRANSCRIBE
+    };
+    // Writing a recording down waits on the speech service: it is given the time of work.
+    let request = Call::post_bytes(address, path::SPEECH_CONTENT_TYPE, &recording)
+        .within(WORK_REQUEST_TIMEOUT_MS);
+    let answer = if seated {
+        super::seat::seat_call::<Transcript, SpeechErrorKind>(request).await
+    } else {
+        call::<Transcript, SpeechErrorKind>(request).await
+    };
     // The recording is request-lived: scrub it as soon as the host has answered.
     recording.fill(0);
     drop(recording);
@@ -389,13 +479,15 @@ async fn transcribe(mut recording: Vec<u8>, generation: u64) {
         // Cancelled, or the page was hidden: the answer is not applied.
         return;
     }
-    match read_reply::<Transcript>(answer) {
+    match answer {
         Ok(transcript) => accept_transcript(&transcript.text),
-        Err(ReplyProblem::Refused(rejection)) => {
+        Err(CallError::Refused(rejection)) => {
             fail_transcribe(TranscribeFailure::of_kind(rejection.kind));
         }
-        Err(ReplyProblem::Unreachable) => fail_transcribe(TranscribeFailure::Unreachable),
-        Err(ReplyProblem::Unreadable) => fail_transcribe(TranscribeFailure::Host),
+        Err(CallError::Net(_)) => fail_transcribe(TranscribeFailure::Unreachable),
+        Err(CallError::Unreadable { .. } | CallError::Unwritable { .. }) => {
+            fail_transcribe(TranscribeFailure::Host);
+        }
     }
 }
 
@@ -405,6 +497,17 @@ fn accept_transcript(text: &str) {
     let text = text.trim();
     if text.is_empty() {
         fail_transcribe(TranscribeFailure::NothingHeard);
+        return;
+    }
+    if with_voice(|voice| voice.target) == MicTarget::Talk {
+        // The words are the Talk field's: the composer comes back to rest as it was.
+        let record = with_voice(|voice| {
+            voice.state = ComposerState::at_rest(voice.has_text());
+            voice.transcribe_record.take()
+        });
+        close_record(record, EndReason::Ended);
+        super::pages::take_words(text);
+        sync();
         return;
     }
     let draft = with_voice(|voice| {
@@ -434,7 +537,7 @@ fn fail_transcribe(failure: TranscribeFailure) {
     });
     close_record(record, EndReason::Failed);
     note_failure(ErrorSource::Net, "transcription", failure.key());
-    show_note(Note::Transcribe(failure));
+    show_mic_note(Note::Transcribe(failure));
 }
 
 /// Gives up what the composer was doing with the microphone or the recording: the person cancelled,
@@ -473,72 +576,102 @@ fn send() {
             return false;
         }
         voice.note = None;
-        voice.ask_record = open_record(TimelineKind::Ask, &character);
+        let asked = if character.is_empty() {
+            "room"
+        } else {
+            character.as_str()
+        };
+        voice.ask_record = open_record(TimelineKind::Ask, asked);
         true
     });
     if !started {
         return;
     }
     sync();
-    spawn_local(ask(character, question));
+    if with_app(|app| app.seat_play.is_some()) {
+        let to = Some(character).filter(|id| id != super::pages::ROOM_TARGET);
+        spawn_local(say_as_seat(question, to));
+    } else {
+        spawn_local(ask(character, question));
+    }
+}
+
+/// Says the draft as the seat's character, as written, to `to` (the room when none), in answer
+/// to what the table asks it.
+async fn say_as_seat(line: String, to: Option<String>) {
+    match super::seat::say(&line, to, SayKind::Answer, None).await {
+        Ok(()) => asked(),
+        Err(error) => {
+            let why = match &error {
+                CallError::Refused(rejection) => {
+                    rejection.kind.map_or("refused", SeatErrorKind::key)
+                }
+                other => failure_key(other),
+            };
+            ask_failed(why, Note::AskRefused(super::seat::player_words(&error)));
+        }
+    }
+}
+
+/// The draft was taken: the box empties and the composer is ready again.
+fn asked() {
+    let seated = with_app(|app| app.seat_play.is_some());
+    let record = with_voice(|voice| {
+        voice.draft.clear();
+        voice.state = step(voice.state, ComposerEvent::Answered, false);
+        // A seat's Act line is put to someone only when they are picked with it: the next one
+        // starts at the room again.
+        if seated {
+            voice.chosen = None;
+        }
+        voice.ask_record.take()
+    });
+    close_record(record, EndReason::Ended);
+    put_text("", false);
+    sync();
 }
 
 /// Puts the question to the host and waits for the answer. The host shows the character thinking,
 /// then speaking, so the page only learns whether the question was taken.
 async fn ask(character: String, question: String) {
-    let body = match serde_json::to_string(&AskRequest::spoken(&character, &question)) {
-        Ok(body) => body,
-        Err(error) => {
-            log_error(
-                ErrorSource::Net,
-                &format!("could not write the question: {error}"),
+    let request = Call::post(
+        path::PERSONA_ASK,
+        &AskRequest::spoken(&character, &question),
+    );
+    match call::<IgnoredAny, SpeechErrorKind>(request).await {
+        Ok(_) => asked(),
+        Err(CallError::Refused(rejection)) => {
+            let mut message = rejection.message;
+            cut(&mut message, MAXIMUM_REFUSAL_CHARACTERS);
+            ask_failed(
+                rejection.kind.map_or("refused", SpeechErrorKind::key),
+                Note::AskRefused(message),
             );
-            ask_failed(&ReplyProblem::Unreadable);
-            return;
         }
-    };
-    let answer = post_json(path::PERSONA_ASK, &body).await;
-    match read_reply::<IgnoredAny>(answer) {
-        Ok(_) => {
-            let record = with_voice(|voice| {
-                voice.draft.clear();
-                voice.state = step(voice.state, ComposerEvent::Answered, false);
-                voice.ask_record.take()
-            });
-            close_record(record, EndReason::Ended);
-            put_text("", false);
-            sync();
+        Err(error) => {
+            log_error(ErrorSource::Net, &error.to_string());
+            ask_failed(failure_key(&error), Note::AskUnreachable);
         }
-        Err(problem) => ask_failed(&problem),
     }
 }
 
-fn ask_failed(problem: &ReplyProblem) {
+/// The closed word of a call that gave no answer to read: not reached, or not a reply.
+fn failure_key<K>(error: &CallError<K>) -> &'static str {
+    match error {
+        CallError::Refused(_) => "refused",
+        CallError::Net(_) => "unreachable",
+        CallError::Unreadable { .. } | CallError::Unwritable { .. } => "unreadable",
+    }
+}
+
+/// The question was not taken (`why`, a closed word): the composer is ready again and shows `note`.
+fn ask_failed(why: &'static str, note: Note) {
     let record = with_voice(|voice| {
         voice.state = step(voice.state, ComposerEvent::AskFailed, voice.has_text());
         voice.ask_record.take()
     });
     close_record(record, EndReason::Failed);
-    let note = match problem {
-        ReplyProblem::Refused(rejection) => {
-            note_failure(
-                ErrorSource::Net,
-                "question",
-                rejection.kind.map_or("refused", SpeechErrorKind::key),
-            );
-            let mut message = rejection.message.clone();
-            cut(&mut message, MAXIMUM_REFUSAL_CHARACTERS);
-            Note::AskRefused(message)
-        }
-        ReplyProblem::Unreachable => {
-            note_failure(ErrorSource::Net, "question", "unreachable");
-            Note::AskUnreachable
-        }
-        ReplyProblem::Unreadable => {
-            note_failure(ErrorSource::Net, "question", "unreadable");
-            Note::AskUnreachable
-        }
-    };
+    note_failure(ErrorSource::Net, "question", why);
     show_note(note);
 }
 
@@ -603,24 +736,36 @@ pub fn on_host_lost() {
     sync();
 }
 
+/// Why the voice switches (text to speech, speech to text and the music, which share the speech
+/// provider's key) cannot do anything now: the host says speech is not set up.
+pub(super) fn speech_unavailable(app: &App) -> Option<String> {
+    app.voice.speech.not_set_up()
+}
+
 /// Asks the host whether speech is set up and who has a persona. Called when the page starts, when
 /// the host comes back and now and then, so a change made at the command line shows up.
 pub async fn refresh_host_state() {
-    let speech = match read_reply::<SpeechStatus>(fetch_text(path::SPEECH_STATUS).await) {
+    let speech = match call::<SpeechStatus, SpeechErrorKind>(Call::get(path::SPEECH_STATUS)).await {
         Ok(status) if status.configured => SpeechAvailability::Ready,
         Ok(status) => SpeechAvailability::NotConfigured {
             missing: status.missing,
         },
-        Err(ReplyProblem::Unreachable) => SpeechAvailability::HostDown,
         // A host without the route, or one that answers with something else, cannot do speech.
+        Err(CallError::Net(NetError::Status { .. })) => {
+            SpeechAvailability::NotConfigured { missing: None }
+        }
+        Err(CallError::Net(_)) => SpeechAvailability::HostDown,
         Err(_) => SpeechAvailability::NotConfigured { missing: None },
     };
-    let personas = read_reply::<Vec<PersonaSummary>>(fetch_text(path::PERSONA_LIST).await).ok();
+    let personas = call::<Vec<PersonaSummary>, SpeechErrorKind>(Call::get(path::PERSONA_LIST))
+        .await
+        .ok();
     with_voice(|voice| {
         voice.speech = speech;
         if let Some(personas) = personas {
             voice.personas = personas;
         }
     });
+    super::toolbar::refresh_speech_switches();
     sync();
 }

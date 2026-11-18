@@ -69,13 +69,19 @@ fn hero_card(
     strip: &PartyStrip,
 ) -> Result<(), JsValue> {
     if hero.downed {
-        holder.set_attribute("class", &format!("{} kit-card-downed", holder.class_name()))?;
+        holder.set_attribute(
+            "class",
+            &format!("{} kit-card-downed", crate::dom::class_attribute(holder)),
+        )?;
     }
     let style = accent_style("--kit-accent", hero.accent);
     if !style.is_empty() {
         set_style(holder, &style)?;
     }
-    face.set_attribute("class", &format!("{} kit-card-face", face.class_name()))?;
+    face.set_attribute(
+        "class",
+        &format!("{} kit-card-face", crate::dom::class_attribute(face)),
+    )?;
     let rises_over_rim =
         !strip.framed() && !strip.is_dense() && strip.layout() == PartyLayout::Compact;
     let portrait_parent = if rises_over_rim { holder } else { face };
@@ -114,24 +120,36 @@ fn hero_card(
         }
         append(&body, &class_row)?;
     }
+    // A hero without a sheet yet shows no hit points and no bar, never a sample.
     if strip.show_hp_text {
-        append(
-            &body,
-            &text_element(document, "div", "kit-card-hp", &hero.hit_points_text)?,
-        )?;
+        let words: Vec<&str> = [
+            hero.health.as_ref().map(|health| health.text.as_str()),
+            hero.armor_class_text.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if !words.is_empty() {
+            append(
+                &body,
+                &text_element(document, "div", "kit-card-hp", &words.join(" · "))?,
+            )?;
+        }
     }
-    let bar = element(
-        document,
-        "div",
-        &format!("kit-bar kit-bar-{}", hero.tier.dom_marker()),
-    )?;
-    bar.set_attribute("role", "img")?;
-    bar.set_attribute("aria-label", &hero.hit_points_text)?;
-    let fill = element(document, "span", "kit-bar-fill")?;
-    set_style(&fill, &format!("width:{:.1}%", hero.bar_percent))?;
-    append(&bar, &fill)?;
     append(face, &body)?;
-    append(face, &bar)?;
+    if let Some(health) = &hero.health {
+        let bar = element(
+            document,
+            "div",
+            &format!("kit-bar kit-bar-{}", health.tier.dom_marker()),
+        )?;
+        bar.set_attribute("role", "img")?;
+        bar.set_attribute("aria-label", &health.text)?;
+        let fill = element(document, "span", "kit-bar-fill")?;
+        set_style(&fill, &format!("width:{:.1}%", health.bar_percent))?;
+        append(&bar, &fill)?;
+        append(face, &bar)?;
+    }
     Ok(())
 }
 
@@ -165,7 +183,10 @@ fn conditions(
 }
 
 fn open_card(document: &Document, face: &Element) -> Result<(), JsValue> {
-    face.set_attribute("class", &format!("{} kit-card-open", face.class_name()))?;
+    face.set_attribute(
+        "class",
+        &format!("{} kit-card-open", crate::dom::class_attribute(face)),
+    )?;
     let ring = element(document, "span", "kit-open-ring")?;
     append(&ring, &glyph(document, Glyph::Plus, "kit-open-icon")?)?;
     append(face, &ring)?;

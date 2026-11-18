@@ -37,9 +37,11 @@ pub mod kit;
 pub mod layout;
 pub mod limits;
 pub mod lobby;
+pub mod look;
 pub mod media;
 pub mod motion_style;
 pub mod overlay;
+pub mod pages;
 pub mod path;
 pub mod phone_kit;
 pub mod plate_fade;
@@ -125,6 +127,8 @@ mod media_tests;
 mod motion_style_tests;
 #[cfg(test)]
 mod overlay_tests;
+#[cfg(test)]
+mod path_tests;
 #[cfg(test)]
 mod plate_fade_tests;
 #[cfg(test)]

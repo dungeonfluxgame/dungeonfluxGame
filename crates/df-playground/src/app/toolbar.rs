@@ -79,13 +79,70 @@ fn segment_option(
     Ok(button)
 }
 
-/// The button of a switch, lit exactly when the host holds the setting on.
-fn switch(document: &Document, which: Switch, controls: &Controls) -> Result<Element, JsValue> {
+/// The switches that stand for the speech provider: when the host says it is not set up they show
+/// as unavailable, yet stay clickable so the saved value still works.
+const SPEECH_SWITCHES: [Switch; 3] = [Switch::Tts, Switch::Stt, Switch::Music];
+
+/// The attribute of a switch's button that says its provider is not set up.
+const UNAVAILABLE_ATTRIBUTE: &str = "data-unavailable";
+
+/// The button of a switch, lit exactly when the host holds the setting on. A switch whose provider
+/// is not set up (`unavailable`, the reason) says so.
+fn switch(
+    document: &Document,
+    which: Switch,
+    controls: &Controls,
+    unavailable: Option<&str>,
+) -> Result<Element, JsValue> {
     let action = format!("toggle:{}", which.key());
     let button = button(document, "studio-switch", which.words(), &action)?;
     let on = which.is_on(controls);
     button.set_attribute("aria-pressed", if on { "true" } else { "false" })?;
+    mark_unavailable(&button, unavailable)?;
     Ok(button)
+}
+
+/// Marks a switch's button unavailable with its reason as the tooltip, or clears the mark.
+fn mark_unavailable(button: &Element, reason: Option<&str>) -> Result<(), JsValue> {
+    match reason {
+        Some(reason) => {
+            button.set_attribute(UNAVAILABLE_ATTRIBUTE, "true")?;
+            button.set_attribute("title", reason)
+        }
+        None => {
+            button.remove_attribute(UNAVAILABLE_ATTRIBUTE)?;
+            button.remove_attribute("title")
+        }
+    }
+}
+
+/// Marks the voice switches again from what the host last said about speech, in place, for the
+/// answer that comes after the toolbar was drawn.
+pub fn refresh_speech_switches() {
+    let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+        return;
+    };
+    let Some(reason) = try_with_app(super::voice::speech_unavailable) else {
+        return;
+    };
+    for which in SPEECH_SWITCHES {
+        let selector = format!("[data-action=\"toggle:{}\"]", which.key());
+        if let Ok(Some(button)) = document.query_selector(&selector)
+            && let Err(error) = mark_unavailable(&button, reason.as_deref())
+        {
+            page_log::note_error(ErrorSource::Draw, &crate::dom::js_message(&error));
+        }
+    }
+}
+
+/// A switch of the speech provider, marked from what the host said about speech.
+fn speech_switch(document: &Document, which: Switch, app: &App) -> Result<Element, JsValue> {
+    switch(
+        document,
+        which,
+        &app.controls,
+        super::voice::speech_unavailable(app).as_deref(),
+    )
 }
 
 fn action_button(document: &Document, action: &str, label: &str) -> Result<Element, JsValue> {
@@ -111,6 +168,7 @@ fn view_segment(document: &Document, app: &App) -> Result<Element, JsValue> {
         (Device::Both, "Both"),
         (Device::Tv, "Screen"),
         (Device::Phone, "Phone"),
+        (Device::Table, "Table"),
     ]
     .map(|(device, label)| {
         (
@@ -186,13 +244,12 @@ fn simulate_group(document: &Document, app: &App) -> Result<Element, JsValue> {
 /// The two voice switches: lines spoken aloud (text to speech) and questions taken by voice
 /// (speech to text). The host keeps them, so the dev CLI and every page see the same ones.
 fn speech_switches(document: &Document, app: &App) -> Result<Element, JsValue> {
-    let controls = &app.controls;
     group(
         document,
         "Speech",
         &[
-            switch(document, Switch::Tts, controls)?,
-            switch(document, Switch::Stt, controls)?,
+            speech_switch(document, Switch::Tts, app)?,
+            speech_switch(document, Switch::Stt, app)?,
         ],
     )
 }
@@ -203,9 +260,9 @@ fn overlay_switches(document: &Document, app: &App) -> Result<Element, JsValue> 
         document,
         "Overlays",
         &[
-            switch(document, Switch::Unavailable, controls)?,
-            switch(document, Switch::Grid, controls)?,
-            switch(document, Switch::Sam, controls)?,
+            switch(document, Switch::Unavailable, controls, None)?,
+            switch(document, Switch::Grid, controls, None)?,
+            switch(document, Switch::Sam, controls, None)?,
         ],
     )
 }
@@ -239,8 +296,8 @@ fn sound_control(document: &Document, app: &App) -> Result<Element, JsValue> {
         "Sound",
         &[
             control,
-            switch(document, Switch::Sound, &app.controls)?,
-            switch(document, Switch::Music, &app.controls)?,
+            switch(document, Switch::Sound, &app.controls, None)?,
+            speech_switch(document, Switch::Music, app)?,
             field(document, "Volume", &volume)?,
         ],
     )

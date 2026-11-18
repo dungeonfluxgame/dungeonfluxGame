@@ -192,6 +192,9 @@ pub struct MoreLink {
 pub struct TabBadge {
     pub tab: TabKey,
     pub count: u8,
+    /// Something on the tab waits on the player (a question, a roll): a pulsing dot.
+    #[serde(default)]
+    pub waiting: bool,
 }
 
 /// Which tabs sit on the bar and which wait behind "more".
@@ -223,6 +226,13 @@ impl TabBar {
             more.insert(0, displaced);
         }
         TabLayout { bar, more }
+    }
+
+    /// Whether something on `tab` waits on the player.
+    pub fn waits(&self, tab: TabKey) -> bool {
+        self.badges
+            .iter()
+            .any(|badge| badge.tab == tab && badge.waiting)
     }
 
     pub fn badge(&self, tab: TabKey) -> Option<u8> {

@@ -22,7 +22,7 @@ use crate::dom::{
 };
 use crate::draw_plan::Part;
 use crate::figure::{FigureLook, figure_style, first_turn, label_style, next_turn};
-use crate::fixture::{Camera, ElementShape, StageElement, Status, TvScene};
+use crate::fixture::{Camera, ElementShape, ElementView, Status, TvScene};
 use crate::image_layout::{ImageLayout, region_target_elements};
 use crate::kit::KitPanels;
 use crate::kit::narration::Narration;
@@ -37,7 +37,7 @@ use crate::view::bubble_layout::BubbleLayout;
 use crate::view::kit::dwell_note;
 
 /// The parts of the shared screen, in the order they are drawn.
-pub const PARTS: [Part; 15] = [
+pub const PARTS: [Part; 17] = [
     Part::TvBackdrop,
     Part::TvGrid,
     Part::TvSam,
@@ -53,6 +53,8 @@ pub const PARTS: [Part; 15] = [
     Part::TvStory,
     Part::TvInventory,
     Part::TvRoll,
+    Part::TvTitle,
+    Part::TvShownClue,
 ];
 
 fn figure_class(shape: ElementShape) -> &'static str {
@@ -93,7 +95,7 @@ impl Figures {
         &mut self,
         document: &Document,
         layer: &Element,
-        items: &[StageElement],
+        items: &[ElementView],
     ) -> Result<(), JsValue> {
         self.frame += 1;
         for item in items {
@@ -118,7 +120,7 @@ impl Figures {
     }
 }
 
-fn new_figure(document: &Document, item: &StageElement, frame: u64) -> Result<FigureNode, JsValue> {
+fn new_figure(document: &Document, item: &ElementView, frame: u64) -> Result<FigureNode, JsValue> {
     let element = element(document, "div", figure_class(item.shape))?;
     element.set_attribute("data-id", &item.id)?;
     let turn = first_turn(item);
@@ -148,7 +150,7 @@ fn new_figure(document: &Document, item: &StageElement, frame: u64) -> Result<Fi
 fn sync_portrait(
     document: &Document,
     node: &mut FigureNode,
-    item: &StageElement,
+    item: &ElementView,
 ) -> Result<(), JsValue> {
     let wanted = item
         .portrait()
@@ -184,7 +186,7 @@ fn sync_portrait(
 fn update_figure(
     document: &Document,
     node: &mut FigureNode,
-    item: &StageElement,
+    item: &ElementView,
     frame: u64,
 ) -> Result<(), JsValue> {
     node.frame = frame;
@@ -258,7 +260,7 @@ impl TvHandles {
     pub fn sync(
         &mut self,
         document: &Document,
-        elements: Option<&[StageElement]>,
+        elements: Option<&[ElementView]>,
         camera: Option<&Camera>,
         layout: Option<&ImageLayout>,
         zoom_limit: ZoomLimit,
@@ -275,7 +277,7 @@ impl TvHandles {
         let with_regions;
         let followed = match layout {
             Some(layout) => {
-                let mut all = elements.map(<[StageElement]>::to_vec).unwrap_or_default();
+                let mut all = elements.map(<[ElementView]>::to_vec).unwrap_or_default();
                 all.extend(region_target_elements(layout));
                 with_regions = all;
                 Some(with_regions.as_slice())
@@ -551,7 +553,7 @@ fn narration_box(document: &Document, narration: &NarrationBox) -> Result<Elemen
 }
 
 fn party(document: &Document, scene: &TvScene) -> Result<Option<Element>, JsValue> {
-    crate::view::seats::strip(document, scene)
+    crate::view::seats::tv_strip(document, scene)
 }
 
 /// What goes in the slot of `part`, or `None` when the piece is empty. A part that is not of the
@@ -602,11 +604,33 @@ pub fn build_part(
         Part::TvStory => crate::view::story::mark(document, scene),
         Part::TvInventory => crate::view::inventory::panel(document, scene, controls),
         Part::TvRoll => crate::view::roll::card(document, scene),
+        Part::TvTitle => title(document, scene),
+        Part::TvShownClue => {
+            crate::view::clues::shown(document, scene.clues.as_ref(), scene.shown_clue.as_deref())
+        }
         other => Err(JsValue::from_str(&format!(
             "{} is not a piece of the shared screen",
             other.dom_marker()
         ))),
     }
+}
+
+/// The chapter title card of `scene` over the whole screen (the kit's renderer), or `None`.
+fn title(document: &Document, scene: &TvScene) -> Result<Option<Element>, JsValue> {
+    let Some(card) = &scene.title_card else {
+        return Ok(None);
+    };
+    let layer = crate::kit::draw::panels(
+        document,
+        &KitPanels {
+            title_cards: vec![card.clone()],
+            ..KitPanels::default()
+        },
+        None,
+    )?;
+    layer.set_attribute("class", "kit tv-title")?;
+    layer.set_attribute("aria-label", "The chapter")?;
+    Ok(Some(layer))
 }
 
 /// Logs a failure to move the figures; a draw that cannot finish is shown in the console, not

@@ -1,8 +1,8 @@
 use crate::figure::{FigureLook, figure_style, first_turn, label_style, label_turn, next_turn};
-use crate::fixture::{ElementShape, Fixture, StageElement, StagePivot};
+use crate::fixture::{ElementShape, ElementView, Fixture, PivotView};
 
-fn pip() -> StageElement {
-    StageElement {
+fn pip() -> ElementView {
+    ElementView {
         id: "pip".to_owned(),
         kind: "character".to_owned(),
         label: "Pip".to_owned(),
@@ -13,13 +13,15 @@ fn pip() -> StageElement {
         width_units: 10.0,
         height_units: 10.0,
         fields: serde_json::Map::new(),
+        problem: None,
+        travelling: None,
         rotation_degrees: 0,
-        pivot: StagePivot::default(),
+        pivot: PivotView::default(),
     }
 }
 
-fn turned(rotation_degrees: u16) -> StageElement {
-    StageElement {
+fn turned(rotation_degrees: u16) -> ElementView {
+    ElementView {
         rotation_degrees,
         ..pip()
     }
@@ -54,8 +56,8 @@ fn the_turn_is_written_as_degrees_for_zero_ninety_and_359() {
 
 #[test]
 fn a_custom_pivot_sets_the_transform_origin_in_percent() {
-    let hinge = StageElement {
-        pivot: StagePivot {
+    let hinge = ElementView {
+        pivot: PivotView {
             x_percent: 0,
             y_percent: 50,
         },
@@ -66,8 +68,8 @@ fn a_custom_pivot_sets_the_transform_origin_in_percent() {
         style.ends_with("rotate(90deg);transform-origin:0% 50%;"),
         "{style}"
     );
-    let corner = StageElement {
-        pivot: StagePivot {
+    let corner = ElementView {
+        pivot: PivotView {
             x_percent: 100,
             y_percent: 100,
         },
@@ -92,8 +94,8 @@ fn a_pivot_past_the_figure_is_reported_in_a_fixture_and_not_drawn_clamped() {
         error.message
     );
     assert_eq!(error.line, 5, "the line of the value");
-    let edge = StageElement {
-        pivot: StagePivot {
+    let edge = ElementView {
+        pivot: PivotView {
             x_percent: 100,
             y_percent: 100,
         },
@@ -104,7 +106,7 @@ fn a_pivot_past_the_figure_is_reported_in_a_fixture_and_not_drawn_clamped() {
 
 #[test]
 fn the_transform_is_numbers_and_fixed_words_only_and_no_text_of_the_element_reaches_a_style() {
-    let hostile = StageElement {
+    let hostile = ElementView {
         id: "id\"><script>".to_owned(),
         kind: "k;background:url(x)".to_owned(),
         label: "</style><b>".to_owned(),
@@ -265,32 +267,32 @@ fn a_figure_look_matches_only_the_element_it_was_made_from() {
     assert!(look.matches(&item, 30));
     assert!(!look.matches(&item, 31), "another turn");
     for changed in [
-        StageElement {
+        ElementView {
             x: 51.0,
             ..item.clone()
         },
-        StageElement {
+        ElementView {
             y: 29.0,
             ..item.clone()
         },
-        StageElement {
+        ElementView {
             width_units: 11.0,
             ..item.clone()
         },
-        StageElement {
+        ElementView {
             height_units: 11.0,
             ..item.clone()
         },
-        StageElement {
+        ElementView {
             shape: ElementShape::Rect,
             ..item.clone()
         },
-        StageElement {
+        ElementView {
             color: None,
             ..item.clone()
         },
-        StageElement {
-            pivot: StagePivot {
+        ElementView {
+            pivot: PivotView {
                 x_percent: 0,
                 y_percent: 50,
             },
@@ -299,7 +301,7 @@ fn a_figure_look_matches_only_the_element_it_was_made_from() {
     ] {
         assert!(!look.matches(&changed, 30), "{changed:?}");
     }
-    let relabelled = StageElement {
+    let relabelled = ElementView {
         label: "Other".to_owned(),
         ..item.clone()
     };
@@ -314,11 +316,11 @@ fn the_page_reads_what_the_host_serves_with_and_without_rotation_and_pivot() {
     let full = r##"{"id":"d","kind":"door","label":"Door","x":10.5,"y":20.0,"color":"#aabbcc","shape":"rect",
         "width_units":4.0,"height_units":8.0,"fields":{"portrait":"a.png"},
         "rotation_degrees":90,"pivot":{"x_percent":0,"y_percent":50}}"##;
-    let element: StageElement = serde_json::from_str(full).expect("reads");
+    let element: ElementView = serde_json::from_str(full).expect("reads");
     assert_eq!(element.rotation_degrees, 90);
     assert_eq!(
         element.pivot,
-        StagePivot {
+        PivotView {
             x_percent: 0,
             y_percent: 50
         }
@@ -326,8 +328,8 @@ fn the_page_reads_what_the_host_serves_with_and_without_rotation_and_pivot() {
     assert_eq!(element.portrait(), Some("a.png"));
     let bare = r#"{"id":"d","kind":"door","label":"Door","x":1,"y":2,"color":null,"shape":"circle",
         "width_units":4.0,"height_units":4.0}"#;
-    let element: StageElement = serde_json::from_str(bare).expect("reads");
+    let element: ElementView = serde_json::from_str(bare).expect("reads");
     assert_eq!(element.rotation_degrees, 0);
-    assert_eq!(element.pivot, StagePivot::default());
+    assert_eq!(element.pivot, PivotView::default());
     assert_eq!(element.shape, ElementShape::Circle);
 }

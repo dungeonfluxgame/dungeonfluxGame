@@ -302,6 +302,20 @@ body {
   background: var(--ui-ready);
   box-shadow: none;
 }
+/* A switch whose provider the host has not set up: dimmed, never lit, its reason in the tooltip.
+   It stays clickable, so the saved value still works. */
+.studio-switch[data-unavailable="true"] {
+  opacity: 0.6;
+  border-style: dashed;
+}
+.studio-switch[data-unavailable="true"]::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--studio-edge);
+}
+.studio-switch[data-unavailable="true"]::after {
+  content: "not set up";
+  font-size: 0.8em;
+}
 /* The plate timer's dot is lit only while the frame watch runs. */
 .studio-plate[data-running="false"]::before {
   background: transparent;
@@ -761,6 +775,22 @@ body {
 
 /* Changing scene: a copy of the old scene lies over the new one and leaves, so the new one is revealed */
 .stage-wrap { position: relative; min-width: 0; }
+/* The live phone beside the shared screen (Devices "both"): the real phone page in a frame at a
+   phone's size. The shared screen takes the room left; on a narrow window the phone wraps below. */
+.studio-stage { display: flex; flex-wrap: wrap; gap: var(--studio-space-5); align-items: flex-start; }
+.studio-stage > .stage-wrap { flex: 1 1 640px; }
+/* The phone page always lays out at 390 by 844; a short window shows it scaled down whole
+   (`--live-phone-scale`, set by the page), held below the sticky toolbar while the studio scrolls. */
+.live-phone {
+  flex: 0 0 auto; margin: 0 auto; position: sticky; top: var(--live-phone-top, 12px);
+  width: calc(390px * var(--live-phone-scale, 1)); height: calc(844px * var(--live-phone-scale, 1));
+}
+.live-phone[hidden] { display: none; }
+.live-phone-frame {
+  display: block; width: 390px; height: 844px; border: 0; border-radius: 28px; background: #000;
+  transform: scale(var(--live-phone-scale, 1)); transform-origin: 0 0;
+  box-shadow: 0 0 0 10px #111, 0 12px 40px rgb(0 0 0 / 55%);
+}
 .scene-leaving {
   position: absolute; inset: 0; z-index: 20; pointer-events: none;
   background: var(--ink);
@@ -781,8 +811,9 @@ body {
 /* The bubbles' own world: the same camera, the last layer of the stage, so a bubble is over the caption
    and every other overlay (`.tv-world` is one stacking context, and the overlays come after it). */
 .tv-world-top { position: absolute; inset: 0; transform-origin: 0 0; pointer-events: none; }
-/* The lower-third boxes (narration, caption bar, speaker card, close-up title card) lie over the outlines and bubbles layer. */
-.tv-caption, .kit-bottom, .kit-tc { z-index: 2; }
+/* The lower-third boxes (narration, caption bar, speaker card, close-up title card) and the party strip lie over the outlines and
+   bubbles layer: a speaking figure's glow never runs across them. */
+.tv-caption, .kit-bottom, .kit-tc, .tv-party { z-index: 2; }
 /* The camera's zoom as a number, animated with its transform, so items tied to a character in the
    world layer can stay one size on the screen while the world grows (`.tv-anchors`). */
 @property --cam-scale { syntax: "<number>"; inherits: true; initial-value: 1; }
@@ -1438,8 +1469,10 @@ body {
 /* === component: seats === */
 /* The party strip as the concept's seat cards (renders 02, 03 and 13): a glass bar holding one card per
    hero, each with a full-bleed portrait, a dark gradient at the foot, the name with a class glyph, the
-   class line, hit points and a bar along the foot; open seats are dim glass with a bright plus ring. */
-.tv-party { --ui-glow: #8f6ae044; position: absolute; left: 1.5cqw; right: 1.2cqw; bottom: 1.6cqw; }
+   class line, hit points and a bar along the foot; open seats are dim glass with a bright plus ring.
+   The bar hugs its cards, centred: it grows with each card up to the screen's width, and then the cards
+   share that width. */
+.tv-party { --ui-glow: #8f6ae044; position: absolute; left: 1.5cqw; right: 1.2cqw; bottom: 1.6cqw; width: fit-content; margin-inline: auto; }
 .tv-party-bar {
   --ui-cut: 1.2cqw; --ui-edge: .18cqw;
   --ui-rim: linear-gradient(100deg, #ffb866, #b88cf0 45%, #7fa6d8 70%, #ffb866);
@@ -1447,7 +1480,7 @@ body {
   display: flex; align-items: stretch; justify-content: center; gap: var(--ui-space-2); padding: .9cqw 1.1cqw;
 }
 .tv-party-bar::before { backdrop-filter: blur(.5cqw); }
-.party-card { --accent: var(--ui-brass); --ui-glow: #7fa6d855; flex: 1 1 0; min-width: 0; max-width: 17cqw; aspect-ratio: 1.56 / 1; display: flex; }
+.party-card { --accent: var(--ui-brass); --ui-glow: #7fa6d855; flex: 0 1 17cqw; width: 17cqw; min-width: 0; max-width: 17cqw; aspect-ratio: 1.56 / 1; display: flex; }
 .party-card > .ui-glass { flex: 1 1 auto; }
 .party-card-body {
   --ui-cut: .9cqw; --ui-edge: .16cqw;
@@ -1463,12 +1496,13 @@ body {
   font: 600 var(--ui-t-display)/1 var(--ui-font); color: var(--accent);
   background: radial-gradient(circle at 50% 35%, #2a3a4a, #10171f);
 }
-.party-info { position: absolute; left: .9cqw; bottom: 1cqw; right: 5.6cqw; display: flex; flex-direction: column; gap: .1cqw; min-width: 0; }
+.party-info { position: absolute; left: .9cqw; bottom: 1cqw; right: .9cqw; display: flex; flex-direction: column; gap: .1cqw; min-width: 0; }
 .party-nameline { display: flex; align-items: center; gap: var(--ui-space-1); min-width: 0; }
 .party-glyph { flex: 0 0 auto; width: 1.7cqw; height: 1.7cqw; color: var(--accent); filter: drop-shadow(0 0 .3cqw #000); }
-.party-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 1.75cqw/1.15 var(--ui-font); color: var(--ui-text-strong); text-shadow: 0 1px 3px #000; }
-.party-class { font: var(--ui-t-small)/1.2 var(--ui-font); color: var(--ui-muted-warm); text-shadow: 0 1px 3px #000; }
-.party-hp { position: absolute; right: .9cqw; bottom: 1cqw; font: var(--ui-t-micro)/1.2 var(--ui-font); font-variant-numeric: tabular-nums; color: #e6efe9; text-shadow: 0 1px 3px #000; }
+.party-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 max(1.75cqw, 12px)/1.15 var(--ui-font); color: var(--ui-text-strong); text-shadow: 0 1px 3px #000; }
+.party-class { font: max(var(--ui-t-small), 10px)/1.2 var(--ui-font); color: var(--ui-muted-warm); text-shadow: 0 1px 3px #000; }
+/* The narrow screen beside the phone keeps the card's words readable: a floor under the screen-relative sizes. */
+.party-hp { font: max(var(--ui-t-small), 11px)/1.2 var(--ui-font); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #e6efe9; text-shadow: 0 1px 3px #000; }
 .party-bar { position: absolute; left: 0; right: 0; bottom: 0; height: .5cqw; background: #ffffff26; }
 .party-bar-fill { height: 100%; background: var(--ui-hp-high); box-shadow: 0 0 .6cqw #6cdb8888; }
 .party-bar-amber .party-bar-fill { background: var(--ui-warn); box-shadow: 0 0 .6cqw #f8d74c88; }
@@ -2405,3 +2439,41 @@ body {
   from { translate: 3cqw 0; }
 }
 /* === end component: roll card === */
+
+/* === pages worker: the live table (View "Table"), the chapter title and the clue on the table === */
+/* View "Table": the shared screen and two live phones in one row, the screen taking the room left.
+   The phones are at their real size, 375 px wide at the height the page sets
+   (`--live-phone-height`), with no transform on them or around them, so a tap lands on the page
+   inside as it would on a phone. A window too narrow for the row scrolls it sideways. */
+.studio-stage[data-table] { flex-wrap: nowrap; overflow-x: auto; }
+.studio-stage[data-table] > .stage-wrap { flex: 1 0 640px; }
+.live-phone[data-table] {
+  flex: 0 0 375px; width: 375px; height: var(--live-phone-height, 812px);
+  margin: 10px 10px 0 0; position: static;
+}
+.live-phone[data-table] .live-phone-frame { width: 375px; height: 100%; transform: none; }
+/* The chapter title card over the whole screen (`TvScene::title_card`), above the story's pieces. */
+.tv-title { z-index: 4; animation: tv-title-in 600ms ease both; }
+@keyframes tv-title-in { from { opacity: 0; } }
+/* The clue a phone put up (`TvScene::shown_clue`): its picture fitted whole over a dark ground,
+   its name and what was found under it, over everything until it is taken off. */
+.tv-shown-clue {
+  position: absolute; inset: 0; z-index: 5;
+  display: grid; grid-template-rows: minmax(0, 1fr) auto; justify-items: center; align-items: center;
+  gap: 1.4cqw; padding: 3cqw 6cqw 3.4cqw;
+  background: #05070fe6; pointer-events: none;
+  animation: tv-shown-clue-in 400ms ease both;
+}
+@keyframes tv-shown-clue-in { from { opacity: 0; } }
+.tv-shown-clue-image {
+  max-width: 100%; max-height: 100%; object-fit: contain; border-radius: .4cqw;
+  box-shadow: 0 0 3cqw #000, 0 0 0 .15cqw #f1c46a66;
+}
+.tv-shown-clue-words { max-width: 70cqw; text-align: center; }
+.tv-shown-clue-name { margin: 0; font: 500 3.2cqw/1.15 var(--serif); color: var(--brass); }
+.tv-shown-clue-detail { margin: .6cqw 0 0; font: italic 1.9cqw/1.35 var(--serif); color: var(--ivory); }
+/* A seated hero's own picture on a party card is the square headshot of its pack: no zoom, the
+   whole face shown, centred a little above the middle. The zoom above (`.portrait-image`) is for
+   a look's half-body portrait. The phone's mirrored strip is the same element. */
+.portrait-image.portrait-image-head { transform: none; object-fit: cover; object-position: 50% 30%; }
+/* === end pages worker === */

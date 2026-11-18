@@ -111,6 +111,8 @@ impl fmt::Debug for Transcript {
 pub enum SpeechErrorKind {
     InvalidBody,
     InvalidQuery,
+    /// The query's key terms are not ones the route takes.
+    InvalidTerms,
     NotConfigured,
     UnsupportedContentType,
     UnsupportedWav,
@@ -135,9 +137,10 @@ pub enum SpeechErrorKind {
 }
 
 impl SpeechErrorKind {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::InvalidBody,
         Self::InvalidQuery,
+        Self::InvalidTerms,
         Self::NotConfigured,
         Self::UnsupportedContentType,
         Self::UnsupportedWav,
@@ -165,6 +168,7 @@ impl SpeechErrorKind {
         match self {
             Self::InvalidBody => "invalid_body",
             Self::InvalidQuery => "invalid_query",
+            Self::InvalidTerms => "invalid_terms",
             Self::NotConfigured => "not_configured",
             Self::UnsupportedContentType => "unsupported_content_type",
             Self::UnsupportedWav => "unsupported_wav",

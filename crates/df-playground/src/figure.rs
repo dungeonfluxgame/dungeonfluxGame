@@ -4,7 +4,7 @@
 //! colour only: no id, label or other text of a fixture reaches a style. It never touches the page,
 //! so native tests cover it; `view::tv` applies what it returns.
 
-use crate::fixture::{ElementShape, StageElement};
+use crate::fixture::{ElementShape, ElementView};
 use crate::layout::{stage_percent, stage_size_percent};
 use crate::limits::MAXIMUM_PIVOT_PERCENT;
 use crate::style::css_color;
@@ -14,7 +14,7 @@ const FULL_TURN_DEGREES: i64 = 360;
 const HALF_TURN_DEGREES: i64 = 180;
 
 /// The turn to draw for a figure that is new to the page, with no earlier turn to glide from.
-pub fn first_turn(item: &StageElement) -> i64 {
+pub fn first_turn(item: &ElementView) -> i64 {
     i64::from(item.rotation_degrees) % FULL_TURN_DEGREES
 }
 
@@ -35,7 +35,7 @@ pub fn next_turn(drawn_turn: i64, rotation_degrees: u16) -> i64 {
 
 /// The inline style of a figure turned `turn_degrees`: its place, size, layer and colour, and a
 /// transform that keeps the figure centred on its place and turns it about its pivot.
-pub fn figure_style(item: &StageElement, turn_degrees: i64) -> String {
+pub fn figure_style(item: &ElementView, turn_degrees: i64) -> String {
     let (left, top) = stage_percent(item.x, item.y);
     let height = match item.shape {
         ElementShape::Circle => item.width_units,
@@ -89,7 +89,7 @@ pub struct FigureLook {
 }
 
 impl FigureLook {
-    pub fn of(item: &StageElement, turn: i64) -> Self {
+    pub fn of(item: &ElementView, turn: i64) -> Self {
         Self {
             x_bits: item.x.to_bits(),
             y_bits: item.y.to_bits(),
@@ -103,7 +103,7 @@ impl FigureLook {
     }
 
     /// Whether `figure_style(item, turn)` would be the style this look was made for.
-    pub fn matches(&self, item: &StageElement, turn: i64) -> bool {
+    pub fn matches(&self, item: &ElementView, turn: i64) -> bool {
         self.turn == turn
             && self.x_bits == item.x.to_bits()
             && self.y_bits == item.y.to_bits()

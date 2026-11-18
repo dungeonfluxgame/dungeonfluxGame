@@ -86,18 +86,25 @@ impl SceneOverlay {
                 slide,
                 layout,
                 plate,
-            } => self.set_image(
-                slot,
-                ImageRef {
-                    media,
-                    caption,
-                    rotation_degrees,
-                    slide,
-                    layout,
-                    plate,
-                },
-                now_ms,
-            ),
+            } => {
+                self.set_image(
+                    slot,
+                    ImageRef {
+                        media,
+                        caption,
+                        rotation_degrees,
+                        slide,
+                        layout,
+                        plate,
+                    },
+                    now_ms,
+                )?;
+                // A new plate is the scene moving on: the clue shown to the table goes with it.
+                if slot == ImageSlot::TvBackdrop {
+                    self.shown_clue = Edit::Clear;
+                }
+                Ok(())
+            }
             SceneChange::ClearImage { slot } => {
                 *self.image_slot_mut(slot) = Edit::Clear;
                 Ok(())
@@ -140,6 +147,29 @@ impl SceneOverlay {
                 self.roll = Edit::Clear;
                 Ok(())
             }
+            SceneChange::ShowClue { clue } => {
+                let on_board = self
+                    .clues
+                    .drawn(base.tv.clues.as_ref())
+                    .is_some_and(|board| board.notes.iter().any(|note| note.id == clue));
+                if !on_board {
+                    return Err(SceneError::UnknownClue(clue));
+                }
+                self.shown_clue = Edit::Set(clue);
+                Ok(())
+            }
+            SceneChange::ClearShownClue {} => {
+                self.shown_clue = Edit::Clear;
+                Ok(())
+            }
+            SceneChange::TitleCard { card } => {
+                self.title_card = Edit::Set(card);
+                Ok(())
+            }
+            SceneChange::ClearTitleCard {} => {
+                self.title_card = Edit::Clear;
+                Ok(())
+            }
             SceneChange::Sound {
                 media,
                 target,
@@ -156,7 +186,8 @@ impl SceneOverlay {
             | SceneChange::SeatRemove { .. }
             | SceneChange::SeatsOpen { .. }
             | SceneChange::SeatsClear {}
-            | SceneChange::Brand { .. }) => self.apply_ui(change, base),
+            | SceneChange::Brand { .. }
+            | SceneChange::PartyHidden { .. }) => self.apply_ui(change, base),
             SceneChange::Screen { edit } => self.apply_screen(edit, base),
             SceneChange::Home { edit } => self.apply_home(edit, base),
             SceneChange::Reset {} => {
@@ -202,11 +233,11 @@ impl SceneOverlay {
             .iter_mut()
             .find(|member| member.name == name)
             .ok_or(SceneError::UnknownMember(name))?;
-        if let Some(hit_points) = hit_points {
+        if hit_points.is_some() {
             member.hit_points = hit_points;
         }
-        if let Some(maximum) = maximum_hit_points {
-            member.maximum_hit_points = maximum;
+        if maximum_hit_points.is_some() {
+            member.maximum_hit_points = maximum_hit_points;
         }
         if let Some(conditions) = conditions {
             member.conditions = conditions;

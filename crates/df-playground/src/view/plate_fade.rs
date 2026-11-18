@@ -156,7 +156,10 @@ pub fn swap(slot: &Element, built: Option<Element>, transition: Transition) -> R
         }
     }
     enter_lower_third(slot)?;
-    built.set_attribute("class", &format!("{} {INCOMING}", built.class_name()))?;
+    built.set_attribute(
+        "class",
+        &format!("{} {INCOMING}", crate::dom::class_attribute(&built)),
+    )?;
     let existing = built.get_attribute("style").unwrap_or_default();
     set_style(&built, &format!("{existing}--fade-ms:{duration}ms;"))?;
     append(slot, &built)?;
@@ -236,7 +239,10 @@ fn start_fade(layer: &Element, media: &str) -> Result<(), JsValue> {
     if !with_driver(|driver| driver.fade.loaded(media)) {
         return Ok(());
     }
-    layer.set_attribute("class", &format!("{} {FADING}", layer.class_name()))?;
+    layer.set_attribute(
+        "class",
+        &format!("{} {FADING}", crate::dom::class_attribute(layer)),
+    )?;
     let now = now_ms();
     with_driver(|driver| {
         if let Some(seq) = driver.load_seq.take() {
@@ -288,8 +294,7 @@ pub fn on_image(image: &HtmlImageElement, failed: bool) -> Result<(), JsValue> {
 
 /// An animation ended on `target`. True when it was a plate fade, which is now complete.
 pub fn on_animation_end(target: &Element) -> Result<bool, JsValue> {
-    if !target
-        .class_name()
+    if !crate::dom::class_attribute(target)
         .split_whitespace()
         .any(|name| name == FADING)
     {
@@ -364,16 +369,14 @@ pub fn hold_anchors(slot: &Element, built: &Option<Element>) -> Result<bool, JsV
 }
 
 fn has_class(element: &Element, class: &str) -> bool {
-    element
-        .class_name()
+    crate::dom::class_attribute(element)
         .split_whitespace()
         .any(|name| name == class)
 }
 
 /// Adds or takes away one class of `element`, leaving the others.
 fn set_class(element: &Element, class: &str, on: bool) {
-    let mut names: Vec<String> = element
-        .class_name()
+    let mut names: Vec<String> = crate::dom::class_attribute(element)
         .split_whitespace()
         .filter(|name| *name != class)
         .map(str::to_owned)

@@ -12,8 +12,11 @@ use crate::overlay::{Glyph, PartyLook, SeatStrip};
 fn member(name: &str, hit_points: u32, maximum: u32) -> PartyMember {
     PartyMember {
         name: name.to_owned(),
-        hit_points,
-        maximum_hit_points: maximum,
+        character: None,
+        hit_points: Some(hit_points),
+        maximum_hit_points: Some(maximum),
+        armor_class: None,
+        portrait: None,
         conditions: Vec::new(),
         color: Some("#e5483f".to_owned()),
     }
@@ -57,15 +60,19 @@ fn every_hero_is_drawn_with_their_look_then_the_open_seats() {
     assert_eq!(kael.class_name.as_deref(), Some("Fighter"));
     assert_eq!(kael.level.as_deref(), Some("Lv. 3"));
     assert_eq!(kael.accent, Some("#f6b14e"));
-    assert_eq!(kael.hit_points_text, "HP 42/42");
-    assert_eq!(kael.tier, HealthTier::High);
+    let health = kael.health.as_ref().expect("hit points");
+    assert_eq!(health.text, "HP 42/42");
+    assert_eq!(health.tier, HealthTier::High);
     let KitCard::Hero(lyra) = &cards[1] else {
         panic!("the second card is a hero");
     };
     assert_eq!(lyra.class_name, None);
     assert_eq!(lyra.level, None);
     assert_eq!(lyra.accent, Some("#e5483f"));
-    assert_eq!(lyra.tier, HealthTier::Red);
+    assert_eq!(
+        lyra.health.as_ref().map(|health| health.tier),
+        Some(HealthTier::Red)
+    );
     assert_eq!(cards[2], KitCard::Open);
 }
 
@@ -78,7 +85,10 @@ fn a_hero_is_downed_only_when_the_host_says_so() {
         panic!("a hero");
     };
     assert!(!kael.downed, "no hit points alone draws no downed look");
-    assert_eq!(kael.bar_percent, 0.0);
+    assert_eq!(
+        kael.health.as_ref().map(|health| health.bar_percent),
+        Some(0.0)
+    );
     let KitCard::Hero(lyra) = &cards[1] else {
         panic!("a hero");
     };

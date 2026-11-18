@@ -9,15 +9,47 @@
 //! `false`, never a panic. It is plain data; the page draws it (`view::seat`) and asks the host
 //! what `poll` names.
 
+pub mod play;
 #[cfg(debug_assertions)]
 pub mod samples;
 pub mod screen;
 pub mod wire;
 
 use self::wire::{
-    FriendCard, HelloReply, HeroCard, JoinStatus, RoomReply, RoomState, SeatCard, SeatErrorKind,
-    SeatIntentReply, SeatView,
+    FriendCard, HelloReply, HeroCard, JoinStatus, RoomReply, RoomState, SeatAction, SeatCard,
+    SeatErrorKind, SeatIntentReply, SeatView,
 };
+
+/// The seat actions sent whose fate is not known yet: on their way, or sent again until the host
+/// answers (a phone whose link is down keeps them). The same action tapped again goes with the
+/// `said` id it already has, so the host does it once (its answer to a repeat is the first one's).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Unsettled {
+    actions: Vec<SeatAction>,
+}
+
+impl Unsettled {
+    /// The action to send for `action`: an equal one still unsettled keeps its `said` id; a new
+    /// one takes `fresh`. It stays unsettled until `settle`.
+    pub fn take_up(&mut self, action: &SeatAction, fresh: u64) -> SeatAction {
+        let blank = action.with_said(0);
+        if let Some(waiting) = self
+            .actions
+            .iter()
+            .find(|waiting| waiting.with_said(0) == blank)
+        {
+            return waiting.clone();
+        }
+        let sent = action.with_said(fresh);
+        self.actions.push(sent.clone());
+        sent
+    }
+
+    /// The host answered the action with the id `said` (done or refused): it is settled.
+    pub fn settle(&mut self, said: u64) {
+        self.actions.retain(|waiting| waiting.said() != said);
+    }
+}
 
 /// Why a phone cannot take a seat now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,7 +91,7 @@ pub enum SeatState {
     /// At the table, in the lobby; `view` is the seat's latest view.
     Seated {
         seat: SeatCard,
-        view: Option<SeatView>,
+        view: Option<Box<SeatView>>,
     },
     Refused(RefusedReason),
     /// The table is not running.
@@ -228,7 +260,7 @@ impl SeatMachine {
             (SeatState::Seated { seat, .. }, SeatEvent::ViewLoaded(view)) => {
                 self.state = SeatState::Seated {
                     seat,
-                    view: Some(view),
+                    view: Some(Box::new(view)),
                 };
                 true
             }
@@ -266,14 +298,19 @@ impl SeatMachine {
         }
     }
 
-    /// A seat the host gave: a player who has chosen a hero for it goes to the table, waiting for
-    /// its first view; one who has not chooses (or makes) a hero first.
+    /// A seat the host gave: a seat the host bound to a character, or whose hero's look is locked
+    /// in, goes to the table, waiting for its first view; a hero chosen but not locked in goes
+    /// back to the look studio (`creation`, owner 2026-11-16: nothing leaves the creator by
+    /// itself); no hero yet chooses (or makes) one first.
     fn seated(&mut self, seat: SeatCard) -> bool {
         self.returning = Some(seat.clone());
-        if seat.hero.is_none() {
-            return self.go(SeatState::ChooseHero { seat, heroes: None });
+        if seat.plays.is_some() || seat.hero_locked {
+            return self.go(SeatState::Seated { seat, view: None });
         }
-        self.go(SeatState::Seated { seat, view: None })
+        if seat.hero.is_some() {
+            return self.go(SeatState::Creation { seat });
+        }
+        self.go(SeatState::ChooseHero { seat, heroes: None })
     }
 
     fn joined(&mut self, from: &SeatState, status: JoinStatus) -> bool {
@@ -311,7 +348,9 @@ impl SeatMachine {
             Some(SeatErrorKind::UnknownKey)
                 if matches!(
                     from,
-                    SeatState::Seated { .. } | SeatState::ChooseHero { .. }
+                    SeatState::Seated { .. }
+                        | SeatState::ChooseHero { .. }
+                        | SeatState::Creation { .. }
                 ) =>
             {
                 self.returning = None;

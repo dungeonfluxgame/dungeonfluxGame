@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::fixture::PartyMember;
 use crate::kit::{Fill, shown};
 use crate::overlay::rules::{
-    HealthTier, StripCard, bar_percent, class_line, health_tier, strip_cards,
+    HealthTier, StripCard, armor_class_text, bar_percent, card_accent, card_portrait, class_line,
+    health_tier, hit_points_text, strip_cards,
 };
 use crate::overlay::{Glyph, SeatStrip};
 
@@ -75,12 +76,31 @@ pub struct HeroCard<'a> {
     pub portrait: Option<&'a str>,
     /// A `#rrggbb` colour from the scene; the draw passes it through `style::css_color`.
     pub accent: Option<&'a str>,
-    pub hit_points_text: String,
-    pub bar_percent: f32,
-    pub tier: HealthTier,
+    /// The hit points, when the card knows them: a hero without a sheet yet shows none.
+    pub health: Option<CardHealth>,
+    /// "AC 15", when the card knows the hero's Armor Class.
+    pub armor_class_text: Option<String>,
     /// Shown downed by the host: the portrait is drawn without colour.
     pub downed: bool,
     pub conditions: &'a [String],
+}
+
+/// A card's hit points: their words, and the bar's fill and colour.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CardHealth {
+    pub text: String,
+    pub bar_percent: f32,
+    pub tier: HealthTier,
+}
+
+impl CardHealth {
+    fn of(hit_points: u32, maximum: u32) -> Self {
+        Self {
+            text: hit_points_text(hit_points, maximum),
+            bar_percent: bar_percent(hit_points, maximum),
+            tier: health_tier(hit_points, maximum),
+        }
+    }
 }
 
 /// The condition chips a card draws: the first conditions, and a "+N" chip that counts the rest.
@@ -173,16 +193,12 @@ impl PartyStrip {
                     class_name: look.and_then(|look| class_line(look.class.as_deref(), None)),
                     level: look.and_then(|look| class_line(None, look.level)),
                     glyph: look.and_then(|look| look.glyph),
-                    portrait: look.and_then(|look| look.portrait.as_deref()),
-                    accent: look
-                        .and_then(|look| look.accent.as_deref())
-                        .or(member.color.as_deref()),
-                    hit_points_text: format!(
-                        "HP {}/{}",
-                        member.hit_points, member.maximum_hit_points
-                    ),
-                    bar_percent: bar_percent(member.hit_points, member.maximum_hit_points),
-                    tier: health_tier(member.hit_points, member.maximum_hit_points),
+                    portrait: card_portrait(member, look),
+                    accent: card_accent(member, look),
+                    health: member
+                        .health()
+                        .map(|(hit_points, maximum)| CardHealth::of(hit_points, maximum)),
+                    armor_class_text: member.armor_class.map(armor_class_text),
                     downed: self.downed.contains(&position),
                     conditions: &member.conditions,
                 }),

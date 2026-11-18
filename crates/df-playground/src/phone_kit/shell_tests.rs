@@ -105,14 +105,17 @@ fn a_badge_of_none_is_not_shown_and_dimmed_tabs_are_those_not_working() {
         TabBadge {
             tab: TabKey::Roll,
             count: 2,
+            waiting: false,
         },
         TabBadge {
             tab: TabKey::Map,
             count: 0,
+            waiting: true,
         },
     ];
     assert_eq!(tabs.badge(TabKey::Roll), Some(2));
     assert_eq!(tabs.badge(TabKey::Map), None);
+    assert!(tabs.waits(TabKey::Map) && !tabs.waits(TabKey::Roll));
     assert!(tabs.works(TabKey::Map));
     tabs.working = vec![TabKey::Act];
     assert!(tabs.works(TabKey::Act));
