@@ -1,3 +1,11 @@
 [build]
-jobs = 2
+# No job cap: cargo uses every core. A lane that shares the machine sets CARGO_BUILD_JOBS.
 target-dir = "artifacts/build/start-s00"
+
+# rust-lld ships with the pinned toolchain and links the large debug binaries much faster than
+# the MSVC linker.
+[target.aarch64-pc-windows-msvc]
+linker = "rust-lld"
+
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"

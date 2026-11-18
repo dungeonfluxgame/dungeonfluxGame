@@ -1030,6 +1030,7 @@ dependencies = [
  "base64 0.22.1",
  "df-ai",
  "df-api",
+ "df-campaign",
  "df-content",
  "df-imagery",
  "df-model",

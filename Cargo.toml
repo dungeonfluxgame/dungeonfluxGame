@@ -28,6 +28,14 @@ web-sys = "0.3"
 [patch.crates-io]
 h2 = { path = "crates/df-rpc-bridge/vendor/h2" }
 
+# Line tables keep file:line in backtraces and panics while cutting the debug info that made
+# objects, links and the incremental cache slow and huge (a 95 MB host, 53 GB of incremental).
+# Dependencies carry none.
+[profile.dev]
+debug = "line-tables-only"
+[profile.dev.package."*"]
+debug = false
+
 # Debug builds hash and decode multi-megabyte images on every image poll; unoptimized SHA-256 and
 # codecs run at about 1 MB/s there and starve the async workers. df-imagery instantiates the
 # generic `image` resize code itself, so a 2560x1440 Lanczos resize needs its own optimization.

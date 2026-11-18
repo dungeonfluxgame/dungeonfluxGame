@@ -12,6 +12,7 @@ Linux):
 | --- | --- |
 | `development/df.sh check` | Check all workspace targets on the native host |
 | `development/df.sh test -p <crate> --lib <filter>` | Run a focused crate test |
+| `py -3 development/affected-tests.py [--dry-run]` | Test only the changed modules (`a/b.rs` runs `a::b_tests::`) and `cargo check` the workspace crates that depend on them; the default check for workers |
 | `development/df.sh fmt` | Check Rust formatting using the root `rustfmt.toml` |
 | `development/df.sh lint` | Run Clippy with warnings denied |
 | `development/df.sh wasm` | Check `df-tools` for `wasm32-unknown-unknown` |
@@ -20,6 +21,16 @@ Linux):
 | `development/df.sh python-check` | Compile Python tools using isolated mode and an artifacts cache |
 | `development/df.sh run --print-config` | Preview launch settings without starting the game |
 | `development/df.sh run [game options]` | Start the local game and PostgreSQL as documented below |
+
+## Build speed and lanes
+
+`.cargo/config.toml` and the root `[profile.dev]` set the build for speed: no job cap, `rust-lld`
+as the linker, line-table debug info for workspace crates and none for dependencies, incremental
+on. `artifacts/build/start-s00` is the default lane and the coordinator's warm lane. A worker uses
+one warm lane of its own (`CARGO_TARGET_DIR=artifacts/build/<lane>`) with
+`CARGO_BUILD_JOBS=10`; at most two lanes build at once on this 20-core, 30 GB machine. Keep
+incremental on (do not set `CARGO_INCREMENTAL=0`); clear a lane's `debug/incremental` only when
+the disk runs short.
 
 `df-tools` has known failures and a large suite. Use focused Rust filters during
 development; use the shard runner to get per-module results and compare failures
