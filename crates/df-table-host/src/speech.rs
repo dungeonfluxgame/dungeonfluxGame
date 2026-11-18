@@ -44,6 +44,7 @@ pub use self::cli::{SPEECH_USAGE, SpeechCommand, parse};
 pub use self::format::format_voiced;
 pub use self::provider::SpeechPort;
 pub use self::request::{SpeechError, SpeechFeature, Voiced};
+pub(crate) use self::routes::check_content_type;
 pub use self::routes::router_with;
 pub use self::service::Speech;
 pub(crate) use self::service::sound_change;

@@ -1,0 +1,54 @@
+# Explore: dynamic single-player free roam (planning/explore.md; owner, 2026-11-16 and 2026-11-17:
+# "let me build a character and let me manually use the phone client to explore the world", "Jev
+# all the things, make it dynamic"). One player joins with the room code, builds a hero on the
+# phone and starts; that hero is the traveller (`@roam`, the id the host passes as DF_RUN_ROAM),
+# played from the phone (the seat the host passes as DF_RUN_PLAYER). `@explore on` runs the
+# runner's explore loop (play_explore): one open ask a turn, "What do you do?", with cards built
+# from the scene the host knows (the people on the plate, a seller's wares, the things worth a close
+# look, the ways on below, and a card to keep walking during an approach); the player may always
+# type instead. Jev reads every line into one intent (`persona intent`: move, look, talk, trade,
+# act, done or clarify, against the scene's ids and the `@way` ids) and the runner hands it to its
+# handler; a move toward something on screen walks up to it in steps, each a plate continuing the
+# last, the next made ahead. There is no move list and no turn cap: the roam ends when the player
+# says they are done. The hero's own kit comes from character creation (no `@inventory`).
+@roam explorer
+@explore on
+@roam_goal You are an adventurer who has just come to this land with no fixed plan, free to wander, look around and meet whoever is there.
+@refs max=3
+@roam_scene_kind scene
+# The ways on: each is a destination named in words (Jev picks the way whose meaning fits the
+# line); the words are what the place design is told of the move. They read the same from outside
+# a town or inside one.
+@way town Go somewhere in or into this town: through its gate from outside, or on to a part of it you have not seen yet.
+@way market Make for this town's market or a trading stop to look over the wares, buy what you need or sell what you can spare.
+@way road Leave this town by the road and set off toward the next town or landmark along it, one you have not been to yet.
+# Walking about: a move by a way shows the sights it passes on the way before its place; a town or
+# market move gives the town's look that its places are painted after, and the road leaves it.
+@walk road 1 town=leaves
+@walk town 2 town=seeds
+@walk market 2 town=seeds
+@walk_hold 6
+# The score follows the roam's tempo (plays only while the toolbar's Music switch is on): explore's
+# own table, the painter's day table without its `show` cue.
+@tempo_table development/market-threads/explore.music.json
+@tempo arrival_road arrive_road 1000
+@tempo arrival_town arrive_town 1000
+@tempo arrival_market arrive_market 1000
+@tempo look look 1000
+@tempo walk walk 300
+@tempo trade trade 1000
+@frames gate=100
+@frames every=0
+@frames insert_hold=20
+# The phone's one ask and the default suggestion of each way; the other cards are the scene's.
+@explore_ask What do you do?
+@roam_player_card road Take the road | I've seen enough of this place. I'm taking the road on to wherever it leads.
+@roam_player_card town Into town | I'll head into town and look around.
+@roam_player_card market Find the market | I'll find the market and see what's for sale.
+# The player's own hero is the traveller: the persona is written from this hint, and the first
+# plate is painted from the hero's reference sheet with this look (no name ever reaches an image).
+@roam_hero_hint {name} is a {species} {class} who has just arrived in this land with no fixed plan, free to wander from town to town, look around, trade and talk to whoever they meet.
+# The opening plate has no design: it is the active place under this name, and what the hero
+# sees on it becomes its things before the first ask.
+@roam_start_place the road before the town gate
+@roam_start_plate A lone adventurer walks along a dirt road toward the open gate of a walled market town in the morning, fields and a river behind.

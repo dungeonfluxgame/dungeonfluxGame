@@ -27,7 +27,8 @@ use crate::engine::machine_io::{
 use crate::engine::report::EngineError;
 use crate::engine::request::{AudienceQuery, AudienceSpec};
 
-use super::{EngineRoutes, answer, body, engine, query};
+use super::{EngineRoutes, answer, engine};
+use crate::dev_http::{read_body, read_query};
 
 pub(super) async fn wire_view(
     State(routes): State<EngineRoutes>,
@@ -35,7 +36,7 @@ pub(super) async fn wire_view(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let AudienceQuery { audience } = query(audience_query)?;
+        let AudienceQuery { audience } = read_query(audience_query)?;
         let view = engine(&routes)?.machine_view(audience.0).await?;
         Ok::<WireViewReport, EngineError>(view_report(&view))
     }
@@ -93,7 +94,7 @@ pub(super) async fn wire_intent(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let intent: WireIntentBody = body(bytes)?;
+        let intent: WireIntentBody = read_body(bytes)?;
         let response = submit_intent(engine(&routes)?, &intent).await?;
         Ok::<WireReceiptReport, EngineError>(receipt_report(&response))
     }

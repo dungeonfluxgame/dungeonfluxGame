@@ -1,6 +1,7 @@
 //! Character identification: which region of a stored layout is which character, asked of the
 //! text service with a question the imagery API prepares and checks.
 
+use df_playground::seat::wire::hex_digits;
 use std::path::Path;
 
 use df_scene_layout::{RegionRef, SceneLayout, SceneRegion};
@@ -189,10 +190,6 @@ pub fn identity_request(
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 /// What the text service gave for an identity question: the checked answer and whether it was a
 /// replay of an answer the service had already qualified.
 pub struct IdentityAnswer {
@@ -224,7 +221,7 @@ pub fn identity_submission(
         });
     }
     let request = identity_request(&prepared.question, text.identity_profile());
-    let operation = format!("identify:{}", &hex(&fingerprint(&request))[..32]);
+    let operation = format!("identify:{}", &hex_digits(&fingerprint(&request))[..32]);
     let key = crate::text::TextRuntime::key(IDENTIFY_SCOPE, &operation)
         .ok_or(LocateError::InvalidOperationKey)?;
     Ok(IdentitySubmission { key, request })

@@ -178,7 +178,16 @@ pub fn router_with(
     Router::new()
         .route(path::SERVICES, get(services))
         .with_state(state)
-        .merge(crate::imagegen::router_with(Arc::clone(&app), generator))
+        .merge(crate::imagegen::router_with(
+            Arc::clone(&app),
+            Arc::clone(&generator),
+        ))
+        .merge(crate::look::routes::router_with(
+            Arc::clone(&app),
+            Arc::clone(&text),
+            generator,
+        ))
+        .merge(crate::creation::routes::router_with(Arc::clone(&app)))
         .merge(crate::persona::router_with(
             Arc::clone(&app),
             Arc::clone(&text),
@@ -196,7 +205,10 @@ pub fn router_with(
             Arc::clone(&app),
             Arc::clone(&text),
         ))
-        .merge(crate::speech::router_with(speech))
+        .merge({
+            app.set_speech(speech.clone());
+            crate::speech::router_with(speech)
+        })
         .merge(crate::world::router_with(Arc::clone(&app)))
         .merge(crate::movement::routes::router_with(
             Arc::clone(&app),

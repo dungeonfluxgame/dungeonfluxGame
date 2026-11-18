@@ -14,10 +14,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::client::post_json;
 use crate::dev::{DevError, ReplyError, checked_file_size, run_dev};
+use crate::dev_http::RouteError;
 use crate::media_ingest::{
     IngestError, MAXIMUM_MEDIA_BYTES, MAXIMUM_MEDIA_FILES, MAXIMUM_UPLOAD_BODY_BYTES,
     MAXIMUM_VIDEO_DURATION, MediaLimits, UploadKind, check_content, check_room,
 };
+use crate::media_store::AddError;
+use crate::playground::PlaygroundChangeError;
 use crate::test_support::{Running, STARTER_FILES, post_request, raw_exchange, start};
 use crate::video_container::{DurationCause, FoundContent, VideoFormat};
 use crate::video_fixtures::{
@@ -25,6 +28,11 @@ use crate::video_fixtures::{
     mp4_with_brand, mp4_without_movie_header, synthetic_mp4_with_moov_last, webm_ffmpeg_style,
     webm_libwebm_style, webm_of_seconds, webm_with,
 };
+
+/// The status the media add route answers an ingest refusal with.
+fn refusal_status(error: &IngestError) -> StatusCode {
+    PlaygroundChangeError::from(AddError::Ingest(error.clone())).status()
+}
 
 const SENTENCE: &[u8] = b"0123456789abcdefghij";
 const MIB: usize = 1024 * 1024;
@@ -154,7 +162,7 @@ fn a_text_file_named_mp4_an_svg_and_a_mismatched_type_are_refused_naming_what_wa
         "{}",
         text.to_string()
     );
-    assert_eq!(text.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(refusal_status(&text), StatusCode::BAD_REQUEST);
     let svg = check("a.mp4", b"<svg onload='x()'/>").expect_err("refused");
     assert_eq!(
         svg,
@@ -220,7 +228,7 @@ fn a_file_of_exactly_the_size_limit_passes_and_one_byte_more_is_refused_for_ever
                 maximum_bytes: limit
             }
         );
-        assert_eq!(refusal.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(refusal_status(&refusal), StatusCode::PAYLOAD_TOO_LARGE);
         assert!(
             refusal.to_string().contains("2 GiB"),
             "{}",
@@ -554,12 +562,12 @@ async fn media_add_takes_a_video_path_and_refuses_a_fake_one() {
         fake.to_string_lossy().into_owned(),
     ];
     let error = run_dev(running.port, &line).await.expect_err("refused");
-    // The library's refusals carry no cause yet; the sentence says what the bytes are.
+    // The sentence says what the bytes are.
     assert!(
         matches!(
             &error,
             DevError::Rejected {
-                error: ReplyError::Canvas { cause: None, .. },
+                error: ReplyError::Playground(PlaygroundChangeError::InvalidChange { .. }),
                 message,
             } if message.contains("plain text")
         ),

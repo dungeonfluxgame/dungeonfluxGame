@@ -8,7 +8,7 @@
 //! as the same bytes, and the signal that wakes the host's clock when something starts to move. It
 //! decides nothing about requests: `server` and `playground` own their routes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -24,17 +24,21 @@ use df_table::ports::EventSink;
 use df_types::saturating_millis;
 
 use crate::cast::routes::SpeakerRest;
+use crate::creation::HeroSheetSummary;
 use crate::engine::EngineHandle;
 use crate::engine::report::EngineError;
 use crate::engine::setup::EngineStartError;
 use crate::event_log::EventLog;
 use crate::limits::{TICK_INTERVAL, TURN_SETTLE};
 use crate::observe::HostEventSink;
-use crate::playground::{PlaygroundFiles, PlaygroundState};
+use crate::playground::{FileError, PlaygroundFiles, PlaygroundState};
 use crate::seat::{PLAYERS_DIRECTORY, SeatDesk};
 use crate::server::request::{ClockStatus, HostStatus, LogStatus};
 use crate::sink::LineEcho;
-use crate::view::{FrameCanvas, ViewError};
+use crate::view::{ViewError, frame_canvas};
+use df_playground::controls::ControlsReply;
+use df_playground::frame::{FrameCanvas, player_controls};
+use df_playground::overlay::Edit;
 
 /// A frame as the pieces of its JSON: the canvas half is built once for a change count and shared
 /// by every reader of it; the head (the count) and the tail (what the playground shows, with each
@@ -70,6 +74,37 @@ impl BuiltFrame {
     }
 }
 
+/// The sheets of the party strip's heroes, read at one change count.
+#[derive(Debug)]
+struct PartySheets {
+    count: u64,
+    sheets: BTreeMap<String, PartyHero>,
+}
+
+/// The characters the party's cards name.
+fn party_characters(party: &[df_playground::fixture::PartyMember]) -> BTreeSet<String> {
+    party
+        .iter()
+        .filter_map(|member| member.character.clone())
+        .collect()
+}
+
+/// What a party card's hero has: its sheet's numbers and its pack's headshot, each once made.
+#[derive(Debug, Clone, PartialEq)]
+struct PartyHero {
+    sheet: Option<HeroSheetSummary>,
+    headshot: Option<String>,
+}
+
+/// Who a frame is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FrameAudience {
+    /// The shared screen and the developer's pages: all of it.
+    Shared,
+    /// A phone on the player listener: what a phone draws, nothing of another seat's.
+    Player,
+}
+
 /// The canvas half of the frame for one change count.
 #[derive(Debug, Clone)]
 struct CachedCanvas {
@@ -84,6 +119,8 @@ pub(crate) enum FrameError {
     Json(serde_json::Error),
     /// The thread that builds the canvas half did not finish.
     Task(tokio::task::JoinError),
+    /// The playground's files could not be read for their revision.
+    Files(FileError),
 }
 
 impl std::fmt::Display for FrameError {
@@ -92,6 +129,7 @@ impl std::fmt::Display for FrameError {
             Self::View(error) => write!(formatter, "{error}"),
             Self::Json(error) => write!(formatter, "the frame could not be written: {error}"),
             Self::Task(error) => write!(formatter, "the frame could not be built: {error}"),
+            Self::Files(error) => write!(formatter, "the playground's files: {error}"),
         }
     }
 }
@@ -102,6 +140,7 @@ impl std::error::Error for FrameError {
             Self::View(_) => None,
             Self::Json(error) => Some(error),
             Self::Task(error) => Some(error),
+            Self::Files(error) => Some(error),
         }
     }
 }
@@ -150,11 +189,20 @@ pub struct AppState {
     /// One more than the newest `last_content_change` a `FRAME served` line was written for (0:
     /// none), so each change is logged once however many pages read it.
     frame_logged: AtomicU64,
+    /// The revision of the playground's files (`playground::revision`) the frames carry, once read;
+    /// the files watch (`refresh_files_revision`) keeps it current.
+    files_revision: Mutex<Option<String>>,
+    /// The sheets of the party strip's heroes as of a change count (`party_with_sheets`), so
+    /// the creation record is read once a change, not once a page and a poll.
+    party_sheets: tokio::sync::Mutex<Option<PartySheets>>,
     /// The pending pull-back of the camera after the last spoken line (`cast::routes`).
     speaker_rest: SpeakerRest,
     /// The pending clearing of the dungeon master's box after its last line (`persona narrate`),
     /// one rest timer like the camera's.
     narration_rest: SpeakerRest,
+    /// The pending fade of the party strip after the party reached a new place
+    /// (`world::routes::show_party_strip`).
+    party_strip_rest: SpeakerRest,
     /// The phone page's addresses on the player listener, set once when it listens; unset while
     /// the host serves no players.
     player_links: OnceLock<Vec<String>>,
@@ -163,6 +211,19 @@ pub struct AppState {
     engine: OnceLock<SharedEngine>,
     /// The players books: who holds which seat, the friend profiles and the heroes.
     seats: SeatDesk,
+    /// The deals open between characters, until accepted, turned down or left behind.
+    deals: crate::world::OpenDeals,
+    /// The signer of the media links phones are given.
+    media_links: crate::media_links::MediaLinks,
+    /// The speech service, once the routes are built: a seat's own recordings are written down
+    /// through it.
+    speech: OnceLock<crate::speech::Speech>,
+    /// The look studio, set once when the services start, so the phone's look routes on either
+    /// listener reach the same picture generator and text service.
+    look: OnceLock<Arc<crate::look::LookStudio>>,
+    /// The check runner the persona routes started, so a seat's roll on either listener reaches
+    /// the same judge, dice and table.
+    check_rolls: OnceLock<Arc<crate::persona::check::CheckRoutes>>,
 }
 
 /// The engine the routes started, or why it did not start.
@@ -192,11 +253,19 @@ impl AppState {
             ticks: AtomicU64::new(0),
             last_content_change: AtomicU64::new(0),
             frame_logged: AtomicU64::new(0),
+            files_revision: Mutex::new(None),
+            party_sheets: tokio::sync::Mutex::new(None),
             speaker_rest: SpeakerRest::default(),
             narration_rest: SpeakerRest::default(),
+            party_strip_rest: SpeakerRest::default(),
             player_links: OnceLock::new(),
             engine: OnceLock::new(),
             seats,
+            deals: crate::world::OpenDeals::default(),
+            media_links: crate::media_links::MediaLinks::new(),
+            speech: OnceLock::new(),
+            look: OnceLock::new(),
+            check_rolls: OnceLock::new(),
         }
     }
 
@@ -221,8 +290,52 @@ impl AppState {
     }
 
     /// The players books.
+    /// The speech service, once the routes were built.
+    pub(crate) fn speech(&self) -> Option<&crate::speech::Speech> {
+        self.speech.get()
+    }
+
+    /// Keeps the speech service the routes were built with; the first one stands.
+    pub(crate) fn set_speech(&self, speech: crate::speech::Speech) {
+        let _first_stands = self.speech.set(speech);
+    }
+
+    pub(crate) fn media_links(&self) -> &crate::media_links::MediaLinks {
+        &self.media_links
+    }
+
+    pub(crate) fn deals(&self) -> &crate::world::OpenDeals {
+        &self.deals
+    }
+
     pub(crate) fn seats(&self) -> &SeatDesk {
         &self.seats
+    }
+
+    /// Remembers the look studio the services started. A second call keeps the first: the host
+    /// runs one picture generator.
+    pub(crate) fn set_look(&self, look: Arc<crate::look::LookStudio>) {
+        // The first call wins; a second services router over the same state would start a second
+        // studio no phone should reach.
+        let _ = self.look.set(look);
+    }
+
+    /// The look studio, once the services started it.
+    pub(crate) fn look(&self) -> Option<&Arc<crate::look::LookStudio>> {
+        self.look.get()
+    }
+
+    /// Remembers the check runner the persona routes started. A second call keeps the first: the
+    /// host runs one table of rolls.
+    pub(crate) fn set_check_rolls(&self, checks: Arc<crate::persona::check::CheckRoutes>) {
+        // The first call wins; a second persona router over the same state would roll on dice no
+        // phone should reach.
+        let _ = self.check_rolls.set(checks);
+    }
+
+    /// The check runner, once the persona routes started it.
+    pub(crate) fn check_rolls(&self) -> Option<&Arc<crate::persona::check::CheckRoutes>> {
+        self.check_rolls.get()
     }
 
     /// Remembers the phone page's addresses once the player listener listens. A second call keeps
@@ -245,6 +358,10 @@ impl AppState {
     /// The pending clearing of the dungeon master's box after its last line.
     pub(crate) fn narration_rest(&self) -> &SpeakerRest {
         &self.narration_rest
+    }
+
+    pub(crate) fn party_strip_rest(&self) -> &SpeakerRest {
+        &self.party_strip_rest
     }
 
     /// Says that something a reader could see has changed. A reader waiting on `changes` wakes.
@@ -350,16 +467,29 @@ impl AppState {
     /// The canvas half of the frame as JSON: every element is copied once under the canvas lock,
     /// and written after the lock is released. Blocking work: call it off the runtime threads.
     fn build_canvas_json(&self) -> Result<Arc<[u8]>, FrameError> {
-        let canvas = FrameCanvas::from_canvas(&self.canvas()).map_err(FrameError::View)?;
+        let canvas = frame_canvas(&self.canvas()).map_err(FrameError::View)?;
         let json = serde_json::to_vec(&canvas).map_err(FrameError::Json)?;
         Ok(json.into())
     }
 
-    /// The frame for the current change count. The canvas half is built once per count, on the
-    /// blocking pool, and every reader of that count shares the same bytes; the playground half is
-    /// made for each reader, so a move's `elapsed_ms` is its age now and a late reader continues
-    /// from where the move is.
+    /// The shared screen's frame for the current change count (`frame_for`), for a test.
+    #[cfg(test)]
     pub(crate) async fn frame(self: &Arc<Self>) -> Result<BuiltFrame, FrameError> {
+        self.frame_for(FrameAudience::Shared).await
+    }
+
+    /// The frame for the current change count, as `audience` is sent it. The shared screen's
+    /// canvas half is built once per count, on the blocking pool, and every reader of that count
+    /// shares the same bytes; the playground half is made for each reader, so a move's
+    /// `elapsed_ms` is its age now and a late reader continues from where the move is. A phone's
+    /// frame leaves out what a phone does not draw (`df_playground::frame::Frame::for_player`).
+    pub(crate) async fn frame_for(
+        self: &Arc<Self>,
+        audience: FrameAudience,
+    ) -> Result<BuiltFrame, FrameError> {
+        if audience == FrameAudience::Player {
+            return self.player_frame().await;
+        }
         let mut count = self.change_count();
         let canvas = match self.cached_canvas(count) {
             Some(canvas) => canvas,
@@ -384,15 +514,221 @@ impl AppState {
                 }
             }
         };
-        let controls = serde_json::to_vec(&self.playground.snapshot()).map_err(FrameError::Json)?;
+        let controls = self.party_with_sheets(self.playground.snapshot()).await;
+        self.assemble_frame(count, canvas, &controls).await
+    }
+
+    /// A phone's frame: the canvas's revision without its elements, and the controls a phone
+    /// draws (`df_playground::frame::player_controls`). Small, so it is made for each reader.
+    async fn player_frame(&self) -> Result<BuiltFrame, FrameError> {
+        let count = self.change_count();
+        let canvas = FrameCanvas {
+            revision: self.canvas().revision(),
+            elements: Vec::new(),
+        };
+        let canvas = serde_json::to_vec(&canvas).map_err(FrameError::Json)?;
+        let controls = player_controls(self.party_with_sheets(self.playground.snapshot()).await);
+        self.assemble_frame(count, canvas.into(), &controls).await
+    }
+
+    /// The frame's JSON pieces around its canvas half: its count, its controls and the revision of
+    /// the playground's files.
+    async fn assemble_frame(
+        &self,
+        count: u64,
+        canvas: Arc<[u8]>,
+        controls: &ControlsReply,
+    ) -> Result<BuiltFrame, FrameError> {
+        let controls = serde_json::to_vec(controls).map_err(FrameError::Json)?;
+        let files = serde_json::to_vec(&self.files_revision().await?).map_err(FrameError::Json)?;
         let head = format!("{{\"frame\":{count},\"canvas\":").into_bytes();
-        let tail = [b",\"controls\":".as_slice(), controls.as_slice(), b"}"].concat();
+        let tail = [
+            b",\"controls\":".as_slice(),
+            controls.as_slice(),
+            b",\"asset_revision\":",
+            files.as_slice(),
+            b"}",
+        ]
+        .concat();
         Ok(BuiltFrame {
             canvas,
             count,
             head,
             tail,
         })
+    }
+
+    /// The controls with the party strip's heroes' numbers from their sheets: a card that names
+    /// its character (`PartyMember::character`) shows the hit points and Armor Class of that
+    /// hero's sheet, and none until the hero has one (never a sample), and the headshot of the
+    /// hero's pack as its picture once it is made. A card that names no character keeps what it
+    /// was given.
+    pub(crate) async fn party_with_sheets(&self, mut reply: ControlsReply) -> ControlsReply {
+        let Edit::Set(party) = &mut reply.scene.party else {
+            return reply;
+        };
+        let characters = party_characters(party);
+        if characters.is_empty() {
+            return reply;
+        }
+        let sheets = self.party_sheets(characters).await;
+        for member in party.iter_mut() {
+            let Some(character) = &member.character else {
+                continue;
+            };
+            let Some(hero) = sheets.get(character) else {
+                continue;
+            };
+            let sheet = hero.sheet;
+            member.hit_points = sheet.map(|sheet| sheet.current_hp);
+            member.maximum_hit_points = sheet.map(|sheet| sheet.max_hp);
+            member.armor_class = sheet.map(|sheet| sheet.armor_class);
+            if hero.headshot.is_some() {
+                member.portrait.clone_from(&hero.headshot);
+            }
+        }
+        reply
+    }
+
+    /// The sheets of `characters`, read from the creation record when the change count moved
+    /// since they were last read (a sheet is made or changed through a change). A record that
+    /// cannot be read gives no sheet and writes `PARTY sheet_unreadable character= error=`.
+    async fn party_sheets(&self, characters: BTreeSet<String>) -> BTreeMap<String, PartyHero> {
+        let count = self.change_count();
+        let mut kept = self.party_sheets.lock().await;
+        if let Some(sheets) = kept.as_ref().filter(|sheets| {
+            sheets.count == count
+                && characters
+                    .iter()
+                    .all(|character| sheets.sheets.contains_key(character))
+        }) {
+            return sheets.sheets.clone();
+        }
+        let sheets = self.read_party_heroes(characters).await;
+        *kept = Some(PartySheets {
+            count,
+            sheets: sheets.clone(),
+        });
+        sheets
+    }
+
+    /// The party strip's heroes now: what the cards name, read again. A hero's headshot is made
+    /// in the background and a sheet can change with no change of the table, so the files watch
+    /// asks this: a difference is kept and announced as a change, and the cards follow within its
+    /// interval. Whether it changed.
+    pub(crate) async fn refresh_party_heroes(&self) -> bool {
+        let reply = self.playground.snapshot();
+        let Edit::Set(party) = &reply.scene.party else {
+            return false;
+        };
+        let characters = party_characters(party);
+        if characters.is_empty() {
+            return false;
+        }
+        let fresh = self.read_party_heroes(characters).await;
+        let unchanged = self
+            .party_sheets
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|kept| kept.sheets == fresh);
+        if unchanged {
+            return false;
+        }
+        self.announce_change();
+        *self.party_sheets.lock().await = Some(PartySheets {
+            count: self.change_count(),
+            sheets: fresh,
+        });
+        true
+    }
+
+    /// Reads the sheet and the headshot of each of `characters`.
+    async fn read_party_heroes(&self, characters: BTreeSet<String>) -> BTreeMap<String, PartyHero> {
+        let mut sheets = BTreeMap::new();
+        for character in characters {
+            let sheet = match crate::creation::hero_summary(self, &character).await {
+                Ok(sheet) => sheet,
+                Err(error) => {
+                    self.record_line(format!(
+                        "PARTY sheet_unreadable character={character} error={}",
+                        error.key()
+                    ));
+                    None
+                }
+            };
+            let headshot = self.headshot_of(&character).await;
+            sheets.insert(character, PartyHero { sheet, headshot });
+        }
+        sheets
+    }
+
+    /// The headshot of the pack of the hero whose character is `character` (a seat's hero, as its
+    /// persona names it), once it is made.
+    async fn headshot_of(&self, character: &str) -> Option<String> {
+        let mut open = self.seats().open().await.ok()?;
+        let books = open.books();
+        let hero = books
+            .records()
+            .iter()
+            .filter_map(|record| record.hero)
+            .find(|hero| crate::seat::scenario::persona_of(*hero) == character)?;
+        books.hero(hero)?.pack.headshot.picture().map(str::to_owned)
+    }
+
+    /// The revision of the playground's files the frames carry: the one kept, or the files read
+    /// now (off the runtime threads) when none is kept yet.
+    async fn files_revision(&self) -> Result<String, FrameError> {
+        let kept = self
+            .files_revision
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match kept {
+            Some(revision) => Ok(revision),
+            None => {
+                let revision = self
+                    .read_files_revision()
+                    .await
+                    .map_err(FrameError::Files)?;
+                *self
+                    .files_revision
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = Some(revision.clone());
+                Ok(revision)
+            }
+        }
+    }
+
+    async fn read_files_revision(&self) -> Result<String, FileError> {
+        let files = self.playground.files().clone();
+        crate::blocking::run_blocking(
+            move || crate::playground::revision(&files),
+            FileError::Stopped,
+        )
+        .await
+    }
+
+    /// Reads the playground's files again: a revision other than the one kept is kept and
+    /// announced as a change, so every page learns of a new theme, fixture or package from its
+    /// next frame. The new revision, when it changed. One read serves every page, however many
+    /// follow the host.
+    pub(crate) async fn refresh_files_revision(&self) -> Result<Option<String>, FileError> {
+        let revision = self.read_files_revision().await?;
+        let changed = {
+            let mut kept = self
+                .files_revision
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let changed = kept.as_ref().is_some_and(|kept| *kept != revision);
+            *kept = Some(revision.clone());
+            changed
+        };
+        if !changed {
+            return Ok(None);
+        }
+        self.announce_change();
+        Ok(Some(revision))
     }
 
     /// Advances every travelling element by `seconds` of the host's clock. Idle, it takes the lock

@@ -1467,7 +1467,7 @@ fn every_error_has_its_own_key_a_sentence_and_a_status() {
         MemoryError::InvalidBody(BodyError::from_json(
             &serde_json::from_str::<Value>("{").unwrap_err(),
         )),
-        MemoryError::InvalidQuery { detail: text() },
+        MemoryError::InvalidQuery(crate::dev_http::QueryError { detail: text() }),
         MemoryError::InvalidOwner { owner: text() },
         MemoryError::InvalidId { id: text() },
         MemoryError::InvalidKind { kind: text() },

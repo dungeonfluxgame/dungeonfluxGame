@@ -31,6 +31,7 @@ use crate::observe::{
 };
 use crate::options::ServeOptions;
 use crate::playground::PlaygroundFiles;
+use crate::seat::scenario::{Scenario, ShellMissing, find_shell};
 use crate::server;
 use crate::sink::{LineEcho, TERMINAL_FALLBACK_FILE, TerminalWriter};
 use crate::state::AppState;
@@ -45,7 +46,7 @@ impl Drop for StopWhenDropped {
 }
 
 /// Why serving stopped with a failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServeError {
     Listen {
         port: u16,
@@ -60,6 +61,8 @@ pub enum ServeError {
     Interrupt(ErrorKind),
     /// The listener or a connection failed while serving.
     Serving(ErrorKind),
+    /// A scenario is named but no bash to run its runner was found.
+    ScenarioShell(ShellMissing),
 }
 
 impl fmt::Display for ServeError {
@@ -76,6 +79,7 @@ impl fmt::Display for ServeError {
             }
             Self::Interrupt(kind) => write!(formatter, "cannot watch for Ctrl-C: {kind}"),
             Self::Serving(kind) => write!(formatter, "serving stopped: {kind}"),
+            Self::ScenarioShell(missing) => missing.fmt(formatter),
         }
     }
 }
@@ -90,6 +94,15 @@ pub fn write_terminal_line(line: &str) {
 
 /// Starts the canvas and serves until interrupted. `announce` receives each startup line.
 pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result<(), ServeError> {
+    // A scenario that could not run is refused before anything starts.
+    let scenario_shell = match &options.scenario {
+        Some(_) => Some(
+            find_shell(options.scenario_shell.as_deref())
+                .await
+                .map_err(ServeError::ScenarioShell)?,
+        ),
+        None => None,
+    };
     let log = Arc::new(EventLog::default());
     if !install_as_audit_sink(&log) {
         announce("another log already takes the libraries' audit lines in this process");
@@ -182,6 +195,25 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
          playground on http://{address}/playground",
         options.kind_directory.display()
     ));
+    let first_ask = state.seats().talk().first_ask();
+    state.record_line(format!("SEAT asks_seeded first={first_ask} reason=boot"));
+    if let (Some(beats), Some(shell)) = (&options.scenario, scenario_shell) {
+        announce(&format!(
+            "scenario for the table: {} (shell {})",
+            beats.display(),
+            shell.display()
+        ));
+        state.record_line(format!(
+            "SCENARIO configured beats={} shell={}",
+            beats.display(),
+            shell.display()
+        ));
+        state
+            .seats()
+            .set_scenario(Scenario::new(beats.clone(), shell, address.port()));
+        // The table starts in the lobby: no seat plays a day left from an earlier host.
+        crate::seat::scenario::clear_bindings(&state).await;
+    }
     let _players = players.map(|players| {
         for link in players.links() {
             announce(&format!("phone page: {link}"));
@@ -193,10 +225,17 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
         let tasks = crate::player::start(players, &state);
         (StopWhenDropped(tasks.serving), StopWhenDropped(tasks.watch))
     });
+    // The table's lobby opens once the server serves (the table's engine starts with it): its room
+    // code, join link and QR code go on the TV.
+    let opening = Arc::clone(&state);
+    let _lobby = StopWhenDropped(tokio::spawn(async move {
+        crate::seat::room::open_lobby(&opening).await;
+    }));
 
     let stop = Arc::new(Notify::new());
     let stopped = Arc::clone(&stop);
     let _clock = StopWhenDropped(server::spawn_clock(Arc::clone(&state)));
+    let _files = StopWhenDropped(crate::playground::spawn_files_watch(Arc::clone(&state)));
     let echoing = Arc::clone(&state);
     let serving = server::serve_listener(listener, state, async move {
         stopped.notified().await;
@@ -217,6 +256,10 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
             }
         },
     };
+    // A day the table was playing stops with the host: its runner is the host's child.
+    if let Some(scenario) = echoing.seats().scenario() {
+        scenario.stop(&echoing).await;
+    }
     // The last audit lines before the stop (a final arrival, a reject) reach the terminal.
     echoing.echo_new_lines();
     if !echoing.finish_echo(SHUTDOWN_GRACE) {

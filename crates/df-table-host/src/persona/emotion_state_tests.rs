@@ -196,17 +196,16 @@ async fn an_appraisal_is_kept_per_persona_read_again_and_follows_the_file_withou
         "20% of the gap, from the built-in list"
     );
 
-    host.running
-        .write_asset(
-            "persona/emotions.json",
-            concat!(
-                r#"{"decay_percent": 100, "emotions": ["#,
-                r#"{"id": "joy", "label": "Joy", "valence": 80, "arousal": 60, "tone": "ally", "#,
-                r#""decay_percent": 100}, "#,
-                r#"{"id": "trust", "label": "Trust", "valence": 60, "arousal": 30, "#,
-                r#""tone": "ally"}]}"#
-            ),
-        );
+    host.running.write_asset(
+        "persona/emotions.json",
+        concat!(
+            r#"{"decay_percent": 100, "emotions": ["#,
+            r#"{"id": "joy", "label": "Joy", "valence": 80, "arousal": 60, "tone": "ally", "#,
+            r#""decay_percent": 100}, "#,
+            r#"{"id": "trust", "label": "Trust", "valence": 60, "arousal": 30, "#,
+            r#""tone": "ally"}]}"#
+        ),
+    );
     let gone = apply_appraisal(app, &own, &Appraisal::default());
     assert_eq!(gone.level("joy"), 0, "the file was read again");
     assert_eq!(gone.turn, 3);

@@ -327,12 +327,12 @@ async fn removing_a_file_that_is_not_there_says_so() {
     let error = run(&running, "media remove ghost.png")
         .await
         .expect_err("refused");
-    // The library's refusals carry no cause yet; the sentence names the file.
+    // The sentence names the file.
     assert!(
         matches!(
             &error,
             DevError::Rejected {
-                error: ReplyError::Canvas { cause: None, .. },
+                error: ReplyError::Playground(PlaygroundChangeError::InvalidChange { .. }),
                 message,
             } if message.contains("ghost.png")
         ),

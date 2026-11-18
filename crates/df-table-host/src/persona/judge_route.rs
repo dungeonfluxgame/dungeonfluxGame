@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::generate::operation_key;
-use crate::dev_http::{BodyError, RouteError};
+use crate::dev_http::{BodyError, QueryError, RouteError};
 use crate::text::{
     ModelCause, ServiceReason, TextAskError, TextRoute, TextRuntime, TextServiceCause,
 };
@@ -23,6 +23,8 @@ use crate::text::{
 pub enum JudgeRouteError<C> {
     /// The request body is not the JSON the route reads.
     InvalidBody(BodyError),
+    /// The query of a GET route is missing a parameter or has one that does not read.
+    InvalidQuery(QueryError),
     /// The request, or what it is judged against, cannot be used.
     BadRequest { cause: C },
     /// The text service is not set up; `missing` says what to set.
@@ -47,6 +49,7 @@ impl<C> JudgeRouteError<C> {
     pub fn key(&self) -> &'static str {
         match self {
             Self::InvalidBody(_) => "invalid_body",
+            Self::InvalidQuery(_) => "invalid_query",
             Self::BadRequest { .. } => "bad_request",
             Self::TextServiceMissing { .. } => "text_service_missing",
             Self::InvalidModel { .. } => "invalid_model",
@@ -62,6 +65,7 @@ impl<C: fmt::Display> fmt::Display for JudgeRouteError<C> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidBody(_) => formatter.write_str("the request body is not the JSON to read"),
+            Self::InvalidQuery(error) => write!(formatter, "{error}"),
             Self::BadRequest { cause } => write!(formatter, "the request cannot be used: {cause}"),
             Self::TextServiceMissing { missing } => {
                 write!(formatter, "the text service is not set up: {missing}")
@@ -82,9 +86,10 @@ impl<C: fmt::Debug + fmt::Display> std::error::Error for JudgeRouteError<C> {}
 impl<C: fmt::Debug + fmt::Display + Send + Sync + 'static> RouteError for JudgeRouteError<C> {
     fn status(&self) -> StatusCode {
         match self {
-            Self::InvalidBody(_) | Self::BadRequest { .. } | Self::InvalidModel { .. } => {
-                StatusCode::BAD_REQUEST
-            }
+            Self::InvalidBody(_)
+            | Self::InvalidQuery(_)
+            | Self::BadRequest { .. }
+            | Self::InvalidModel { .. } => StatusCode::BAD_REQUEST,
             Self::TextServiceMissing { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::TextService { .. } | Self::AnswerRefused { .. } => StatusCode::BAD_GATEWAY,
             Self::InvalidOperationKey | Self::Stopped => StatusCode::INTERNAL_SERVER_ERROR,
@@ -108,18 +113,40 @@ impl<C> From<TextAskError<C>> for JudgeRouteError<C> {
     }
 }
 
-/// The route a judgement is asked of: the default persona model, or the one the request names.
-pub(crate) fn judge_route<C>(
+/// Why no route can be had for a question: the text service is not set up (`missing` says what to
+/// set), or the model name is not usable.
+pub(crate) enum RouteMiss {
+    TextServiceMissing { missing: String },
+    InvalidModel { cause: ModelCause },
+}
+
+/// The route a persona question or a judgement is asked of: the default persona model, or the one
+/// the request names. Each API maps the miss to its own error ([`judge_route`],
+/// `generate::persona_route`).
+pub(crate) fn text_route(
     text: &TextRuntime,
     model: Option<&str>,
-) -> Result<Arc<TextRoute>, JudgeRouteError<C>> {
+) -> Result<Arc<TextRoute>, RouteMiss> {
     if let Some(missing) = text.missing() {
-        return Err(JudgeRouteError::TextServiceMissing {
+        return Err(RouteMiss::TextServiceMissing {
             missing: missing.to_owned(),
         });
     }
     text.persona_route(model)
-        .map_err(|cause| JudgeRouteError::InvalidModel { cause })
+        .map_err(|cause| RouteMiss::InvalidModel { cause })
+}
+
+/// The route a judgement is asked of ([`text_route`]).
+pub(crate) fn judge_route<C>(
+    text: &TextRuntime,
+    model: Option<&str>,
+) -> Result<Arc<TextRoute>, JudgeRouteError<C>> {
+    text_route(text, model).map_err(|miss| match miss {
+        RouteMiss::TextServiceMissing { missing } => {
+            JudgeRouteError::TextServiceMissing { missing }
+        }
+        RouteMiss::InvalidModel { cause } => JudgeRouteError::InvalidModel { cause },
+    })
 }
 
 /// Asks `request` once under `operation` and reads the answer with `read`. An answer the reader

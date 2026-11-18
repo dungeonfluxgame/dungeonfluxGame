@@ -235,7 +235,71 @@ async fn the_host_serves_the_page_theme_fixtures_and_package_with_their_media_ty
     .await;
     let head = raw.to_ascii_lowercase();
     assert!(head.contains("content-type: application/wasm"), "{head}");
-    assert!(head.contains("cache-control: no-store"), "{head}");
+    assert!(head.contains("cache-control: no-cache"), "{head}");
+    assert!(head.contains("etag: "), "{head}");
+}
+
+/// The entity tag of a raw answer.
+fn etag_of(raw: &str) -> String {
+    raw.lines()
+        .find_map(|line| {
+            line.strip_prefix("etag: ")
+                .or_else(|| line.strip_prefix("ETag: "))
+        })
+        .expect("has an etag")
+        .trim()
+        .to_owned()
+}
+
+fn conditional_get(path: &str, tag: &str) -> String {
+    format!(
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nIf-None-Match: {tag}\r\n\
+         Connection: close\r\n\r\n"
+    )
+}
+
+#[tokio::test]
+async fn a_page_that_has_the_package_and_theme_gets_a_bodiless_304_until_they_change() {
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("theme.css", "body { color: red; }");
+    running.write_package_file("df_playground_bg.wasm", b"\0asm");
+
+    for path in [
+        "/playground/pkg/df_playground_bg.wasm",
+        "/playground/theme.css",
+    ] {
+        let first = raw_exchange(
+            running.port,
+            &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),
+        )
+        .await;
+        assert!(first.starts_with("HTTP/1.1 200"), "{first}");
+        let tag = etag_of(&first);
+        let again = raw_exchange(running.port, &conditional_get(path, &tag)).await;
+        assert!(again.starts_with("HTTP/1.1 304"), "{again}");
+        assert_eq!(etag_of(&again), tag);
+        let (_, body) = again.split_once("\r\n\r\n").expect("has a head");
+        assert_eq!(body, "", "{path}");
+        let stale = raw_exchange(running.port, &conditional_get(path, "\"0-0\"")).await;
+        assert!(stale.starts_with("HTTP/1.1 200"), "{stale}");
+    }
+
+    let first = raw_exchange(
+        running.port,
+        &conditional_get("/playground/theme.css", "\"0-0\""),
+    )
+    .await;
+    running.write_asset("theme.css", "body { color: blue; margin: 0; }");
+    let changed = raw_exchange(
+        running.port,
+        &conditional_get("/playground/theme.css", &etag_of(&first)),
+    )
+    .await;
+    assert!(changed.starts_with("HTTP/1.1 200"), "{changed}");
+    assert!(
+        changed.ends_with("body { color: blue; margin: 0; }"),
+        "{changed}"
+    );
 }
 
 #[tokio::test]
@@ -292,9 +356,9 @@ async fn the_playground_is_behind_the_same_host_check_as_the_rest() {
 
 #[tokio::test]
 async fn a_fixture_body_that_is_not_json_is_refused_with_its_typed_cause() {
-    use df_table::event::RejectionCause;
-
-    use crate::wire::{Reply, path};
+    use crate::dev_http::{BodyCause, DevReply};
+    use crate::playground::PlaygroundChangeError;
+    use crate::wire::{Changed, path};
     let running = start(&STARTER_FILES).await;
     for route in [
         path::DEV_FIXTURE_WRITE,
@@ -305,11 +369,16 @@ async fn a_fixture_body_that_is_not_json_is_refused_with_its_typed_cause() {
             .await
             .expect("answers");
         assert_eq!(response.status, StatusCode::BAD_REQUEST, "{route}");
-        let reply: Reply = serde_json::from_str(&response.body).expect("a reply");
-        let Reply::Rejected { cause, .. } = reply else {
+        let reply: DevReply<Changed, PlaygroundChangeError> =
+            serde_json::from_str(&response.body).expect("a reply");
+        let DevReply::Rejected {
+            error: PlaygroundChangeError::InvalidBody(body),
+            ..
+        } = reply
+        else {
             panic!("{route}: a body that is not the request is refused");
         };
-        assert_eq!(cause, Some(RejectionCause::MalformedRequest), "{route}");
+        assert_eq!(body.cause, BodyCause::Data, "{route}");
     }
     let rejects: Vec<String> = playground_lines(&running)
         .into_iter()
@@ -345,7 +414,7 @@ async fn post_with(port: u16, path: &str, body: &str, headers: &str) -> String {
 
 #[test]
 fn every_closed_key_reads_back_and_matches_its_serde_name() {
-    use crate::playground::{BodyReadCause, ChangeSource, ServedFileKind};
+    use crate::playground::{ChangeSource, ServedFileKind};
     for kind in ServedFileKind::ALL {
         assert_eq!(ServedFileKind::from_key(kind.key()), Some(kind));
         assert_eq!(serde_json::to_value(kind).expect("writes"), kind.key());
@@ -353,10 +422,6 @@ fn every_closed_key_reads_back_and_matches_its_serde_name() {
     for source in ChangeSource::ALL {
         assert_eq!(ChangeSource::from_key(source.key()), Some(source));
         assert_eq!(serde_json::to_value(source).expect("writes"), source.key());
-    }
-    for cause in BodyReadCause::ALL {
-        assert_eq!(BodyReadCause::from_key(cause.key()), Some(cause));
-        assert_eq!(serde_json::to_value(cause).expect("writes"), cause.key());
     }
 }
 
@@ -650,7 +715,7 @@ async fn a_fixture_text_that_is_not_a_fixture_names_its_reason() {
 }
 
 #[tokio::test]
-async fn a_controls_body_that_breaks_off_is_recorded_as_unreadable() {
+async fn a_controls_body_that_breaks_off_is_recorded_as_truncated() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let running = start(&STARTER_FILES).await;
     // The body declares more bytes than are sent before the sender stops writing.
@@ -666,14 +731,14 @@ async fn a_controls_body_that_breaks_off_is_recorded_as_unreadable() {
     // The host may answer or close; either way the refusal was recorded first.
     let _ = stream.read_to_end(&mut answer).await;
     let expected =
-        "PLAYGROUND reject cause=malformed_request reason=unreadable source=- client=-".to_owned();
+        "PLAYGROUND reject cause=malformed_request reason=truncated source=- client=-".to_owned();
     for _ in 0..200 {
         if playground_lines(&running).contains(&expected) {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    panic!("no unreadable line: {:?}", playground_lines(&running));
+    panic!("no truncated line: {:?}", playground_lines(&running));
 }
 
 #[tokio::test]

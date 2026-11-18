@@ -5,10 +5,13 @@
 //! announces. The router serves an explicit allow-list of handlers the dev router also serves (one
 //! handler each, never a copy): the phone page at `df_playground::path::PLAY`, its files, the frame
 //! long poll, the media and dice files, what the playground shows, the page's own report, and the
-//! seat routes (`seat::routes`: the room, hello, join, the hero list, the seat's view and its
-//! lobby actions, each for the seat the phone's key holds). Anything else answers 404, so no
-//! `/dev/` route but the report is reachable from the network and nothing a phone sends changes
-//! what is shown. The guard (`guard::Audience::Players`) accepts only
+//! player routes of the seats (`seat::routes`), the seat's live pages (`seat_pages`) and the look
+//! studio (`look::routes`). Anything else answers 404, so no `/dev/` route but the report is
+//! reachable from the network. A phone changes only what its own seat key holds: it joins or
+//! leaves a seat, chooses a hero and makes its look (the look's refines are paid image calls), says
+//! ready or not ready, starts the game (which runs the table's scenario, when it has one), says its
+//! hero's lines when the table asks, keeps notes in its own notebook and sends its page's report.
+//! It never changes the shown scene directly. The guard (`guard::Audience::Players`) accepts only
 //! this machine's own addresses (and loopback) on the player port and refuses a cross-site change;
 //! the dev API's guard middleware (`server::guard_requests`) runs it, so refusals are written
 //! alike.
@@ -17,14 +20,16 @@
 //! writes `HOST player_listener url=http://<address>:<port>/play port=<port>` (or, when there is
 //! none, `url=http://127.0.0.1:<port>/play port=<port> lan=none reason=..`). While it serves, its
 //! watch writes the `CLIENT link state=quiet` line of a phone gone quiet and the `CLIENT gone` line
-//! of a page gone, even when nothing else asks. Beside its seat's view, the phone still sees the
-//! same dev-mode phone view as the playground's phone pane, which is not a private per-seat view.
+//! of a page gone, even when nothing else asks, and the `PLAYER traffic` line of what it sent.
+//! Beside its seat's view, the phone still sees the same dev-mode phone view as the playground's
+//! phone pane, which is not a private per-seat view.
 //!
 //! The loopback dev listener also serves `path::PHONE_LINK`, the phone page's address in large
 //! text and as a QR code with the friends waiting for approval (`phone_link`), so the owner can
 //! scan it from the PC's screen, and the seat routes and their dev routes.
 
 mod phone_link;
+mod traffic;
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -37,10 +42,12 @@ use axum::routing::get;
 use tokio::net::{TcpListener, UdpSocket};
 
 use crate::guard::Audience;
-use crate::limits::{CLIENT_WATCH_INTERVAL, MAXIMUM_REQUEST_BYTES};
+use crate::limits::{CLIENT_WATCH_INTERVAL, MAXIMUM_PLAYER_REQUEST_BYTES, PLAYER_TRAFFIC_WINDOW};
 use crate::server::{ListenerGuard, guard_requests};
 use crate::state::AppState;
 use crate::wire::route;
+
+pub(crate) use self::traffic::PlayerTraffic;
 
 /// The addresses of the player routes the dev listener serves.
 pub mod path {
@@ -147,28 +154,65 @@ pub async fn listen(port: u16) -> io::Result<PlayerListener> {
 
 /// The player listener's routes: the allow-list, behind its guard. Any other address answers 404.
 pub fn router(state: Arc<AppState>, audience: Audience) -> Router {
+    routes(state, audience, Arc::default())
+}
+
+/// The player listener's routes, counting what they send in `traffic`: a JSON answer a phone
+/// already has is a bodiless 304 (`traffic`).
+pub(crate) fn routes(
+    state: Arc<AppState>,
+    audience: Audience,
+    traffic: Arc<PlayerTraffic>,
+) -> Router {
     let guard = ListenerGuard::new(Arc::clone(&state), audience);
     let reads = Router::new()
-        .route(route::PLAYGROUND_FRAME, get(crate::server::frame_json))
+        // A phone is sent the frame as a phone draws it, never the shared screen's whole frame.
+        .route(
+            route::PLAYGROUND_FRAME,
+            get(crate::server::player_frame_json),
+        )
+        // A phone is served only the media its answers gave it signed links to.
         .route(
             route::PLAYGROUND_MEDIA_FILE,
-            get(crate::media_library::media_file),
+            get(crate::media_links::signed_media_file),
         )
         .with_state(Arc::clone(&state));
     crate::playground::player_router(Arc::clone(&state))
-        .merge(crate::seat::routes::player_router(state))
+        .merge(crate::seat::routes::player_router(Arc::clone(&state)))
+        .merge(crate::seat_pages::player_router(Arc::clone(&state)))
+        .merge(crate::look::routes::player_router(Arc::clone(&state)))
         .merge(reads)
-        .layer(DefaultBodyLimit::max(MAXIMUM_REQUEST_BYTES))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            crate::media_links::sign_answers,
+        ))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&traffic),
+            traffic::conditional_answers,
+        ))
+        .layer(DefaultBodyLimit::max(MAXIMUM_PLAYER_REQUEST_BYTES))
+        // A phone's own change (a line, a note, a lobby action) wakes the pages waiting for a
+        // frame, as a change sent to the dev API does.
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            crate::server::announce_changes,
+        ))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&traffic),
+            traffic::bounded_requests,
+        ))
         .layer(middleware::from_fn_with_state(guard, guard_requests))
 }
 
 /// The routes of the player listener the loopback dev listener serves: the phone link page, the
-/// phone's seat routes (so the playground's phone pane can join) and the seat dev routes.
+/// phone's seat and live-page routes (so the live phone the playground shows beside the shared
+/// screen joins and plays) and the seat dev routes.
 pub(crate) fn dev_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route(path::PHONE_LINK, get(phone_link::page))
         .with_state(Arc::clone(&state))
         .merge(crate::seat::routes::player_router(Arc::clone(&state)))
+        .merge(crate::seat_pages::player_router(Arc::clone(&state)))
         .merge(crate::seat::routes::dev_router(state))
 }
 
@@ -188,7 +232,8 @@ pub fn start(listener: PlayerListener, state: &Arc<AppState>) -> PlayerTasks {
     }
     state.set_player_links(listener.links());
     state.echo_new_lines();
-    let routes = router(Arc::clone(state), listener.audience())
+    let traffic = Arc::new(PlayerTraffic::default());
+    let routes = routes(Arc::clone(state), listener.audience(), Arc::clone(&traffic))
         .into_make_service_with_connect_info::<SocketAddr>();
     let serving_state = Arc::clone(state);
     let serving = tokio::spawn(async move {
@@ -199,20 +244,32 @@ pub fn start(listener: PlayerListener, state: &Arc<AppState>) -> PlayerTasks {
             ));
         }
     });
-    let watch = spawn_client_watch(Arc::clone(state));
+    let watch = spawn_client_watch(Arc::clone(state), traffic);
     PlayerTasks { serving, watch }
 }
 
 /// Looks at the open pages every `CLIENT_WATCH_INTERVAL`, so a phone gone quiet and a page gone
-/// are written while nothing else asks. It reads tokio's clock for the interval only; the pages'
+/// are written while nothing else asks, and writes what the listener sent (`traffic`) every
+/// `PLAYER_TRAFFIC_WINDOW`. It reads tokio's clock for the interval and the window only; the pages'
 /// silence is measured on the playground's clock. Abort the handle to stop it.
-fn spawn_client_watch(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
+fn spawn_client_watch(
+    state: Arc<AppState>,
+    traffic: Arc<PlayerTraffic>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(CLIENT_WATCH_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut window_start = tokio::time::Instant::now();
         loop {
             interval.tick().await;
             crate::playground::sweep_clients(&state);
+            let window = window_start.elapsed();
+            if window >= PLAYER_TRAFFIC_WINDOW {
+                window_start = tokio::time::Instant::now();
+                if let Some(line) = traffic.take().line(window.as_secs()) {
+                    state.record_line(line);
+                }
+            }
             state.echo_new_lines();
         }
     })

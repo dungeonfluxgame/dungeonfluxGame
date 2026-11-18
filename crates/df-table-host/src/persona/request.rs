@@ -16,7 +16,7 @@ use df_content::persona::{
 use serde::{Deserialize, Serialize};
 
 use super::declare::DeclaredAction;
-use crate::dev_http::{BodyError, DevReply, RouteError};
+use crate::dev_http::{BodyError, DevReply, QueryError, RouteError};
 use crate::io_cause::IoCause;
 use crate::playground::SceneApplyError;
 use crate::shown_scene::ShownSceneError;
@@ -98,6 +98,18 @@ pub struct GenerateRequest {
     /// Write a new persona over a stored one. Without it a stored persona is kept.
     #[serde(default)]
     pub overwrite: bool,
+    /// Write a character who is not in the shown scene (a player's hero before their day starts):
+    /// no scene is read and they are told of no one.
+    #[serde(default)]
+    pub unplaced: bool,
+    /// The names other characters already have: the new persona's is never one of them (it is
+    /// asked again).
+    #[serde(default)]
+    pub names_taken: Vec<String>,
+    /// How the person looks as painted, when a plate shows them: their name is judged to fit how
+    /// they present there (asked again when it does not).
+    #[serde(default)]
+    pub as_painted: Option<String>,
 }
 
 /// The body of `POST /dev/persona/generate-cast`: `GenerateRequest` for every named character of
@@ -143,6 +155,42 @@ pub struct SayRequest {
     /// character's purpose shows, so what hides it is lifted for this line only.
     #[serde(default)]
     pub strike: bool,
+    /// The line itself, spoken as written (a player's own words). No model reads or rewords it,
+    /// so it moves no feeling and no inventory; the situation is not needed with it.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// What the caller expects the line to do, judged by a call of its own.
+    #[serde(default)]
+    pub expect: Option<SayExpect>,
+}
+
+/// What a caller expects a line to do, so it is judged by a call of its own and not left to the
+/// line's many-purpose answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SayExpect {
+    /// The line moves what the character carries (a study finished from its supplies).
+    Inventory,
+    /// The line is a deed whose outcome is decided after it is said (a roll): it is shown and
+    /// voiced now and moves nothing of what the character carries until what came of it is judged
+    /// (`said_inventory`).
+    Attempt,
+    /// The line was said already, by an earlier `persona say`, and what it moves of what the
+    /// character carries is judged now, as finished work (a deed told after its roll): nothing is
+    /// shown, voiced or heard again.
+    SaidInventory,
+}
+
+impl SayExpect {
+    pub const ALL: [Self; 3] = [Self::Inventory, Self::Attempt, Self::SaidInventory];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Inventory => "inventory",
+            Self::Attempt => "attempt",
+            Self::SaidInventory => "said_inventory",
+        }
+    }
 }
 
 fn yes() -> bool {
@@ -162,6 +210,8 @@ impl std::fmt::Debug for SayRequest {
             .field("recent_lines", &self.recent.len())
             .field("asked_by", &self.asked_by)
             .field("strike", &self.strike)
+            .field("has_text", &self.text.is_some())
+            .field("expect", &self.expect)
             .finish()
     }
 }
@@ -573,6 +623,7 @@ pub struct QuoteReport {
 pub struct Spoken {
     pub character: String,
     pub said: SaidLine,
+    /// The scene revision the line was cued at; 0 when nothing was cued (`said_inventory`).
     pub revision: u64,
     /// What voicing the line came to; none when the request did not ask for a voice.
     #[serde(default)]
@@ -706,9 +757,8 @@ impl From<LineError> for AnswerError {
 pub enum PersonaError {
     /// The request body is not the JSON the route reads, or its persona is not valid.
     InvalidBody(BodyError),
-    /// The query is not one the route reads. `detail` is the query reader's own sentence, which
-    /// has no closed set to enumerate.
-    InvalidQuery { detail: String },
+    /// The query is not one the route reads.
+    InvalidQuery(QueryError),
     /// A persona id is not valid.
     InvalidPersona { cause: ContentError },
     /// The id is a word the dev API or its command line uses (`remove`, `generate`, ...).
@@ -786,7 +836,7 @@ impl PersonaError {
     pub(crate) fn key(&self) -> &'static str {
         match self {
             Self::InvalidBody(_) => "invalid_body",
-            Self::InvalidQuery { .. } => "invalid_query",
+            Self::InvalidQuery(_) => "invalid_query",
             Self::InvalidPersona { .. } => "invalid_persona",
             Self::ReservedId { .. } => "reserved_id",
             Self::InvalidEdit { .. } => "invalid_edit",
@@ -823,7 +873,7 @@ impl fmt::Display for PersonaError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidBody(error) => write!(formatter, "{error}"),
-            Self::InvalidQuery { detail } => write!(formatter, "the query is not valid: {detail}"),
+            Self::InvalidQuery(error) => write!(formatter, "{error}"),
             Self::InvalidPersona { cause } => write!(formatter, "{cause}"),
             Self::ReservedId { id } => write!(
                 formatter,
@@ -975,7 +1025,7 @@ impl RouteError for PersonaError {
     fn status(&self) -> StatusCode {
         match self {
             Self::InvalidBody(_)
-            | Self::InvalidQuery { .. }
+            | Self::InvalidQuery(_)
             | Self::InvalidPersona { .. }
             | Self::ReservedId { .. }
             | Self::InvalidModel { .. }

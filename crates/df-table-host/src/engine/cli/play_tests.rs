@@ -125,6 +125,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 use crate::dev::{DevError, ReplyError};
+use crate::playground::PlaygroundChangeError;
 
 use super::play::{LIVE_FIXTURE, PlayError, ReadyListCause, run};
 use crate::engine::routes::{AUDIENCE_PARAMETER, path};
@@ -365,8 +366,9 @@ async fn play_publish_fails_naming_the_view_a_projection_lacks_and_never_writes_
         (
             route::DEV_FIXTURE_WRITE.to_owned(),
             json!({
-                "outcome": "rejected", "cause": null,
-                "message": "the fixture does not read", "problems": []
+                "outcome": "rejected",
+                "error": {"error": "invalid_change", "detail": "the fixture does not read"},
+                "message": "the fixture does not read"
             })
             .to_string(),
         ),
@@ -375,10 +377,9 @@ async fn play_publish_fails_naming_the_view_a_projection_lacks_and_never_writes_
     assert_eq!(
         run(refused, PlayCommand::Publish { seat: None }).await,
         Err(DevError::Rejected {
-            error: ReplyError::Canvas {
-                cause: None,
-                problems: Vec::new()
-            },
+            error: ReplyError::Playground(PlaygroundChangeError::InvalidChange {
+                detail: "the fixture does not read".to_owned(),
+            }),
             message: "the fixture does not read".to_owned(),
         })
     );
@@ -386,5 +387,5 @@ async fn play_publish_fails_naming_the_view_a_projection_lacks_and_never_writes_
 
 /// The playground's answer to a fixture it wrote.
 fn written_reply() -> String {
-    json!({"outcome": "done", "revision": 1, "notices": []}).to_string()
+    json!({"outcome": "done", "value": {"revision": 1, "notices": []}}).to_string()
 }

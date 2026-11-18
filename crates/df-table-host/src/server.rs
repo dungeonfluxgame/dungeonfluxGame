@@ -33,7 +33,7 @@ use df_types::saturating_millis;
 use serde::Deserialize;
 
 use self::request::{EventsQuery, HostError, QueriedRoute, RequestMethod};
-use crate::dev_http;
+use crate::dev_http::{self, QueryError};
 use crate::guard;
 use crate::kind_files::load_kind_files_async;
 use crate::limits::{
@@ -43,29 +43,14 @@ use crate::media_library;
 use crate::playground;
 use crate::render;
 use crate::request::RequestError;
-use crate::state::AppState;
+use crate::state::{AppState, FrameAudience};
 use crate::view::{CanvasView, ViewError};
-use crate::wire::{EffectRequest, EventsReply, FRAME_IDLE_NO_CONTENT, Reply, capped, route};
+use crate::wire::{Changed, EffectRequest, EventsReply, FRAME_IDLE_NO_CONTENT, capped, route};
 
 /// The addresses of the host's own dev routes.
 pub mod path {
     /// What the host's log, event sink and clock are doing (GET, a `HostReply<HostStatus>`).
     pub const HOST_STATUS: &str = "/dev/host/status";
-}
-
-fn answer(status: StatusCode, reply: Reply) -> Response {
-    (status, Json(reply)).into_response()
-}
-
-fn rejected(status: StatusCode, cause: Option<RejectionCause>, message: &str) -> Response {
-    answer(
-        status,
-        Reply::Rejected {
-            cause,
-            message: message.to_owned(),
-            problems: Vec::new(),
-        },
-    )
 }
 
 /// What a listener's guard needs: the state to record a refusal in, and who the listener answers
@@ -118,11 +103,7 @@ fn refuse_guarded(state: &AppState, method: &Method, error: guard::GuardError) -
         RequestMethod::of(method).key(),
         RejectionCause::ForbiddenRequest.key()
     ));
-    rejected(
-        error.status(),
-        Some(RejectionCause::ForbiddenRequest),
-        error.message(),
-    )
+    dev_http::reply::<(), guard::GuardError>(Err(error))
 }
 
 /// Whether an answer of `route` gets an `HTTP served` line: a `/dev/` route but a page's report,
@@ -161,9 +142,9 @@ async fn record_served(
 
 /// Records and answers a query a host route cannot read.
 fn refuse_query(state: &AppState, route: QueriedRoute, rejection: &QueryRejection) -> Response {
-    let error = HostError::InvalidQuery {
+    let error = HostError::InvalidQuery(QueryError {
         detail: rejection.body_text(),
-    };
+    });
     state.record_line(format!(
         "HOST refused route={} error={}",
         route.key(),
@@ -175,7 +156,7 @@ fn refuse_query(state: &AppState, route: QueriedRoute, rejection: &QueryRejectio
 /// Tells readers waiting for news that a change was made. Every POST is a change attempt, so
 /// the announcement is made after the answer is built, whether the change was accepted or not:
 /// a reader that looks again and finds nothing new costs one request.
-async fn announce_changes(
+pub(crate) async fn announce_changes(
     State(state): State<Arc<AppState>>,
     request: Request,
     next: Next,
@@ -196,9 +177,9 @@ fn canvas_view(state: &AppState) -> Result<CanvasView, ViewError> {
     CanvasView::from_canvas(&state.canvas())
 }
 
-fn view_failed(state: &AppState, error: &dyn std::fmt::Display) -> Response {
+fn view_failed(state: &AppState, error: &ViewError) -> Response {
     state.record_line(format!("HOST view_failed reason={error}"));
-    rejected(StatusCode::INTERNAL_SERVER_ERROR, None, &error.to_string())
+    dev_http::reply::<(), ViewError>(Err(error.clone()))
 }
 
 async fn index(State(state): State<Arc<AppState>>) -> Response {
@@ -243,10 +224,29 @@ pub(crate) async fn frame_json(
     headers: HeaderMap,
     query: Result<Query<FrameQuery>, QueryRejection>,
 ) -> Response {
-    let origin = playground::ChangeOrigin::from_headers(&headers);
+    frame_route(&state, &headers, query, FrameAudience::Shared).await
+}
+
+/// `frame_json` for a phone on the player listener: the same stream, with what a phone draws
+/// (`FrameAudience::Player`).
+pub(crate) async fn player_frame_json(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    query: Result<Query<FrameQuery>, QueryRejection>,
+) -> Response {
+    frame_route(&state, &headers, query, FrameAudience::Player).await
+}
+
+async fn frame_route(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    query: Result<Query<FrameQuery>, QueryRejection>,
+    audience: FrameAudience,
+) -> Response {
+    let origin = playground::ChangeOrigin::from_headers(headers);
     match query {
-        Ok(Query(query)) => frame_answer(&state, &query, &origin, FRAME_WAIT).await,
-        Err(rejection) => refuse_query(&state, QueriedRoute::Frame, &rejection),
+        Ok(Query(query)) => frame_answer(state, &query, &origin, FRAME_WAIT, audience).await,
+        Err(rejection) => refuse_query(state, QueriedRoute::Frame, &rejection),
     }
 }
 
@@ -260,6 +260,7 @@ async fn frame_answer(
     query: &FrameQuery,
     origin: &playground::ChangeOrigin,
     patience: Duration,
+    audience: FrameAudience,
 ) -> Response {
     let started = tokio::time::Instant::now();
     let same_run = query
@@ -276,7 +277,7 @@ async fn frame_answer(
             return StatusCode::NO_CONTENT.into_response();
         }
     }
-    match state.frame().await {
+    match state.frame_for(audience).await {
         Ok(built) => {
             let chunks = built.chunks();
             let length: usize = chunks.iter().map(Bytes::len).sum();
@@ -306,7 +307,15 @@ async fn frame_answer(
             headers.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
             response
         }
-        Err(error) => view_failed(state, &error),
+        Err(error) => {
+            let error = match error {
+                crate::state::FrameError::View(error) => error,
+                other => ViewError::NotBuilt {
+                    detail: other.to_string(),
+                },
+            };
+            view_failed(state, &error)
+        }
     }
 }
 
@@ -351,38 +360,28 @@ async fn apply_effect(
     State(state): State<Arc<AppState>>,
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
-    let state = state.as_ref();
-    let bytes = match body {
-        Ok(bytes) => bytes,
-        Err(rejection) => {
-            state.record_rejection(None, None, RejectionCause::MalformedRequest);
-            return rejected(
-                rejection.status(),
-                Some(RejectionCause::MalformedRequest),
-                "the request body could not be read",
-            );
-        }
-    };
-    let request: EffectRequest = match serde_json::from_slice(&bytes) {
-        Ok(request) => request,
-        Err(error) => {
-            state.record_rejection(None, None, RejectionCause::MalformedRequest);
-            return rejected(
-                StatusCode::BAD_REQUEST,
-                Some(RejectionCause::MalformedRequest),
-                &format!("the request is not a valid effect: {error}"),
-            );
-        }
-    };
+    dev_http::reply(apply_effect_body(state.as_ref(), body))
+}
+
+/// Reads an effect and applies it to the canvas: the revision after it, or why it was refused
+/// (recorded as a rejection event).
+fn apply_effect_body(
+    state: &AppState,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Changed, HostError> {
+    let request: EffectRequest = dev_http::read_body(body).map_err(|error| {
+        state.record_rejection(None, None, RejectionCause::MalformedRequest);
+        HostError::InvalidBody(error)
+    })?;
     let effect_kind = request.effect_kind();
     let element = request.element();
     let mut canvas = state.canvas();
     let effect = match request.into_effect(&canvas) {
         Ok(effect) => effect,
-        Err(error) => return reject_conversion(state, effect_kind, element, &error),
+        Err(error) => return Err(reject_conversion(state, effect_kind, element, &error)),
     };
     if let Err(error) = pivot_has_settled(state, &canvas, &effect) {
-        return reject_conversion(state, effect_kind, element, &error);
+        return Err(reject_conversion(state, effect_kind, element, &error));
     }
     let follow = Follow::of(&canvas, &effect);
     let applied = canvas.apply(effect, state.sink());
@@ -391,23 +390,15 @@ async fn apply_effect(
     }
     let revision = canvas.revision();
     drop(canvas);
-    match applied {
-        Ok(()) => {
-            follow.apply(state);
-            answer(
-                StatusCode::OK,
-                Reply::Done {
-                    revision,
-                    notices: Vec::new(),
-                },
-            )
-        }
-        Err(error) => rejected(
-            StatusCode::BAD_REQUEST,
-            Some(error.cause()),
-            &error.to_string(),
-        ),
-    }
+    applied.map_err(|error| HostError::InvalidEffect {
+        cause: error.cause(),
+        detail: error.to_string(),
+    })?;
+    follow.apply(state);
+    Ok(Changed {
+        revision,
+        notices: Vec::new(),
+    })
 }
 
 /// Refuses a new pivot for an element whose turn the page is still gliding. The canvas judges the
@@ -481,23 +472,23 @@ impl Follow {
     }
 }
 
+/// Records a request that did not become an effect and gives its refusal.
 fn reject_conversion(
     state: &AppState,
     effect: EffectKind,
     element: Option<ElementId>,
     error: &RequestError,
-) -> Response {
+) -> HostError {
     state.record_rejection(Some(effect), element, error.cause());
-    rejected(
-        StatusCode::BAD_REQUEST,
-        Some(error.cause()),
-        &error.to_string(),
-    )
+    HostError::InvalidEffect {
+        cause: error.cause(),
+        detail: error.to_string(),
+    }
 }
 
 async fn reload(State(state): State<Arc<AppState>>) -> Response {
     let loaded = load_kind_files_async(state.kind_directory().to_path_buf()).await;
-    match loaded {
+    let result = match loaded {
         Ok(registry) => {
             let mut canvas = state.canvas();
             let report = canvas.replace_registry(registry, state.sink());
@@ -506,29 +497,21 @@ async fn reload(State(state): State<Arc<AppState>>) -> Response {
                 .iter()
                 .map(|problem| format!("element '{}': {}", problem.element, problem.problem))
                 .collect();
-            answer(
-                StatusCode::OK,
-                Reply::Done {
-                    revision: canvas.revision(),
-                    notices: capped(notices),
-                },
-            )
+            Ok(Changed {
+                revision: canvas.revision(),
+                notices: capped(notices),
+            })
         }
         Err(problems) => {
             state.sink().record(&TableEvent::KindsRejected {
                 errors: problems.len(),
             });
-            answer(
-                StatusCode::BAD_REQUEST,
-                Reply::Rejected {
-                    cause: None,
-                    message: "the kind files have problems; the loaded kinds are unchanged"
-                        .to_owned(),
-                    problems: capped(problems.messages()),
-                },
-            )
+            Err(HostError::InvalidKinds {
+                problems: capped(problems.messages()),
+            })
         }
-    }
+    };
+    dev_http::reply(result)
 }
 
 /// The routes of the developer API, the viewer and the playground.
@@ -678,5 +661,12 @@ pub(crate) async fn frame_answer_for_test(
     query: &FrameQuery,
     patience: Duration,
 ) -> Response {
-    frame_answer(state, query, &playground::ChangeOrigin::default(), patience).await
+    frame_answer(
+        state,
+        query,
+        &playground::ChangeOrigin::default(),
+        patience,
+        FrameAudience::Shared,
+    )
+    .await
 }

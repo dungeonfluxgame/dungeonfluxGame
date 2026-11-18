@@ -55,6 +55,7 @@
     "value": 19,
     "note": "Chain mail 16, shield +2, Defense +1."
   },
+  "stealth_disadvantage": "Chain Mail",
   "speed_feet": 30,
   "initiative_modifier": {
     "value": 3,

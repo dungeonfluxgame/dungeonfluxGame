@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::fixtures::{
     Table, VirtualClock, Waited, athletics_answer, dice_showing, judge_request, line_answer,
-    routes_over, routes_speaking, table, trivial_answer,
+    routes_over, routes_speaking, table, toned, trivial_answer, with,
 };
 use super::flow::run_check;
 use super::limits::{HEARD_OUT_BASE_MS, RESULT_LEAD_MS};
@@ -39,6 +39,8 @@ fn request(action: &str) -> CheckRunRequest {
         speak: true,
         inspiration: None,
         told: None,
+        dc: None,
+        tool: None,
     }
 }
 
@@ -132,7 +134,8 @@ async fn a_check_is_called_rolled_shown_read_and_cleared_in_that_order_at_these_
     let lines = table.lines_starting_with("CHECK ");
     assert_eq!(
         lines[0],
-        "CHECK called at_ms=0 kind=ability_check skill=athletics dc=15 voice=text_only"
+        "CHECK called at_ms=0 kind=ability_check skill=athletics dc=15 mode=normal grounds=none \
+         voice=text_only"
     );
     let tenths = |line: &str| line.chars().count() * 10 / 14;
     assert_eq!(
@@ -520,4 +523,247 @@ async fn the_call_is_worded_from_facts_that_do_not_depend_on_the_dice() {
     }
     let tones = facts["allowed_tones"].as_array().expect("a list");
     assert!(tones.iter().all(|tone| tone != "dread"), "{tones:?}");
+}
+
+/// The scripted answers of a longsword attack that is called: the judge's, then the call's, the
+/// result's in `result_tone` and the damage's.
+fn attack_answers(result_tone: &str) -> Vec<Value> {
+    let attack = with(
+        athletics_answer(),
+        serde_json::json!({"kind": "attack_roll", "skill": null, "ability": null,
+                           "uses": "longsword", "attack_mode": "melee", "dc_band": null,
+                           "target_creature": "goblin-warrior"}),
+    );
+    vec![
+        attack,
+        line_answer(BEFORE, AFTER),
+        toned(BEFORE, AFTER, result_tone),
+        toned("The blade bites deep.", "It staggers back.", "neutral"),
+    ]
+}
+
+#[tokio::test]
+async fn an_attack_that_hits_rolls_its_weapons_damage_at_once_and_reads_it_after_the_attack() {
+    let table = table(attack_answers("wry")).await;
+    let (run, _clock) = run(&table, &[16, 6], &request("I swing at the brigand.")).await;
+    let rolled = run.rolled.expect("the attack was called");
+    let damage = rolled.damage.expect("a hit deals damage");
+    assert_eq!(rolled.view.total, 21, "16, plus three, plus two");
+    assert_eq!(
+        damage.view.total, 9,
+        "the longsword's d8 shows 6, plus three"
+    );
+    assert!(!damage.critical);
+    assert_eq!(
+        damage.line,
+        "Six on the eight-sided die, plus three for Strength. Nine damage. It staggers back."
+    );
+    let checks = kinds_of(&table);
+    let cleared = checks.iter().position(|kind| kind == "cleared").unwrap();
+    let dealt = checks.iter().position(|kind| kind == "damage").unwrap();
+    assert!(
+        cleared < dealt,
+        "the damage follows the attack's card: {checks:?}"
+    );
+    assert!(
+        table.lines_starting_with("CHECK damage")[0].contains(" dice=6 total=9 crit=no"),
+        "{:?}",
+        table.lines_starting_with("CHECK damage")
+    );
+    assert!(!card_is_up(&table), "the damage card is cleared too");
+}
+
+#[tokio::test]
+async fn a_critical_hit_rolls_the_damage_dice_twice() {
+    let table = table(attack_answers("awe")).await;
+    let (run, _clock) = run(&table, &[20, 5, 7], &request("I swing at the brigand.")).await;
+    let damage = run
+        .rolled
+        .and_then(|rolled| rolled.damage)
+        .expect("a critical hit deals damage");
+    assert!(damage.critical);
+    assert_eq!(damage.view.total, 15, "two d8 showing 5 and 7, plus three");
+    assert!(table.lines_starting_with("CHECK damage")[0].contains(" dice=5+7 total=15 crit=yes"));
+}
+
+#[tokio::test]
+async fn an_attack_that_misses_deals_no_damage() {
+    let table = table(attack_answers("rue")).await;
+    let (run, _clock) = run(&table, &[2], &request("I swing at the brigand.")).await;
+    assert_eq!(run.rolled.expect("the attack was called").damage, None);
+    assert!(table.lines_starting_with("CHECK damage").is_empty());
+}
+
+#[tokio::test]
+async fn archery_adds_two_to_a_ranged_attack_and_great_weapon_fighting_lifts_low_damage_dice() {
+    use df_rules::roll::AttackStyle;
+
+    // Archery with the longbow: 10, plus one for Dexterity, plus two for proficiency, plus two.
+    let mut answers = attack_answers("wry");
+    answers[0] = with(
+        answers[0].clone(),
+        serde_json::json!({"uses": "longbow", "ability": "dexterity", "attack_mode": "ranged"}),
+    );
+    let range = table(answers).await;
+    let mut archer = request("I loose an arrow at the brigand.");
+    archer.judge.sheet.attacks[1].style = Some(AttackStyle::Archery);
+    let (shot, _clock) = run(&range, &[10, 4], &archer).await;
+    let rolled = shot.rolled.expect("the attack was called");
+    assert_eq!(rolled.view.total, 15, "{:?}", rolled.view.modifiers);
+    assert!(
+        rolled
+            .view
+            .modifiers
+            .iter()
+            .any(|modifier| modifier.value == 2)
+    );
+    assert_eq!(
+        rolled.damage.expect("a hit").view.total,
+        5,
+        "no bonus on damage"
+    );
+
+    // Great Weapon Fighting with the longsword: the d8's 1 counts as a 3, plus three.
+    let yard = table(attack_answers("wry")).await;
+    let mut fighter = request("I swing at the brigand.");
+    fighter.judge.sheet.attacks[0].style = Some(AttackStyle::GreatWeaponFighting);
+    let (swing, _clock) = run(&yard, &[16, 1], &fighter).await;
+    let rolled = swing.rolled.expect("the attack was called");
+    assert_eq!(rolled.view.total, 21, "no style on the attack roll");
+    assert_eq!(rolled.damage.expect("a hit").view.total, 6);
+}
+
+/// A narrator's request for the authored test `intent`, at the band `dc`.
+fn authored(
+    intent: super::request::CheckTest,
+    dc: Option<super::request::DcBand>,
+) -> CheckRunRequest {
+    let mut judge = judge_request(Initiator::Narrator, None);
+    judge.intent = Some(intent);
+    CheckRunRequest {
+        judge,
+        speak: true,
+        inspiration: None,
+        told: Some("We're on guild business. Surely the guild's work crosses free?".to_owned()),
+        dc,
+        tool: None,
+    }
+}
+
+/// The judge's answer that called no roll, for "no stakes".
+fn no_roll() -> super::request::CheckJudged {
+    super::request::CheckJudged {
+        verdict: super::request::CheckVerdict {
+            initiator: Initiator::Narrator,
+            reason: super::request::CheckReason::NoStakes,
+            call: None,
+        },
+        retried: 0,
+        duration_ms: 5,
+        designed: None,
+    }
+}
+
+fn test_of(
+    kind: super::request::CheckKind,
+    skill: Option<df_rules::roll::Skill>,
+) -> super::request::CheckTest {
+    super::request::CheckTest {
+        kind,
+        ability: None,
+        skill,
+    }
+}
+
+#[test]
+fn a_scripted_check_the_judge_finds_no_stakes_for_is_called_by_the_dungeon_master() {
+    use super::request::{CheckKind, CheckReason, DcBand, ModeGround};
+    use df_rules::roll::{Ability, RollMode, Skill};
+    let request = authored(
+        test_of(CheckKind::AbilityCheck, Some(Skill::Persuasion)),
+        Some(DcBand::Easy),
+    );
+    let called = super::flow::dm_called(&no_roll(), &request).expect("the scenario set stakes");
+    assert_eq!(called.verdict.reason, CheckReason::NarratorObstacle);
+    let call = called.verdict.call.expect("a roll");
+    assert_eq!(call.kind, CheckKind::AbilityCheck);
+    assert_eq!(call.skill, Some(Skill::Persuasion));
+    assert_eq!(call.ability, Some(Ability::Charisma));
+    assert_eq!(call.dc_band, Some(DcBand::Easy));
+    assert_eq!(
+        (call.mode, call.grounds),
+        (RollMode::Normal, ModeGround::None)
+    );
+}
+
+#[test]
+fn the_dungeon_masters_stealth_call_keeps_the_armours_disadvantage() {
+    use super::request::{CheckKind, DcBand, ModeGround};
+    use df_rules::roll::{RollMode, Skill};
+    // The fixture's warrior wears chain mail, which hinders Stealth (SRD 5.2.1 p. 92).
+    let request = authored(
+        test_of(CheckKind::AbilityCheck, Some(Skill::Stealth)),
+        Some(DcBand::Medium),
+    );
+    let call = super::flow::dm_called(&no_roll(), &request)
+        .and_then(|called| called.verdict.call)
+        .expect("a roll");
+    assert_eq!(
+        (call.mode, call.grounds),
+        (RollMode::Disadvantage, ModeGround::ArmorPenalty)
+    );
+}
+
+#[test]
+fn the_dungeon_master_calls_nothing_unauthored_or_already_called() {
+    use super::request::{CheckKind, DcBand};
+    use df_rules::roll::Skill;
+    let persuasion = test_of(CheckKind::AbilityCheck, Some(Skill::Persuasion));
+    // No difficulty set: the judge's word stands.
+    assert!(super::flow::dm_called(&no_roll(), &authored(persuasion.clone(), None)).is_none());
+    // A tool check with no tool named is never made up.
+    let tool = test_of(CheckKind::ToolCheck, None);
+    assert!(super::flow::dm_called(&no_roll(), &authored(tool, Some(DcBand::Medium))).is_none());
+    // The judge called a roll: it stands.
+    let mut rolled = no_roll();
+    rolled.verdict.call = super::flow::dm_called(
+        &no_roll(),
+        &authored(persuasion.clone(), Some(DcBand::Easy)),
+    )
+    .and_then(|called| called.verdict.call);
+    assert!(super::flow::dm_called(&rolled, &authored(persuasion, Some(DcBand::Hard))).is_none());
+}
+
+#[test]
+fn the_dungeon_master_calls_the_lock_with_the_tool_the_scenario_names() {
+    use super::request::{CheckKind, CheckTest, DcBand, ModeGround};
+    use df_rules::roll::{Ability, RollMode, Skill};
+    let lock = CheckTest {
+        kind: CheckKind::ToolCheck,
+        ability: Some(Ability::Dexterity),
+        skill: Some(Skill::SleightOfHand),
+    };
+    let mut request = authored(lock, Some(DcBand::Medium));
+    request.tool = Some("thieves_tools".to_owned());
+    request.judge.sheet.tool_proficiencies = vec!["thieves_tools".to_owned()];
+    request
+        .judge
+        .sheet
+        .skill_proficiencies
+        .push(Skill::SleightOfHand);
+    let call = super::flow::dm_called(&no_roll(), &request)
+        .and_then(|called| called.verdict.call)
+        .expect("the lock is called");
+    assert_eq!(call.kind, CheckKind::ToolCheck);
+    assert_eq!(call.uses.as_deref(), Some("thieves_tools"));
+    assert_eq!(call.ability, Some(Ability::Dexterity));
+    assert_eq!(call.dc_band, Some(DcBand::Medium));
+    // Proficient with the tool and the skill used with it: Advantage (SRD 5.2.1 p. 93).
+    assert_eq!(
+        (call.mode, call.grounds),
+        (RollMode::Advantage, ModeGround::ToolAndSkill)
+    );
+    // A tool that is no catalog tool is never called.
+    request.tool = Some("lockpick_of_doom".to_owned());
+    assert!(super::flow::dm_called(&no_roll(), &request).is_none());
 }

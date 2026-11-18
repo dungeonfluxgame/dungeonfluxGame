@@ -11,7 +11,8 @@ use crate::client::{get, post_json};
 use crate::command::split_words;
 use crate::dev::{DevError, run_dev};
 use crate::test_support::{Running, STARTER_FILES, start};
-use crate::wire::{ControlsReply, Frame};
+use crate::wire::ControlsReply;
+use df_playground::frame::Frame;
 
 const AVATAR_KIND: &str = include_str!("../../../assets/canvas/kinds/avatar.json");
 const CAMERA_DEMO: &str = include_str!("../../../assets/playground/fixtures/camera_demo.json");

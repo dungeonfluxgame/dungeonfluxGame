@@ -11,8 +11,9 @@ gaps". This is
 a development runbook for the dev host, not the
 shipped launcher. Plan: [scene-transitions.md](../planning/scene-transitions.md).
 
-Where to start: the roam is the current work, so read "Free roam: the current run procedure",
-"Standing rules" and "Systems and where they live" first. The older recipes (the tavern, the
+Where to start: the current work is the painter's day played from a phone, so read "The
+painter's day from the phone" first; the roam it drives is described in "Free roam: the current
+run procedure", "Standing rules" and "Systems and where they live". The older recipes (the tavern, the
 market, the quest) still work and are kept below; a section's date says when it was last
 confirmed.
 
@@ -28,6 +29,156 @@ confirmed.
 | Image prompt and character cards from the design | `move brief` | pure code |
 | New plate generated, characters found, backdrop swapped, spinner shown | `move act <who> plate=NAME ...` | Codex images + fal SAM scan + Codex text |
 | One art style for every plate | `BriefStyle` in `movement/brief.rs` | none |
+
+## The painter's day from the phone (verified 2026-11-16)
+
+A player joins from a phone, makes a hero in the look studio, and plays the painter's day: the
+hero the player made is the one drawn in every plate and is the one who paints. The host runs the
+roam runner (`development/market-thread.sh`) for that seat when the player presses Start; every
+choice after that comes from the phone (Act cards or typed words read by Jev, Talk, Map), never
+from the dev CLI. Plan: [phone-and-creation.md](../planning/phone-and-creation.md). Last checked
+end to end on 2026-11-16, loop 8 (`artifacts/tmp/PHONE-ROAM/host9.log`, run log
+`artifacts/tmp/scenario/play-1794838400027.log`), status 0, through the show.
+
+**Build** (phone lane; the phone package and the host must come from the same source, or the phone
+sends fields the host refuses):
+
+```bash
+export CARGO_TARGET_DIR=$PWD/artifacts/build/phone RUST_MIN_STACK=67108864
+export PATH="/c/Program Files/LLVM/bin:$PATH"     # ring needs clang
+cargo --offline build -p df-playground --lib --target wasm32-unknown-unknown --locked
+artifacts/cache/wasm-bindgen-0.2.129/bin/wasm-bindgen.exe --target web --no-typescript \
+  --out-dir artifacts/playground/pkg-next \
+  artifacts/build/phone/wasm32-unknown-unknown/debug/df_playground.wasm
+# stop the host first (it locks df-table.exe), then:
+cargo --offline build -p df-table-host --bin df-table --locked
+rm -rf artifacts/playground/pkg && cp -r artifacts/playground/pkg-next artifacts/playground/pkg
+```
+
+Workers build only to `pkg-next`; the coordinator promotes it to `pkg` together with the host
+build. The served playground is a copy: after a change to `assets/playground/{look/studio.json,
+theme.css,phone.css,index.html,fixtures/painters_day.json}`, copy those files into it with the
+host build (a studio file ahead of its host is refused as `studio_invalid`).
+
+**Launch** (one host on 7879; the phone listener on 7880 is opt-in with `--players`):
+
+```bash
+awk 'BEGIN{n=0} /^@move /{n++; if(n==2||n==3||n==4) print; next} {print}' \
+  development/market-threads/free-roam.beats > artifacts/tmp/PHONE-ROAM/short-roam.beats
+X='C:\Users\<you>\AppData\Local\OpenAI\Codex\bin\<hash>\codex.exe'
+export DF_FAL_KEY=$(grep -E '^DF_FAL_KEY=' .env | cut -d= -f1 --complement | tr -d '"\r')
+DF_TEXT_BACKEND=codex DF_TEXT_CODEX_EXECUTABLE="$X" DF_IMAGERY_MODE=live \
+  DF_IMAGERY_BACKEND=codex-cli DF_IMAGERY_CODEX_EXECUTABLE="$X" \
+  CODEX_HOME="$PWD/artifacts/codex-image-home" nohup ./artifacts/build/phone/debug/df-table.exe \
+  serve --port 7879 --players 7880 --playground artifacts/tmp/PHONE-P1a/playground \
+  --package artifacts/playground/pkg --scenario artifacts/tmp/PHONE-ROAM/short-roam.beats \
+  > artifacts/tmp/PHONE-ROAM/host.log 2>&1 &
+unset DF_FAL_KEY
+```
+
+Without `DF_TEXT_CODEX_EXECUTABLE` the first move is refused (`text_service_missing`). The short
+beats keep moves 2 to 4 of the 20 (a town corner, the market, the road) plus the show. TTS and
+music stay off (the toolbar defaults); the runner never turns a paid switch on. The host prints
+the phone address (`http://<lan-ip>:7880/play`) and a QR page at `/playground/phone-link`. On the
+dev screen (`http://127.0.0.1:7879/playground/`, View: Both) the phone is the right-hand pane.
+
+**Play** (all from the phone):
+
+1. Join: Play as a guest, a friend of this table, or Continue as a returning player (the seat key
+   lives in the phone's browser; the host keeps only its hash in `players/seat-book.json`).
+2. Look studio: pick species and class cards, Roll a hero, See my hero (about a minute), refine or
+   roll again, open the full-screen viewer, Keep, then Lock in. Lock-in makes the hero pack: the
+   reference sheet `ref-<hero>.png`, `head-`, `portrait-` and the class ready pose `ready-`.
+3. Lobby: the ready pose shows; press I'm ready, then Start the game. The runner prepares the hero
+   (persona, reference, kit sheets, an opening plate keyed to the locked look) in a minute or two.
+4. Each beat arrives as a question on Act with cards. Tap a card or type your own words (Jev reads
+   a move, a look, a declaration). Look cards carry the thing's id, so the close-up is of that
+   thing. Talk is its own turn: pick who on Talk (or Talk to on Act). Map: tap a place to go there.
+   Bag, Paintings and Notes are under More.
+5. At the market, trade by speaking: an offer or counter moves nothing; only an agreement settles
+   the open terms as one transfer between owners. Shops are stocked from the design with SRD
+   prices in copper; the hero's coins are silver (`coin: sp`).
+6. The day ends with the show: a gallery of the paintings the hero still holds, a show plate whose
+   painting count is checked by the frame judge, and the show line.
+
+**Log lines to read** (host log, then the run log): `SEAT asked seat= ask= kind= cards=`, `SEAT
+said seat= kind=answer|talk ask= card_thing= repeat=`, `MOVE interpreted reading=`, `[insert NN]
+item= from=card|judge`, `PERSONA said ... changes=N` and `PERSONA inventory_judged`, `[memory NN]
+painted painting_NN`, `WORLD shop_stocked|shop_repriced`, `PERSONA deal_judged`, `WORLD
+deal_open|deal_settled ... wares_cp= coins_cp=`, `[show] plate ... shows N paintings, the gallery
+has M`, `SCENARIO ended status=0`.
+
+**Reset a hero's bag and paintings** between days (host running, no day running; keeps the look,
+pack, persona and other memories):
+
+```bash
+D=./artifacts/build/phone/debug/df-table.exe; P=7879
+$D dev --port $P world inventory set hero-6 character development/market-threads/danny.inventory.json
+for id in $($D dev --port $P world memory list hero-6 kind=artwork limit=1000 |
+            grep -o 'painting_[0-9][0-9]*' | sort -u); do $D dev --port $P world memory delete hero-6 "$id"; done
+for name in $($D dev --port $P media | grep -oE '(item-hero-6-painting_[0-9]+|gallery-hero-6-[^ ]*)\.png' | sort -u); do
+  $D dev --port $P media remove "$name"; done
+```
+
+**Also verified in loop 9 (2026-11-16, `host10.log`, status 0 through the show):**
+
+- After a host restart a phone with a stored key sits straight back down (no Continue tap):
+  `SEAT rejoined seat=N`. Ask ids are seeded from the boot (`SEAT asks_seeded first=N reason=boot`).
+- The page follows one stream: the frame carries canvas, controls and the files revision; there
+  are no `controls.json` or `revision` polls. A phone's own POST wakes the frame long polls.
+- Talk is taken during walks and dwells: `[talk NN] taken waited_ms=588 at=move`.
+- From the second move on, Act offers "Back to <place>" for each place visited that day; the
+  revisit reuses the stored plate (no design, walk or plate spend: `[move NN] ... | revisit`).
+- Inventory and trades are their own Jev judgments: `PERSONA inventory_judged id= occasion=
+  entries=` and `PERSONA deal_judged ... because=`; each gives up after 3 attempts
+  (`PERSONA judge_gave_up`) and never fails the spoken line.
+- The show plate's painting count matched the gallery on the first try (4 of 4).
+
+**Also verified in loop 10 (2026-11-16, `host11.log`, status 0, 6-piece show):** the phone's
+build screen after Lock in (Quick hero, "Not in play yet" lines, I'm ready → `CREATION started`),
+the Hero and Roll pages from the derived sheet, a declare that uses nothing up
+(`occasion=declaring entries=0`), Bag Use and the purse total, a trade offer → refusal → raised
+offer → accept settled once (`wares_cp=23 coins_cp=30`), and typed "go back to …" read by Jev
+(`MOVE act back_to=<id> design=skipped`, the kept place restored with its own things).
+
+### The dice gauntlet from the phone (verified 2026-11-16)
+
+The same host runs the dice gauntlet for a seat when it is started with gauntlet beats:
+`--scenario development/market-threads/gauntlet-short.beats` (10 stations: athletics, stealth,
+perception, persuasion, save_dex, attack_melee, damage, initiative, healing, table_d100) or the
+full `gauntlet.beats`. The seat's hero plays (`hero-<id>`), not `gauntlet_warrior`:
+
+1. Make or pick the hero on the phone, lock in its look, finish its build (the build screen; a
+   build belongs to the hero, so a returning hero keeps it), I'm ready, Start.
+2. The runner writes the hero's rules sheet from creation (`[prepare] sheet of seat N: …
+   sheet-hero-<id>.json`), then redraws each station plate once per locked look with the hero in
+   it, from the hero's reference sheet plus the look's details in words (`[prepare] looks for the
+   plates: N chars`, `[prep] hero plate gauntlet-<x>-hero-<id>-<key>.png made in N s`), names him
+   on each (`[prep] 9 plates: … named=9 failed=0`).
+3. Each player station asks the phone ("You've decided to … What do you do?", one "Do it" card);
+   the card or the player's own words become the hero's line; the check judge sets the test and
+   DC; the server rolls from the hero's sheet (armour disadvantage, proficiency, the sheet's
+   weapon); the dungeon master calls and reads it on the TV. Narrator stations need no input.
+
+Loop G1 (`host13.log`, run log `play-1794852437222.log`): hero 7, a human fighter whose look
+details (a blazing golden aura) appear on every plate; `stations planned=10 run=10 no_check=0
+rolled=10 stuck=0`, player=8 narrator=2, status 0.
+
+Loop G4 (`host16.log`, 2026-11-16) verified the fixes since: the TV starts clean (`[prepare]
+clean: painters_day with nothing shown`) with one party card for the hero (headshot, `HP 11 / 11 ·
+AC 16` from his sheet, the panel only as wide as its cards, above the figure outline); every
+station's roll card with its dice shows on the TV (`[hold NN] … page_card_ms=<ms>`, not `-`; a
+playground change now wakes the waiting frame polls at once, so a card set and cleared inside one
+long check request is seen); a hit rolls its damage in the same check (`CHECK damage dice=6+2
+total=11`); and when the day ends the table returns to the lobby by itself (`SCENARIO lobby seat=1
+result=gathering`), so Ready → Start begins the next run without a host restart.
+
+**Known gaps (2026-11-16)**: Bag Drop/Give/Sell, the seat notice, Map taps to a kept place,
+tapping a check on the Roll page (`/play/seat/roll`), the per-seat phone frame and HP/AC on the TV
+party card are built but not yet checked live; paintings get a price only on the next roam start
+(Sell refused `no_price` before); most classes and backgrounds are design-only ("Not in play
+yet"; the Fighter and four backgrounds are in play). Speech to text on the phone needs a speech
+provider on the host (the phone says "Voice is not set up on the host" otherwise).
 
 ## Free roam: the current run procedure (verified 2026-11-10)
 

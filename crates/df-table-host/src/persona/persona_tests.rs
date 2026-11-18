@@ -129,6 +129,7 @@ fn the_persona_grammar_reads_every_verb() {
         PersonaCommand::Generate {
             target: GenerateTarget::All,
             overwrite: true,
+            unplaced: false,
             hint: Some("a tired crew".to_owned()),
             asking: Asking::default()
         }
@@ -138,7 +139,18 @@ fn the_persona_grammar_reads_every_verb() {
         PersonaCommand::Generate {
             target: GenerateTarget::Character(id("elf")),
             overwrite: false,
+            unplaced: false,
             hint: None,
+            asking: Asking::default()
+        }
+    );
+    assert_eq!(
+        command("persona generate hero-6 unplaced=true hint a painter"),
+        PersonaCommand::Generate {
+            target: GenerateTarget::Character(id("hero-6")),
+            overwrite: false,
+            unplaced: true,
+            hint: Some("a painter".to_owned()),
             asking: Asking::default()
         }
     );
@@ -152,7 +164,9 @@ fn the_persona_grammar_reads_every_verb() {
             recent: Vec::new(),
             asked_by: None,
             intent: None,
-            strike: false
+            strike: false,
+            text: None,
+            expect: None
         }
     );
     assert_eq!(
@@ -165,9 +179,17 @@ fn the_persona_grammar_reads_every_verb() {
             recent: Vec::new(),
             asked_by: None,
             intent: None,
-            strike: false
+            strike: false,
+            text: None,
+            expect: None
         }
     );
+    let PersonaCommand::Say { expect, .. } =
+        command("persona say elf text=Done. expect=inventory A study")
+    else {
+        panic!("not a say");
+    };
+    assert_eq!(expect, Some(super::request::SayExpect::Inventory));
 }
 
 #[test]
@@ -304,7 +326,7 @@ fn an_unreadable_stored_persona_is_a_typed_error_naming_its_id() {
 fn variant_number(error: &PersonaError) -> usize {
     match error {
         PersonaError::InvalidBody(_) => 0,
-        PersonaError::InvalidQuery { .. } => 1,
+        PersonaError::InvalidQuery(_) => 1,
         PersonaError::InvalidPersona { .. } => 2,
         PersonaError::ReservedId { .. } => 3,
         PersonaError::InvalidEdit { .. } => 4,
@@ -345,9 +367,9 @@ fn every_persona_error() -> Vec<PersonaError> {
     let id = || "innkeeper".to_owned();
     vec![
         PersonaError::InvalidBody(crate::dev_http::parse_body::<Value>(b"{").unwrap_err()),
-        PersonaError::InvalidQuery {
+        PersonaError::InvalidQuery(crate::dev_http::QueryError {
             detail: String::new(),
-        },
+        }),
         PersonaError::InvalidPersona {
             cause: df_content::persona::PersonaError::InvalidId { id: id() },
         },
@@ -1101,6 +1123,8 @@ fn the_debug_of_a_request_that_carries_a_question_or_a_situation_never_prints_it
         asked_by: None,
         intent: None,
         strike: false,
+        text: None,
+        expect: None,
     };
     let coverage = super::request::CoverageRequest {
         character: "innkeeper".to_owned(),
@@ -1153,6 +1177,18 @@ fn the_story_and_addressee_verbs_read_their_scene_and_reply() {
         PersonaCommand::StoryClues {
             place: "vault".to_owned(),
             line: "warrior: The wax is fresh.".to_owned(),
+            spell: None,
+            look: false,
+            model: None,
+        }
+    );
+    assert_eq!(
+        command("persona story clues look=true vault warrior: I lift the seal and look closely."),
+        PersonaCommand::StoryClues {
+            place: "vault".to_owned(),
+            line: "warrior: I lift the seal and look closely.".to_owned(),
+            spell: None,
+            look: true,
             model: None,
         }
     );
@@ -1180,9 +1216,37 @@ fn the_story_and_addressee_verbs_read_their_scene_and_reply() {
             place: "vault".to_owned(),
             moment: super::story_narrate::Moment::WorkedOut,
             recent: vec!["warrior:_Look".to_owned()],
+            told: super::story_narrate::Told::default(),
             model: Some("m".to_owned()),
         }
     );
+    assert_eq!(
+        command("persona story narrate hero=hero-11 deed=I_look_back roam-00 look"),
+        PersonaCommand::StoryNarrate {
+            place: "roam-00".to_owned(),
+            moment: super::story_narrate::Moment::Look,
+            recent: Vec::new(),
+            told: super::story_narrate::Told {
+                hero: Some("hero-11".to_owned()),
+                deed: Some("I_look_back".to_owned()),
+                outcome: None,
+                scene: None,
+                seen: Vec::new(),
+                ways: Vec::new(),
+                reads: false,
+                hero_look: None,
+                ..super::story_narrate::Told::default()
+            },
+            model: None,
+        }
+    );
+    // Host 45: a look that reads writing (`reads=true`) is an option of its own, never a word.
+    let PersonaCommand::StoryNarrate { told, .. } =
+        command("persona story narrate hero=hero-11 deed=I_read_it reads=true roam-00 look")
+    else {
+        panic!("not a narrate");
+    };
+    assert!(told.reads);
     for bad in [
         "persona story narrate vault",
         "persona story narrate vault ending",

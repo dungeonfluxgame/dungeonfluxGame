@@ -44,10 +44,8 @@
 //! names a `model` (see `text`).
 
 pub(crate) mod address;
-pub(crate) mod check;
-pub(crate) mod frame;
-mod judge_route;
 mod backfill;
+pub(crate) mod check;
 pub mod cli;
 mod converse;
 mod declare;
@@ -55,16 +53,21 @@ mod edit_verbs;
 mod emotion_routes;
 mod emotions;
 mod format;
+pub(crate) mod frame;
 mod frame_watch;
 pub(crate) mod generate;
 mod handles;
+pub(crate) mod hero_look;
+pub mod intent;
+mod judge_route;
 mod line;
+mod line_judges;
 pub(crate) mod options;
-pub(crate) mod perceive;
 mod people_check;
+pub(crate) mod perceive;
 mod plate;
-mod reveal;
 pub mod request;
+mod reveal;
 pub mod routes;
 mod state;
 mod state_view;
@@ -73,27 +76,32 @@ pub(crate) mod story;
 mod story_clues;
 mod story_items;
 mod story_mark;
-mod story_narrate;
+pub(crate) mod story_narrate;
 mod story_next;
+mod story_quest;
 mod story_way;
 mod walk_plates;
 
 pub use self::cli::{PersonaCommand, parse};
 pub use self::converse::ConverseError;
 pub use self::emotions::EmotionError;
+pub(crate) use self::handles::known_names;
+pub(crate) use self::hero_look::hero_looks_from;
 pub use self::plate::PlateStep;
+pub(crate) use self::plate::reference_sheet_name;
 pub(crate) use self::plate::{
     Painting, deliver_plate, image_limits, inventory_sheets, items_that_fit, sheets_for_gains,
 };
 pub use self::request::{PersonaError, PersonaSummary};
 pub use self::routes::router_with;
-pub(crate) use self::storage::summaries_of;
+pub(crate) use self::state::load_state;
+#[cfg(test)]
+pub(crate) use self::storage::write_persona;
+pub(crate) use self::storage::{stored_ids, summaries_of};
 pub(crate) use self::walk_plates::{
     MadePlate, Spinner, WalkMoment, make_walk_plate, mark_walk, show_walk_plate, spinner_off,
     spinner_on,
 };
-#[cfg(test)]
-pub(crate) use self::storage::write_persona;
 
 #[cfg(test)]
 mod ask_tests;
@@ -104,27 +112,33 @@ mod converse_tests;
 #[cfg(test)]
 mod declare_tests;
 #[cfg(test)]
-mod frame_closing_tests;
-#[cfg(test)]
-mod people_check_tests;
-#[cfg(test)]
-mod frame_tests;
-#[cfg(test)]
 mod emotion_state_tests;
 #[cfg(test)]
-mod fixtures;
+pub(crate) mod fixtures;
+#[cfg(test)]
+mod frame_closing_tests;
+#[cfg(test)]
+mod frame_tests;
 #[cfg(test)]
 mod generate_tests;
 #[cfg(test)]
 mod handles_tests;
 #[cfg(test)]
+mod hero_look_tests;
+#[cfg(test)]
+mod intent_tests;
+#[cfg(test)]
 mod line_facts_tests;
 #[cfg(test)]
 mod line_tests;
 #[cfg(test)]
+mod people_check_tests;
+#[cfg(test)]
 mod perceive_tests;
 #[cfg(test)]
 mod persona_tests;
+#[cfg(test)]
+mod plate_tests;
 #[cfg(test)]
 mod reveal_picture_tests;
 #[cfg(test)]

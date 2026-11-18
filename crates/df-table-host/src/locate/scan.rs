@@ -16,7 +16,10 @@ use df_scene_layout::{
 use df_types::saturating_millis;
 
 use super::limits::SCAN_TIMEOUT;
-use super::request::{LocateError, LocateRequest, LocateStage, LocateStageError, ScanPrompt};
+use super::request::{
+    FindRequest, FoundRegions, LocateError, LocateRequest, LocateStage, LocateStageError,
+    ScanPrompt,
+};
 use super::storage::{LAYOUT_WRITES, read_layout, read_picture, write_layout};
 use super::validate::{check_label, check_masks, check_picture_name};
 use crate::forge::{FORGE_BACKEND, ForgeSetupError, client_from_environment};
@@ -243,7 +246,7 @@ pub(super) async fn scan_stages(
     request: &LocateRequest,
     supplier: ScanSupplier,
 ) -> Result<Scanned, LocateStageError> {
-    let scanned = scan_masks(media, request, supplier)
+    let scanned = scan_masks(media, request, None, supplier)
         .await
         .map_err(LocateStageError::at(LocateStage::Scan))?;
     store_scan(layouts, request, scanned)
@@ -260,10 +263,34 @@ struct ScannedMasks {
     phases: SegmentPhases,
 }
 
-/// Reads the picture and asks the imagery API at `supplier` for its masks, reduced to a layout.
+/// Searches `request.picture` for the thing `request.noun` names (the segmentation looks for those
+/// words in place of a person) and answers the regions it finds, storing nothing: the picture's
+/// stored layout stays the people's. The caller has checked the noun (`oneshot_segment::is_noun`).
+pub(super) async fn find_regions(
+    media: &Path,
+    request: &FindRequest,
+    supplier: ScanSupplier,
+) -> Result<FoundRegions, LocateError> {
+    let noun = request.noun.trim();
+    let scan = LocateRequest {
+        picture: request.picture.clone(),
+        prompt: None,
+        masks: request.masks,
+    };
+    let scanned = scan_masks(media, &scan, Some(noun), supplier).await?;
+    Ok(FoundRegions {
+        picture: request.picture.clone(),
+        duration_ms: scanned.duration_ms,
+        layout: scanned.layout,
+    })
+}
+
+/// Reads the picture and asks the imagery API at `supplier` for its masks, reduced to a layout:
+/// of people (the request's prompt), or of the thing `noun` names when one is given.
 async fn scan_masks(
     media: &Path,
     request: &LocateRequest,
+    noun: Option<&str>,
     supplier: ScanSupplier,
 ) -> Result<ScannedMasks, LocateError> {
     check_picture_name(&request.picture)?;
@@ -286,6 +313,7 @@ async fn scan_masks(
     let segment_request = SegmentRequest {
         source,
         prompt: prompt.segmentation(),
+        noun: noun.map(str::to_owned),
         maximum_masks: masks,
     };
     let started = tokio::time::Instant::now();

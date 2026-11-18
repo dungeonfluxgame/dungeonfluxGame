@@ -8,19 +8,19 @@ use std::sync::Arc;
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, QueryRejection};
 use axum::extract::{ConnectInfo, Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use df_playground::media::ClientReportPost;
 use df_playground::path::CLIENT_HEADER;
 use df_playground::timeline::{ClientTimeline, TimelineQuery};
 
+use super::super::FileError;
 use super::super::files::revision;
-use super::super::{FileError, done, refused};
 use super::request::ClientsError;
 use super::{check_client_name, checked_client};
 use crate::blocking::run_blocking;
-use crate::dev_http::{parse_body, reply};
+use crate::dev_http::{BodyCause, BodyError, read_body, read_query, reply};
 use crate::state::AppState;
 use df_playground::limits::MAXIMUM_REPORT_BYTES;
 
@@ -49,20 +49,19 @@ fn header_client(headers: &HeaderMap) -> Option<&str> {
         .and_then(|value| value.to_str().ok())
 }
 
-/// Records and answers a refused report.
+/// Records a refused report and gives its refusal.
 fn refuse_report(
     state: &AppState,
     headers: &HeaderMap,
     refusal: ReportRefusal,
-    status: StatusCode,
-    message: String,
-) -> Response {
+    error: ClientsError,
+) -> ClientsError {
     state.record_line(format!(
         "CLIENT report_refused client={} reason={}",
         checked_client(header_client(headers)),
         refusal.key()
     ));
-    refused(status, message)
+    error
 }
 
 /// The open pages. Pages silent too long are forgotten first, each with a `CLIENT gone` line.
@@ -86,36 +85,26 @@ pub(in crate::playground) async fn receive_report(
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
     let remote = connection.map(|Extension(ConnectInfo(address))| address.ip());
-    let too_large = || format!("a report is at most {MAXIMUM_REPORT_BYTES} bytes");
-    let body = match body {
-        Ok(body) if body.len() > MAXIMUM_REPORT_BYTES => {
-            let status = StatusCode::PAYLOAD_TOO_LARGE;
-            return refuse_report(&state, &headers, ReportRefusal::Size, status, too_large());
-        }
-        Ok(body) => body,
-        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
-            let status = StatusCode::PAYLOAD_TOO_LARGE;
-            return refuse_report(&state, &headers, ReportRefusal::Size, status, too_large());
-        }
-        Err(rejection) => {
-            let status = StatusCode::BAD_REQUEST;
-            let message = rejection.body_text();
-            return refuse_report(&state, &headers, ReportRefusal::Body, status, message);
-        }
-    };
-    let post: ClientReportPost = match parse_body(&body) {
+    let result = read_report(body).and_then(|post| {
+        check_client_name(&post.client)
+            .map(|()| post)
+            .map_err(|error| ClientsError::InvalidClient {
+                detail: error.to_string(),
+            })
+    });
+    let post = match result {
         Ok(post) => post,
         Err(error) => {
-            let status = StatusCode::BAD_REQUEST;
-            let message = error.to_string();
-            return refuse_report(&state, &headers, ReportRefusal::Body, status, message);
+            let refusal = match &error {
+                ClientsError::InvalidBody(body) if body.cause == BodyCause::TooLarge => {
+                    ReportRefusal::Size
+                }
+                ClientsError::InvalidClient { .. } => ReportRefusal::Name,
+                _ => ReportRefusal::Body,
+            };
+            return reply::<(), _>(Err(refuse_report(&state, &headers, refusal, error)));
         }
     };
-    if let Err(error) = check_client_name(&post.client) {
-        let status = StatusCode::BAD_REQUEST;
-        let message = error.to_string();
-        return refuse_report(&state, &headers, ReportRefusal::Name, status, message);
-    }
     let playground = state.playground();
     let client = post.client.clone();
     let recorded =
@@ -138,7 +127,17 @@ pub(in crate::playground) async fn receive_report(
             ));
         }
     }
-    done(&state)
+    reply::<_, ClientsError>(Ok(()))
+}
+
+/// The report in a body: at most `MAXIMUM_REPORT_BYTES`, and the JSON of a report.
+fn read_report(body: Result<Bytes, BytesRejection>) -> Result<ClientReportPost, ClientsError> {
+    match body {
+        Ok(body) if body.len() > MAXIMUM_REPORT_BYTES => Err(ClientsError::InvalidBody(
+            BodyError::too_large(MAXIMUM_REPORT_BYTES),
+        )),
+        body => Ok(read_body(body)?),
+    }
 }
 
 /// One page's timeline, on the playground's clock, oldest first.
@@ -163,9 +162,7 @@ fn read_timeline(
     client: &str,
     query: Result<Query<TimelineQuery>, QueryRejection>,
 ) -> Result<ClientTimeline, ClientsError> {
-    let Query(query) = query.map_err(|rejection| ClientsError::InvalidQuery {
-        detail: rejection.body_text(),
-    })?;
+    let query = read_query(query)?;
     check_client_name(client).map_err(|error| ClientsError::InvalidClient {
         detail: error.to_string(),
     })?;

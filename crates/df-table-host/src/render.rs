@@ -6,8 +6,8 @@
 //! so this one stays simple (decision of 2026-11-02). It escapes every piece of text it prints and
 //! never reads state: it only draws the copy it is given.
 
+use df_playground::fixture::ElementShape;
 use df_table::element::{CANVAS_HEIGHT_UNITS, CANVAS_WIDTH_UNITS};
-use df_table::kind::Shape;
 
 use crate::event_log::LoggedLine;
 use crate::limits::MAXIMUM_LABEL_CHARACTERS;
@@ -96,14 +96,14 @@ fn element_svg(element: &ElementView) -> String {
     };
     let tooltip = escape(&format!("{} ({})", element.id, element.kind));
     let shape = match element.shape {
-        Shape::Circle => format!(
+        ElementShape::Circle => format!(
             r#"<circle cx="{:.2}" cy="{:.2}" r="{:.2}" fill="{}" {stroke}/>"#,
             element.x,
             element.y,
             element.width_units / 2.0,
             escape(fill)
         ),
-        Shape::Rect => format!(
+        ElementShape::Rect => format!(
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="0.6" fill="{}" {stroke}/>"#,
             element.x - element.width_units / 2.0,
             element.y - element.height_units / 2.0,

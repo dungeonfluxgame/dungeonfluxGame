@@ -14,7 +14,7 @@ use df_rules::roll::{Ability, Skill};
 
 use super::request::{
     CheckJudgeRequest, CheckJudged, CheckKind, CheckRouteError, CheckRun, CheckRunRequest,
-    CheckTest, Initiator, mode_key,
+    CheckTest, DcBand, Initiator, mode_key,
 };
 use super::routes::path;
 use super::sheet::{read_sheet, read_station};
@@ -32,7 +32,8 @@ pub const PERSONA_CHECK_USAGE: &str = concat!(
     "[checked=<kind>[:<ability>[:<skill>]]]... [intent=<kind>[:<ability>[:<skill>]]] ",
     "[model=<name>] | ",
     "persona check run <character> [the same options] [inspiration=<die place>] ",
-    "[told=<what was just said aloud>] ",
+    "[told=<what was just said aloud>] [dc=5|10|15|20|25|30 (with intent=: called anyway)] ",
+    "[tool=<catalog tool, for a tool_check intent>] ",
     "[speak=true|false]"
 );
 
@@ -67,6 +68,8 @@ pub enum CheckCommand {
         speak: bool,
         inspiration: Option<u8>,
         told: Option<String>,
+        dc: Option<DcBand>,
+        tool: Option<String>,
     },
 }
 
@@ -124,7 +127,7 @@ pub(in crate::persona) fn parse_check(words: &[String]) -> Result<CheckCommand, 
     let keys: Vec<&str> = if run {
         SHARED_KEYS
             .into_iter()
-            .chain(["inspiration", "speak", "told"])
+            .chain(["inspiration", "speak", "told", "dc", "tool"])
             .collect()
     } else {
         SHARED_KEYS.to_vec()
@@ -171,7 +174,35 @@ pub(in crate::persona) fn parse_check(words: &[String]) -> Result<CheckCommand, 
     if !run {
         return Ok(CheckCommand::Judge(args));
     }
+    let dc = single(&given, "dc")?
+        .map(|text| {
+            text.parse::<i64>()
+                .ok()
+                .and_then(DcBand::from_value)
+                .ok_or_else(|| bad_choice("dc", text, "5, 10, 15, 20, 25 or 30"))
+        })
+        .transpose()?;
+    if dc.is_some() && args.intent.is_none() {
+        return Err(bad_choice(
+            "dc",
+            single(&given, "dc")?.unwrap_or_default(),
+            "a difficulty for the narrator's intent=, which is not given",
+        ));
+    }
+    let tool = single(&given, "tool")?.map(str::to_owned);
+    if let Some(tool) = &tool
+        && (df_rules::hero::Tool::from_key(tool).is_none()
+            || args.intent.as_ref().map(|intent| intent.kind) != Some(CheckKind::ToolCheck))
+    {
+        return Err(bad_choice(
+            "tool",
+            tool,
+            "a tool of the catalog, for an intent=tool_check:<ability>",
+        ));
+    }
     Ok(CheckCommand::Run {
+        dc,
+        tool,
         told: single(&given, "told")?.map(str::to_owned),
         args,
         speak: single(&given, "speak")?.map_or(Ok(true), |text| flag("speak", text))?,
@@ -310,6 +341,15 @@ pub(in crate::persona) fn format_run(character: &str, run: &CheckRun) -> String 
         times.hold_ms,
         times.min_hold_ms
     ));
+    if let Some(damage) = &rolled.damage {
+        lines.push(format!(
+            "  damage ({}): {} total={} crit={}",
+            damage.voice.key(),
+            damage.line,
+            damage.view.total,
+            if damage.critical { "yes" } else { "no" }
+        ));
+    }
     lines.join("\n")
 }
 
@@ -327,12 +367,16 @@ pub(in crate::persona) async fn run(port: u16, command: CheckCommand) -> Result<
             speak,
             inspiration,
             told,
+            dc,
+            tool,
         } => {
             let request = CheckRunRequest {
                 judge: judge_request(&args).await?,
                 speak,
                 inspiration,
                 told,
+                dc,
+                tool,
             };
             let reply: DevReply<CheckRun, CheckRouteError> =
                 post_json(port, path::PERSONA_CHECK_RUN, &request).await?;

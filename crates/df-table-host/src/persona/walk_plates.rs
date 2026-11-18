@@ -21,7 +21,19 @@ use super::plate::{
 use crate::dev::DevError;
 use crate::dev_client::{post_json, reply_value};
 use crate::imagegen::{Priority, SheetPick};
-use crate::locate::request::CharacterRequest;
+use crate::locate::request::{
+    CharacterRequest, IdentifiedLayout, IdentifyRequest, IdentityRow, LabelRequest, LocateReply,
+    StoredLayout,
+};
+use crate::locate::routes::path as locate_path;
+use df_scene_layout::SceneLayout;
+
+/// How sure the identity judge must be, in thousandths, to name a region for someone a walk's
+/// plate was made with whom its scan left unnamed. The plate was painted with them in it, so the
+/// judge's pick of a region nobody holds and nobody else is picked for names them at a lower bar
+/// than a picture of strangers needs (host 40: an apple seller on an arrival plate was picked at
+/// 500, under the scan's 600, never became a character and could not be talked to).
+const PLACED_MIN_CONFIDENCE_PERMILLE: u16 = 350;
 
 /// A plate of a walk, made and scanned and not yet behind the scene.
 pub(crate) struct MadePlate {
@@ -56,26 +68,104 @@ impl MadePlate {
 /// Makes the plate `name` from `painting` with `characters` located and named in it, and shows it
 /// nowhere. Every plate of a walk is made at normal priority, so the sights never starve the place,
 /// and shows its people by the full-length view of their sheets: a small walking figure in a wide
-/// view.
+/// view. `base` is the picture it continues (the step before, on an approach), when it has one.
 pub(crate) async fn make_walk_plate(
     port: u16,
     name: &str,
     painting: &Painting<'_>,
     characters: Vec<CharacterRequest>,
+    base: Option<&str>,
 ) -> Result<MadePlate, PlateFailure> {
-    scan_plate_with(
+    let mut scanned = scan_plate_with(
         port,
         name,
         painting,
-        characters,
-        None,
+        characters.clone(),
+        base,
         (Priority::Normal, Some(SheetPick::FullLength)),
     )
-    .await
-    .map(|scanned| MadePlate {
+    .await?;
+    // Someone the plate was painted with whom the scan left unnamed is named where the judge
+    // picked them, when that region is free: then they are a character of the scene before it is
+    // shown, and a persona can be made for them. A failure here leaves the plate as scanned.
+    if let Some(made) = scanned.made.as_mut()
+        && made.named < made.asked
+        && let Ok(named) = name_the_placed(port, &scanned.picture, &characters).await
+    {
+        made.named += named;
+    }
+    Ok(MadePlate {
         making: scanned.made.as_ref().map(|made| made.since.elapsed()),
         scanned,
     })
+}
+
+/// Names on `picture` each of `characters` its scan left unnamed whose region the identity judge
+/// picked with at least [`PLACED_MIN_CONFIDENCE_PERMILLE`], when no one holds that region and no
+/// one else was picked for it; answers how many were named. The judge is asked the scan's own
+/// question (`min=1000`: it names nothing below certainty itself), so the answer is its earlier
+/// one.
+async fn name_the_placed(
+    port: u16,
+    picture: &str,
+    characters: &[CharacterRequest],
+) -> Result<usize, DevError> {
+    let identified: LocateReply<IdentifiedLayout> = post_json(
+        port,
+        locate_path::LOCATE_IDENTIFY,
+        &IdentifyRequest {
+            picture: picture.to_owned(),
+            characters: characters.to_vec(),
+            min_confidence_permille: Some(1000),
+        },
+    )
+    .await?;
+    let identified = reply_value(identified)?;
+    let to_name = placed_to_name(&identified.rows, &identified.layout);
+    for (region, name) in &to_name {
+        let display_name = characters
+            .iter()
+            .find(|character| &character.name == name)
+            .and_then(|character| character.display_name.clone());
+        let labelled: LocateReply<StoredLayout> = post_json(
+            port,
+            locate_path::LOCATE_LABEL,
+            &LabelRequest {
+                picture: picture.to_owned(),
+                region: region.to_string(),
+                label: Some(name.clone()),
+                display_name,
+            },
+        )
+        .await?;
+        reply_value(labelled)?;
+    }
+    Ok(to_name.len())
+}
+
+/// The regions (numbered from 0) to name, and whom: each character `layout` does not name yet
+/// whose picked region nobody holds, nobody else was picked for, and was picked with at least
+/// [`PLACED_MIN_CONFIDENCE_PERMILLE`].
+pub(super) fn placed_to_name(rows: &[IdentityRow], layout: &SceneLayout) -> Vec<(usize, String)> {
+    rows.iter()
+        .filter_map(|row| {
+            let region = row.region?;
+            let free = layout
+                .regions()
+                .get(region)
+                .is_some_and(|shown| shown.label().is_none());
+            let picked_once = rows
+                .iter()
+                .filter(|other| other.region == Some(region))
+                .count()
+                == 1;
+            (layout.region(&row.name).is_none()
+                && row.confidence_permille >= PLACED_MIN_CONFIDENCE_PERMILLE
+                && free
+                && picked_once)
+                .then(|| (region, row.name.clone()))
+        })
+        .collect()
 }
 
 /// Puts `plate` behind the scene at once, with the cast of `cast_from` (the picture before it) when
@@ -156,3 +246,7 @@ pub(crate) async fn mark_walk(port: u16, frame: &str, moment: WalkMoment) -> Res
     let reply: FrameTimingReply = post_json(port, PERSONA_FRAME_TIMING, &request).await?;
     reply_value(reply).map(|timed| timed.at_ms)
 }
+
+#[cfg(test)]
+#[path = "walk_plates_tests.rs"]
+mod tests;

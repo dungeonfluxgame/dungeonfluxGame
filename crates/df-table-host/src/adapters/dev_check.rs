@@ -18,7 +18,7 @@ use std::num::NonZeroU128;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use df_rules::roll::RollRequest;
+use df_rules::roll::{RollRequest, RollStyle};
 use df_table::identity::{
     Correlation, OperationId, RecoveryEpoch, SeatId, SessionRevision, TurnSeq,
 };
@@ -127,6 +127,16 @@ impl RulesCheckKit {
     /// Asks the adapter for the dice a roll needs, draws each from the recording dice and
     /// resolves the roll with them.
     pub fn roll(&self, request: &RollRequest) -> Result<RulesRollReport, RulesCheckError> {
+        self.roll_styled(request, RollStyle::default())
+    }
+
+    /// [`Self::roll`] with the Fighting Style the roll's attack carries (Archery's bonus on its
+    /// attack roll, Great Weapon Fighting's floor on its damage dice).
+    pub fn roll_styled(
+        &self,
+        request: &RollRequest,
+        style: RollStyle,
+    ) -> Result<RulesRollReport, RulesCheckError> {
         request
             .draw_plan()
             .map_err(|cause| RulesCheckError::InvalidRoll { cause })?;
@@ -136,7 +146,7 @@ impl RulesCheckKit {
         for requested in prepare_roll(&self.roll_action, operation, request)? {
             drawn.push(self.dice.draw(correlation, requested)?);
         }
-        let result = match resolve_roll(&self.roll_action, operation, request, &drawn)? {
+        let result = match resolve_roll(&self.roll_action, operation, request, style, &drawn)? {
             RollStep::Rolled(result) => *result,
             RollStep::NeedsDraws(_) => return Err(RulesCheckError::UnexpectedResolution),
         };

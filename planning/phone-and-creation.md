@@ -50,6 +50,34 @@ and [Rules coverage](rules-coverage.md) R01 to R03; [Remote play](remote-play.md
    (`ref-<hero>.png`) so plates paint the player's own hero (REF-058, REF-059). A failed or unknown
    result still lets the hero join; the hero is painted from the sheet's look until it lands.
 
+## The painter's day from the phone (owner goal, 2026-11-16)
+
+The free-roam painter scene (`market-threads/free-roam.beats`, runbook "Free roam") is played
+entirely from the phone, by the player's own created hero, with no dev CLI during play. The
+hero's locked reference sheet is what every scene picture paints, so the player's hero does all
+the paintings. Every choice the phone sends is a line or tap the host reads through Jev (closed
+schemas, answers checked in code) or a typed intent checked against ids; no string matching. The
+goal is met when every feature below is expressed and playable on the phone.
+
+| Feature of the scene | How it works today | On the phone | Status |
+| --- | --- | --- | --- |
+| Start the day | coordinator runs the runner with `DF_RUN_PLAYER` | lobby "Start the game" starts the scenario for the seated hero | to build |
+| The hero is the painter | `@roam danny`, Danny's persona, `ref-danny.png` | the locked hero becomes the roam's character: its persona, look, reference sheet and painter's kit | to build |
+| Move (road, town, market) | `move act` + Jev MOVE, walk sights | Act ask "Where do you go next?" with way cards, or own words; Map tap | ask built (P1), map to build |
+| Arrive, see the place | plate, things in sight, perception thoughts | Story: place, plate behind, lines, thought as private note | built (P1) |
+| Look closely at a thing | `persona say` toward `@roam_look`, insert, item sheet | Act ask with thing cards; Look closer page shows the insert | ask built, insert view to build |
+| Paint / declare hands | `persona declare`, emergency plate, supplies judged | Act ask "What are your hands doing?" | built (P1); typed lines must spend supplies |
+| Finish the study | `@roam_painted` line, board used, study painting + memory + kept item | Act ask for the finishing line; the painting revealed on the phone | to build |
+| Market: buy and trade | judged line, inventory transfer with the keeper, restock | Bag: supplies and coin; trade with the keeper by line or card; Talk to the keeper. A deal settles only on acceptance, as one transfer both ways; the keeper's stock is named by the design call that creates the place (decided 2026-11-16) | built, live check pending |
+| Talk | a Talk line is its own turn (`SeatSay.kind = talk`), never the answer to the table's open question | Talk page | built, live check pending |
+| Talk to people there | `persona ask` / `converse` | Talk: who is here, address one, thread | to build |
+| What the hero carries | inventory API (owner = the hero) | Bag: items with pictures and counts, coin, Use / Look closer | to build |
+| Memories and paintings | memory API: scenes, artworks, gallery | Notebook: places, paintings, snaps | to build |
+| Places visited | world places | Map: visited places, ways, you are here | to build |
+| The show | gallery sheet, show plate, `@roam_show_say` line | Act ask for the show line; the gallery on the phone | to build |
+| Music and pace | tempo engine | (TV and phone audio as today) | built |
+| The hero | hero record, asset pack | header portrait, Hero page | header in progress |
+
 ## State machines (2026-11-15)
 
 Two levels. The table's machines (server, `df-table`) own the game; the phone's machines own only
@@ -177,6 +205,24 @@ the certificate choice (open item 5) decides whether this works on the first sca
 - Done when: the conformance suite and a golden session pass; a hero made from the CLI rolls a
   check in the gauntlet.
 
+**As built (2026-11-16).** `df_rules::hero` holds the offers, the derivation and "Surprise me" over
+SRD 5.2.1. `df_table::creation` holds the machine (`CreationTable`, rules through the `BuildRules`
+port). The host's `creation` module holds the dev routes `/dev/creation/*` and the `creation`
+verbs. Each step writes a `CREATION` line (`open`, `transition`, `derived`, `started`,
+`refused`). Human Versatile now offers the four SRD Origin feats; Tough, which SRD 5.2.1 does not
+print, is no longer offered (owner, 2026-11-16).
+
+Open items of P2 (owner, 2026-11-16):
+
+- **Creation stays host-driven.** It is not a registered engine machine between the lobby and
+  explore yet: `MachineInput::Intent` carries an action id only, and a pick needs a slot and an
+  option. The host drives `CreationTable` directly until intents carry a payload.
+- **Marked gaps, not offered yet:** random generation (4d6, needs the dice port); Skilled's tool
+  choices (Skilled picks three skills only); Weapon Mastery picks (marked "Not in play yet");
+  Divine Order and Primal Order (marked with their class's features); the evil alignments (the
+  build offers the six of `ALIGNMENTS`).
+- **Public story** stays empty until P3's story cards.
+
 ### P3. Creation screens on the phone
 
 - **Quick hero**: name (REF-061 rule, checked on the phone and the server), three story cards
@@ -185,6 +231,17 @@ the certificate choice (open item 5) decides whether this works on the first sca
   skills, languages, equipment, look (the appearance controls and a free description), each with a
   one-line "because".
 - **Review sheet**: story and build, each line tappable to change, design-only marks shown plainly.
+
+**As built (build part, 2026-11-16).** After Lock in, a seat whose hero plays no character builds
+over the lobby (`df_playground::pages::build`): the build begins as a quick hero (every slot
+random unless chosen), the review sheet shows the numbers, each part as a line to change and the
+"Not in play yet" marks, and "Go deeper" opens background, ability scores, skills and tools,
+languages, equipment and the species' own choices, each with its "because". The species and class
+are the look studio's. "I'm ready" submits the build and is the seat's Ready in the lobby; "Not
+ready" reopens it. The routes are the seat's own (`/play/creation*`, keyed by the seat), which the
+`creation` dev verbs call as the seat. In play the Hero page shows the derived sheet and the Roll
+page the sheet's checks. Still open: the story cards, and a roll the player starts from the Roll
+page (the check judge's route is a dev route of `persona`).
 
 #### The look studio (owner, 2026-11-15)
 
@@ -208,6 +265,23 @@ final picture is a clean reference for the plates.
   player's words). The phone shows each detail as a chip the player can remove or change, so a
   scar added once stays on every later version until it is removed. No word list decides any of
   this.
+- **Presentation, and words that set controls** (owner goal, 2026-11-16). Who the hero presents
+  as (a woman, a man, an androgynous person) is a base control, a chip like the others, rolled
+  when not set. The same reading of the player's words also sets controls: Jev answers control and
+  option pairs from the studio's own controls (an option id, or a step's index), checked in code;
+  a pair that is not the studio's is dropped and logged. The phone moves those sliders, swatches
+  and chips on screen, as a roll does. Words a control covers never also become a chip, and
+  nothing visible is lost: every worn or carried accessory or prop the words describe
+  (spectacles, a staff with a lantern) becomes a detail.
+- **Nothing to write, roll and preview** (owner, 2026-11-16). No text is required: whatever the
+  player has not set is chosen at random and shown on screen (sliders, swatches and chips move to
+  the rolled values). "Roll a hero" sets every control at random on screen without spending; "See
+  my hero" makes the picture from the draft as it stands; the player then adjusts and refines, or
+  rolls new (a fresh person from the base pose). The roll is the host's. Lock in needs a kept
+  picture.
+- **Full-screen preview** (owner, 2026-11-16). Any rendered picture (kept, new, a version in the
+  strip, the locked portrait and sheet) opens full screen on a tap, fitted whole, with its version
+  label, swipe between versions, zoom for detail, and Keep / Keep the old one from the viewer.
 - **Refine.** Changing controls or details costs nothing; the Refine button makes one picture.
   Each refine edits the version the player kept, with the base pose as a reference: keep the pose,
   framing, face and everything not changed, and apply only what changed since the kept version.
@@ -229,6 +303,14 @@ final picture is a clean reference for the plates.
 - **Lock in** makes the portrait and `ref-<hero>.png` (the existing image service and reference
   sheet path); the phone shows the portrait arriving.
 - The **draft** lives in the phone's storage (REF-049) and survives a refresh.
+- **Hero asset pack at Lock in** (owner, 2026-11-16): the reference sheet (for character
+  consistency in every scene picture), a square headshot, the half-body portrait and the
+  ready pose, recorded on the hero. The engine finds a seated hero in the cast by id and passes its
+  sheet wherever character references are used, through the same lookup as personas.
+- **The lobby shows the hero ready** (owner, 2026-11-16): at Lock in the host also makes a
+  full-body ready-pose picture of the hero in a stance for their class (pose text is data per
+  class); the phone's lobby shows it large with the ready state lit, and the other players as
+  small portrait cards.
 - **TV**: each seat card shows the name once chosen, "making their hero...", then the portrait and
   "Ready". Nothing private reaches the TV.
 - Done when: two phones make two different heroes, both portraits land, the first plate paints both

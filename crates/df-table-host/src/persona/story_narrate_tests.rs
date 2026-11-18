@@ -129,6 +129,7 @@ fn request() -> NarrateRequest {
         place: "vault".to_owned(),
         moment: Moment::Found,
         recent: vec!["warrior: Look at this.".to_owned()],
+        told: super::story_narrate::Told::default(),
         model: None,
     }
 }
@@ -370,4 +371,107 @@ async fn a_newer_line_keeps_the_box_up_past_the_first_lines_rest_and_then_it_cle
         run("persona narrate").await.is_err(),
         "a narration needs its words"
     );
+}
+
+#[test]
+fn a_look_or_an_act_is_always_narrated_from_the_world_as_it_stands() {
+    use super::intent::{IntentScene, SceneThing};
+    use super::story_narrate::{Told, read_told, world_facts};
+    // Silence is refused at a look or an act, and asked again.
+    assert!(read_told(&json!({"line": null})).is_err());
+    assert!(read_told(&json!({"line": "  "})).is_err());
+    assert_eq!(
+        read_told(&json!({"line": "The road runs back to the hills."})).unwrap(),
+        Some("The road runs back to the hills.".to_owned())
+    );
+    assert!(Moment::Look.of_the_world() && Moment::Act.of_the_world());
+    assert!(Moment::Answer.of_the_world());
+    assert!(!Moment::Arrival.of_the_world());
+    // No story: the narrator is told the place, what is in sight, who is there by what they do,
+    // the picture and the deed.
+    let look = NarrateRequest {
+        moment: Moment::Look,
+        told: Told {
+            hero: Some("hero-11".to_owned()),
+            deed: Some("I turn around and take in the view behind me".to_owned()),
+            outcome: None,
+            scene: Some("a dirt road toward a walled town's open gate".to_owned()),
+            seen: vec!["a painted signboard hanging over the gate".to_owned()],
+            ways: vec!["Into town".to_owned(), "Take the road".to_owned()],
+            reads: true,
+            hero_look: Some("a young man with shoulder-length blond curls".to_owned()),
+            ..Told::default()
+        },
+        ..request()
+    };
+    let scene = IntentScene {
+        place: Some("the road before the town gate".to_owned()),
+        things: vec![SceneThing {
+            id: "gate_sign".to_owned(),
+            name: "sign over the gate".to_owned(),
+            look: Some("a painted wooden board".to_owned()),
+        }],
+        people: Vec::new(),
+        carries: Vec::new(),
+    };
+    let facts = world_facts(&look, &scene, &[json!({"who": "gate guard"})], &Value::Null);
+    assert_eq!(facts["moment"], json!("look"));
+    // A look that reads writing is told so: what is written is given as a fact of the place.
+    assert_eq!(facts["world"]["reads"], json!(true));
+    // The hero's look, so the figure walking ahead on the plate is told as "you".
+    assert_eq!(
+        facts["world"]["hero_look"],
+        json!("a young man with shoulder-length blond curls")
+    );
+    // A look (and an answer) tells only what is: nothing happens in it; an act may change things.
+    assert_eq!(facts["world"]["nothing_happens"], json!(true));
+    let act = NarrateRequest {
+        moment: Moment::Act,
+        ..look.clone()
+    };
+    assert_eq!(
+        world_facts(&act, &scene, &[], &Value::Null)["world"]["nothing_happens"],
+        json!(false)
+    );
+    // An answer of what can be done here is told the ways on.
+    let answer = NarrateRequest {
+        moment: Moment::Answer,
+        ..look.clone()
+    };
+    // An answer of how many coins they have left is told their purse, as the game keeps it.
+    let purse = json!({"things": [{"name": "Torch", "count": 9}],
+                       "coins": [{"name": "Gold piece", "count": 78}], "coins_worth_cp": 7800});
+    let answered = world_facts(&answer, &scene, &[], &purse);
+    assert_eq!(answered["world"]["carries"], purse);
+    assert_eq!(answered["world"]["nothing_happens"], json!(true));
+    assert_eq!(
+        answered["world"]["ways"],
+        json!(["Into town", "Take the road"])
+    );
+    assert_eq!(
+        facts["world"]["place"],
+        json!("the road before the town gate")
+    );
+    assert_eq!(
+        facts["world"]["in_sight"],
+        json!([{"name": "sign over the gate", "look": "a painted wooden board"}])
+    );
+    assert_eq!(facts["world"]["people"], json!([{"who": "gate guard"}]));
+    assert_eq!(
+        facts["world"]["deed"],
+        json!("I turn around and take in the view behind me")
+    );
+    // What the hero's eyes find on the picture is told as true, beside the scene's list.
+    assert_eq!(
+        facts["world"]["seen"],
+        json!(["a painted signboard hanging over the gate"])
+    );
+    assert!(facts.get("hidden").is_none());
+}
+
+#[test]
+fn what_the_hero_carries_is_told_in_pounds() {
+    // Host 45: "how much does my pack weigh" was answered with no measure though the bag has one.
+    assert!((super::story_narrate::pounds(62_560) - 62.56).abs() < 1e-9);
+    assert!((super::story_narrate::pounds(150_000) - 150.0).abs() < 1e-9);
 }

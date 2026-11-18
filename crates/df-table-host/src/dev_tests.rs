@@ -9,6 +9,7 @@ use crate::client::ClientError;
 use crate::command::{CommandError, split_words};
 use crate::dev::{DevError, ReplyError, run_dev};
 use crate::playground::{ClientsError, PlaygroundChangeError};
+use crate::server::request::HostError;
 use crate::test_support::{Running, STARTER_FILES, canned_server, closed_port, start};
 
 async fn run(running: &Running, line: &str) -> Result<String, DevError> {
@@ -54,10 +55,10 @@ async fn a_refused_change_comes_back_as_a_rejection_with_the_reason() {
         matches!(
             &error,
             DevError::Rejected {
-                error: ReplyError::Canvas {
-                    cause: Some(RejectionCause::UnknownKind),
+                error: ReplyError::Host(HostError::InvalidEffect {
+                    cause: RejectionCause::UnknownKind,
                     ..
-                },
+                }),
                 ..
             }
         ),
@@ -83,10 +84,10 @@ async fn a_command_that_sends_several_effects_applies_each_in_order_and_reports_
             answers.as_slice(),
             [
                 Err(DevError::Rejected {
-                    error: ReplyError::Canvas {
-                        cause: Some(RejectionCause::InvalidValue),
+                    error: ReplyError::Host(HostError::InvalidEffect {
+                        cause: RejectionCause::InvalidValue,
                         ..
-                    },
+                    }),
                     ..
                 }),
                 Ok(_),
@@ -175,12 +176,9 @@ async fn reload_picks_up_a_new_kind_file_and_a_broken_one_leaves_the_kinds_alone
     );
     running.write_file("broken.json", "{ not json");
     let error = run(&running, "reload").await.expect_err("refused");
-    // A rejected reload has no single cause; its problems name each file that does not read.
+    // A rejected reload's problems name each file that does not read.
     let DevError::Rejected {
-        error: ReplyError::Canvas {
-            cause: None,
-            problems,
-        },
+        error: ReplyError::Host(HostError::InvalidKinds { problems }),
         ..
     } = &error
     else {
@@ -332,9 +330,8 @@ async fn a_changed_controls_answer_that_does_not_read_says_why() {
 async fn a_guard_refusal_of_a_controls_change_is_reported_as_its_sentence() {
     let body = serde_json::json!({
         "outcome": "rejected",
-        "cause": "forbidden_request",
+        "error": {"error": "cross_site_request"},
         "message": "requests are not accepted from another site",
-        "problems": [],
     })
     .to_string();
     let answer = format!(
@@ -351,10 +348,7 @@ async fn a_guard_refusal_of_a_controls_change_is_reported_as_its_sentence() {
     assert_eq!(
         error,
         DevError::Rejected {
-            error: ReplyError::Canvas {
-                cause: Some(RejectionCause::ForbiddenRequest),
-                problems: Vec::new(),
-            },
+            error: ReplyError::Guard(crate::guard::GuardError::CrossSiteRequest),
             message: "requests are not accepted from another site".to_owned(),
         }
     );
@@ -400,10 +394,9 @@ fn a_refusal_prints_the_hosts_sentence_with_the_key_its_routes_show() {
         "refused (no_backdrop): the shown scene has no backdrop picture"
     );
     let canvas = DevError::Rejected {
-        error: ReplyError::Canvas {
-            cause: None,
+        error: ReplyError::Host(HostError::InvalidKinds {
             problems: vec!["broken.json: not json".to_owned()],
-        },
+        }),
         message: "kinds unchanged".to_owned(),
     };
     assert_eq!(
@@ -498,7 +491,10 @@ async fn frame_prints_the_count_the_run_and_the_keys_and_a_known_count_returns_a
     let running = start(&STARTER_FILES).await;
     let text = run(&running, "frame").await.expect("reads");
     assert!(text.starts_with("frame: "), "{text}");
-    assert!(text.contains("keys: canvas, controls, frame"), "{text}");
+    assert!(
+        text.contains("keys: asset_revision, canvas, controls, frame"),
+        "{text}"
+    );
     let other = run(&running, "frame after=99999")
         .await
         .expect("answers at once");
@@ -625,7 +621,7 @@ async fn a_refused_events_query_and_a_refused_host_status_come_back_as_the_hosts
             matches!(
                 &error,
                 DevError::Rejected {
-                    error: ReplyError::Host(crate::server::request::HostError::InvalidQuery { .. }),
+                    error: ReplyError::Host(HostError::InvalidQuery(_)),
                     ..
                 }
             ),
@@ -664,7 +660,7 @@ async fn a_refused_services_read_and_a_refused_timeline_read_keep_their_error_ke
         matches!(
             &error,
             DevError::Rejected {
-                error: ReplyError::Clients(ClientsError::InvalidQuery { .. }),
+                error: ReplyError::Clients(ClientsError::InvalidQuery(_)),
                 ..
             }
         ),

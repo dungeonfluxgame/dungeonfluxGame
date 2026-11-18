@@ -40,6 +40,8 @@ fn held(id: &str, count: u64) -> InventoryItem {
         look: format!("{id} look"),
         usage: ItemUse::Kept,
         count,
+        price_cp: None,
+        coin: None,
     }
 }
 
@@ -401,6 +403,12 @@ fn baker_hands(host: &ScriptedHost) {
     );
 }
 
+/// The inventory judge's answer for a line that moves nothing the character carries: every line
+/// of a character who holds anything is judged for it by a call of its own (`line_judges`).
+fn nothing_moved() -> Value {
+    json!({"nothing_changed": true, "changes": []})
+}
+
 fn declared_answer(line: &str, doing: &str, items: &[&str]) -> Value {
     let mut answer = line_answer(line);
     answer["declared_action"] = json!({
@@ -411,11 +419,14 @@ fn declared_answer(line: &str, doing: &str, items: &[&str]) -> Value {
 
 #[tokio::test]
 async fn a_declaration_is_worded_by_the_line_call_against_the_closed_declared_action() {
-    let host = scripted_host(vec![declared_answer(
-        "I knead the dough on the table, flour to my elbows.",
-        "kneads dough on a table with both floured hands",
-        &["flour", "flour"],
-    )])
+    let host = scripted_host(vec![
+        declared_answer(
+            "I knead the dough on the table, flour to my elbows.",
+            "kneads dough on a table with both floured hands",
+            &["flour", "flour"],
+        ),
+        nothing_moved(),
+    ])
     .await;
     baker_hands(&host);
     let spoken = match declare_with(
@@ -437,7 +448,7 @@ async fn a_declaration_is_worded_by_the_line_call_against_the_closed_declared_ac
         ["flour"],
         "a repeated item is kept once"
     );
-    assert_eq!(host.calls(), 1);
+    assert_eq!(host.calls(), 2, "the line call, then the inventory judge");
     let facts = host.facts_of(0);
     assert_eq!(facts["now"]["declare"], json!(true));
     assert!(
@@ -455,10 +466,8 @@ async fn a_declaration_is_worded_by_the_line_call_against_the_closed_declared_ac
             .is_some_and(|required| required.contains(&json!("declared_action")))
     );
     assert!(
-        host.persona_lines()
-            .iter()
-            .any(|line| line
-                == "PERSONA declaration id=innkeeper verbatim=false items=1 retried=false"),
+        host.persona_lines().iter().any(|line| line
+            == "PERSONA declaration id=innkeeper verbatim=false given=false items=1 retried=false"),
         "{:?}",
         host.persona_lines()
     );
@@ -466,7 +475,7 @@ async fn a_declaration_is_worded_by_the_line_call_against_the_closed_declared_ac
 
 #[tokio::test]
 async fn an_ordinary_line_is_asked_without_the_declaration() {
-    let host = scripted_host(vec![line_answer("Bread's warm.")]).await;
+    let host = scripted_host(vec![line_answer("Bread's warm."), nothing_moved()]).await;
     baker_hands(&host);
     let said: PersonaReply<Spoken> = post_json(
         host.port,
@@ -495,6 +504,7 @@ async fn a_declaration_of_an_item_not_held_is_worded_again_once_with_why() {
             "stirs stock with a ladle",
             &["ladle"],
         ),
+        nothing_moved(),
     ])
     .await;
     baker_hands(&host);
@@ -507,7 +517,7 @@ async fn a_declaration_of_an_item_not_held_is_worded_again_once_with_why() {
         DevReply::Done { value } => value,
         DevReply::Rejected { error, message } => panic!("refused: {error:?} {message}"),
     };
-    assert_eq!(host.calls(), 2, "asked once more");
+    assert_eq!(host.calls(), 3, "asked once more, then the inventory judge");
     let reason = host.facts_of(1)["now"]["retry_reason"]
         .as_str()
         .unwrap()
@@ -592,16 +602,17 @@ async fn text_is_spoken_as_written_with_no_model_and_its_items_are_still_checked
     assert_eq!(host.calls(), 0, "no model is asked");
     let plain = match declare_with(
         &host,
-        json!({"character": CHARACTER, "text": "I sweep the floor."}),
+        json!({"character": CHARACTER, "text": "I stir the pot.", "uses": ["ladle"]}),
     )
     .await
     {
         DevReply::Done { value } => value,
         DevReply::Rejected { error, message } => panic!("refused: {error:?} {message}"),
     };
+    // TODO(DEV-12): text alone (no doing, no uses) is judged by the line call with the text given.
     assert_eq!(
         plain.said.declared.unwrap().doing,
-        "I sweep the floor.",
+        "I stir the pot.",
         "the picture's words are the text itself when none are given"
     );
     let unheld = declare_with(

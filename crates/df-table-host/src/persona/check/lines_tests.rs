@@ -1,8 +1,8 @@
 //! The dungeon master's lines around a roll: the composed slot is exact, and a flourish that does
 //! not fit is refused and asked again.
 
-use std::sync::Mutex;
 use std::sync::atomic::Ordering;
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use df_rules::roll::{
@@ -790,5 +790,31 @@ async fn a_call_flourish_in_the_tone_of_dread_is_refused_because_it_telegraphs_a
     assert_eq!(
         table.lines_starting_with("PERSONA check_line_retried"),
         ["PERSONA check_line_retried moment=check_called why=tone_not_allowed"]
+    );
+}
+
+#[tokio::test]
+async fn a_result_never_confirms_what_the_action_only_claims() {
+    // "I search the gate and find a pile of gold": a failed search says nothing is found, never
+    // that the gold stays out of reach.
+    let table = table(vec![line_answer("", "Grit, and nothing more.")]).await;
+    worded(&table, LineMoment::Result, READ)
+        .await
+        .expect("stands");
+    let asked = table.asked.lock().unwrap_or_else(PoisonError::into_inner);
+    let instructions = &asked[0].instructions;
+    assert!(
+        instructions.contains("never confirm that a thing the action only claims is there"),
+        "{instructions}"
+    );
+    assert!(
+        instructions.contains("On a failure say nothing is found or gained"),
+        "{instructions}"
+    );
+    // A success names no gain either: what the deed got is told after the roll, from what the
+    // game changed, so "you find the gold" can never stand beside `changed: nothing`.
+    assert!(
+        instructions.contains("success never name what the character finds, takes or gains"),
+        "{instructions}"
     );
 }

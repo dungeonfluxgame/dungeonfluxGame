@@ -3,9 +3,9 @@
 //! The API is for the person at this machine, so every request must name a loopback host, which
 //! stops a web page that has been pointed at 127.0.0.1 by DNS from reading the canvas. A request
 //! that changes something must also be JSON and must not come from another site, which stops a
-//! web page from posting a form to it. The one route that takes a recording
-//! (`speech::routes::path::SPEECH_TRANSCRIBE`) requires `audio/L16` instead of JSON: that is not a
-//! content type a cross-site form can send without a preflight, which the origin checks refuse.
+//! web page from posting a form to it. The routes that take a recording (`RECORDING_ROUTES`: the
+//! dev composer's and a seat's) require `audio/L16` instead of JSON: that is not a content type a
+//! cross-site form can send without a preflight, which the origin checks refuse.
 //! There is no password: a request without a browser can
 //! name any host it likes, so on a shared machine any local process can drive the canvas.
 //!
@@ -19,11 +19,46 @@
 use std::net::IpAddr;
 
 use axum::http::{HeaderMap, Method, StatusCode, header};
+use serde::{Deserialize, Serialize};
 
 use crate::speech::routes::path::SPEECH_TRANSCRIBE;
 
-/// Why a request was refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A route whose body is not JSON: what it takes, and the largest body it reads.
+pub(crate) struct BodyRoute {
+    pub(crate) path: &'static str,
+    body: BodyType,
+    pub(crate) limit: usize,
+}
+
+/// The routes that take a recording (`POST`, `audio/L16`), with the speech service's bound on a
+/// recording. Every other route that changes something takes JSON.
+pub(crate) const RECORDING_ROUTES: [BodyRoute; 2] = [
+    BodyRoute {
+        path: SPEECH_TRANSCRIBE,
+        body: BodyType::Audio,
+        limit: crate::speech::limits::MAXIMUM_ADMITTED_AUDIO_BYTES,
+    },
+    BodyRoute {
+        path: df_playground::path::PLAY_SEAT_TRANSCRIBE,
+        body: BodyType::Audio,
+        limit: crate::speech::limits::MAXIMUM_ADMITTED_AUDIO_BYTES,
+    },
+];
+
+/// The largest body the recording route `path` reads.
+pub(crate) fn recording_limit(path: &str) -> usize {
+    RECORDING_ROUTES
+        .iter()
+        .find(|route| route.path == path)
+        .map_or(
+            crate::speech::limits::MAXIMUM_ADMITTED_AUDIO_BYTES,
+            |route| route.limit,
+        )
+}
+
+/// Why a request was refused: a typed route error like every route's, answered as a `DevReply`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "error", rename_all = "snake_case")]
 pub enum GuardError {
     ForeignHost,
     ForeignOrigin,
@@ -31,6 +66,9 @@ pub enum GuardError {
     NotJson,
     /// A recording route was not sent `audio/L16`.
     NotAudio,
+    /// A developer header (`seat::key::DEV_HEADER_PREFIX`: acting as a seat) came to the player
+    /// listener, which never takes one.
+    DevHeader,
 }
 
 /// What a route that changes something takes as its body.
@@ -42,13 +80,12 @@ enum BodyType {
 }
 
 impl BodyType {
-    /// The body type of the route at `path`: JSON, but for the recording route.
+    /// The body type of the route at `path`, as the route table declares it: JSON unless listed.
     fn of(path: &str) -> Self {
-        if path == SPEECH_TRANSCRIBE {
-            Self::Audio
-        } else {
-            Self::Json
-        }
+        RECORDING_ROUTES
+            .iter()
+            .find(|route| route.path == path)
+            .map_or(Self::Json, |route| route.body)
     }
 
     fn media_type(self) -> &'static str {
@@ -67,19 +104,20 @@ impl BodyType {
 }
 
 impl GuardError {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::ForeignHost,
         Self::ForeignOrigin,
         Self::CrossSiteRequest,
         Self::NotJson,
         Self::NotAudio,
+        Self::DevHeader,
     ];
 
     /// The status to answer with.
     pub fn status(self) -> StatusCode {
         match self {
             Self::NotJson | Self::NotAudio => StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            Self::ForeignHost | Self::ForeignOrigin | Self::CrossSiteRequest => {
+            Self::ForeignHost | Self::ForeignOrigin | Self::CrossSiteRequest | Self::DevHeader => {
                 StatusCode::FORBIDDEN
             }
         }
@@ -95,6 +133,7 @@ impl GuardError {
             Self::NotAudio => {
                 "a recording is accepted only as audio/L16 (Content-Type: audio/L16;rate=16000)"
             }
+            Self::DevHeader => "developer headers are accepted only on the developer listener",
         }
     }
 }
@@ -106,6 +145,12 @@ impl std::fmt::Display for GuardError {
 }
 
 impl std::error::Error for GuardError {}
+
+impl crate::dev_http::RouteError for GuardError {
+    fn status(&self) -> StatusCode {
+        (*self).status()
+    }
+}
 
 /// The host name inside an authority such as `127.0.0.1:7878`, `localhost` or `[::1]:7878`.
 fn host_name(authority: &str) -> &str {
@@ -189,6 +234,15 @@ pub fn check_for(
     let host = header_text(headers, header::HOST).ok_or(GuardError::ForeignHost)?;
     if !audience.accepts(host) {
         return Err(GuardError::ForeignHost);
+    }
+    // Acting as a seat by its number is the developer's (the `dev` command line), never a phone's.
+    if matches!(audience, Audience::Players { .. })
+        && headers.keys().any(|name| {
+            name.as_str()
+                .starts_with(crate::seat::key::DEV_HEADER_PREFIX)
+        })
+    {
+        return Err(GuardError::DevHeader);
     }
     if method == Method::GET || method == Method::HEAD {
         return Ok(());

@@ -48,7 +48,7 @@ fn image_type(picture: &str) -> Option<TextImageType> {
 
 /// Whether `picture` is a picture of the library a model can be given, and its bytes and the type
 /// to send them as when `vision` asks for them.
-fn read_image(
+pub(crate) fn read_image(
     media: &Path,
     picture: &str,
     vision: bool,

@@ -14,8 +14,8 @@ use crate::client::get;
 use crate::command::split_words;
 use crate::dev::run_dev;
 use crate::test_support::{Running, STARTER_FILES, start};
-use crate::view::{CanvasView, FrameCanvas, ViewError, value_json};
-use crate::wire::Frame;
+use crate::view::{CanvasView, ViewError, frame_canvas, value_json};
+use df_playground::frame::Frame;
 
 async fn run(running: &Running, line: &str) {
     run_dev(running.port, &split_words(line).expect("the line splits"))
@@ -106,7 +106,7 @@ fn every_element_of_a_copy_names_its_own_problem() {
             )
             .expect("spawns");
     }
-    let healthy = FrameCanvas::from_canvas(&canvas).expect("copies");
+    let healthy = frame_canvas(&canvas).expect("copies");
     assert!(
         healthy
             .elements
@@ -177,5 +177,181 @@ async fn the_clock_wakes_for_a_travel_and_goes_back_to_sleep_when_it_arrives() {
     assert!(
         running.state.tick_count() > ticks,
         "a second travel wakes it again"
+    );
+}
+
+async fn frame_now(running: &Running) -> Frame {
+    let body = get(running.port, "/playground/frame")
+        .await
+        .expect("answers")
+        .body;
+    serde_json::from_str(&body).expect("a frame")
+}
+
+#[tokio::test]
+async fn a_frame_carries_the_files_revision_and_a_changed_file_is_one_announced_change() {
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("theme.css", "body { color: red; }");
+    let before = frame_now(&running).await;
+    let files = running.state.playground().files().clone();
+    assert_eq!(
+        before.asset_revision,
+        crate::playground::revision(&files).expect("reads")
+    );
+    assert_eq!(
+        running.state.refresh_files_revision().await.expect("reads"),
+        None,
+        "files that did not change announce nothing"
+    );
+    running.write_asset("theme.css", "body { color: blue; margin: 0; }");
+    let changed = running
+        .state
+        .refresh_files_revision()
+        .await
+        .expect("reads")
+        .expect("a new revision");
+    let after = frame_now(&running).await;
+    assert_eq!(after.asset_revision, changed);
+    assert!(
+        after.frame > before.frame,
+        "the change is announced, so a page waiting for a frame is answered"
+    );
+}
+
+/// A scene to put the party's cards on.
+const PARTY_FIXTURE: &str = r#"{
+    "name": "Party",
+    "tv": {"place": "Here", "status": {"kind": "ok"}, "elements": []},
+    "phone": {"hero": "Mira", "status": {"kind": "ok"}}
+}"#;
+
+#[tokio::test]
+async fn a_hero_card_without_a_sheet_shows_no_hit_points_and_a_card_without_a_hero_keeps_its_own() {
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("fixtures/party.json", PARTY_FIXTURE);
+    run(
+        &running,
+        "scene party add Mira character=hero-99 hp=10 max=12",
+    )
+    .await;
+    run(&running, "scene party add Bram hp=7 max=9").await;
+    let frame = frame_now(&running).await;
+    let df_playground::overlay::Edit::Set(party) = &frame.controls.scene.party else {
+        panic!("a party");
+    };
+    let mira = party
+        .iter()
+        .find(|member| member.name == "Mira")
+        .expect("Mira");
+    assert_eq!(mira.health(), None, "no sheet: no sample hit points");
+    assert_eq!(mira.armor_class, None);
+    assert_eq!(mira.portrait, None, "no pack: the card keeps its initial");
+    let bram = party
+        .iter()
+        .find(|member| member.name == "Bram")
+        .expect("Bram");
+    assert_eq!(bram.health(), Some((7, 9)));
+    // TODO(DEV-12): a hero with a legal build in the creation record shows its sheet's hit points
+    // and Armor Class on the card.
+}
+
+#[tokio::test]
+async fn the_party_heroes_are_read_again_on_the_watch_beat_and_a_difference_is_announced() {
+    let running = start(&STARTER_FILES).await;
+    assert!(
+        !running.state.refresh_party_heroes().await,
+        "no party: nothing to read"
+    );
+    running.write_asset("fixtures/party.json", PARTY_FIXTURE);
+    run(&running, "scene party add Mira character=hero-99").await;
+    let before = running.state.change_count();
+    assert!(
+        running.state.refresh_party_heroes().await,
+        "the first reading is kept and announced"
+    );
+    assert!(running.state.change_count() > before);
+    assert!(
+        !running.state.refresh_party_heroes().await,
+        "the same heroes announce nothing"
+    );
+    // TODO(DEV-12): a headshot made in the background shows on the card within the watch's beat.
+}
+
+#[tokio::test]
+async fn a_frame_carrying_a_roll_reads_on_the_page_and_its_clear_too() {
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("fixtures/party.json", PARTY_FIXTURE);
+    run(
+        &running,
+        concat!(
+            r#"scene roll melee_attack "Melee attack" id=r1 dice=20:19:test "#,
+            "mods=Strength:3,Proficiency:2 target=AC:15 outcome=hit hold=8000"
+        ),
+    )
+    .await;
+    let body = get(running.port, "/playground/frame")
+        .await
+        .expect("answers")
+        .body;
+    let read = df_playground::frame::parse_frame_reply(&body);
+    let Ok(df_playground::frame::FrameReply::Frame(frame)) = read else {
+        panic!("the page reads a frame with a roll: {read:?}\n{body}");
+    };
+    let df_playground::overlay::Edit::Set(roll) = &frame.controls.scene.roll else {
+        panic!("a roll is set");
+    };
+    assert_eq!(roll.view.id, "r1");
+    run(&running, "scene roll-clear").await;
+    let frame = frame_now(&running).await;
+    assert_eq!(
+        frame.controls.scene.roll,
+        df_playground::overlay::Edit::Clear
+    );
+}
+
+#[tokio::test]
+async fn a_scene_change_made_inside_a_long_request_wakes_the_frames_at_once() {
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("fixtures/party.json", PARTY_FIXTURE);
+    let before = running.state.change_count();
+    // A check sets the roll card in the middle of its request, long before the request ends.
+    crate::playground::apply_scene_changes(
+        &running.state,
+        vec![df_playground::scene::SceneChange::Caption {
+            speaker: None,
+            text: "The die is cast.".to_owned(),
+        }],
+    )
+    .await
+    .expect("applies");
+    assert!(
+        running.state.change_count() > before,
+        "the pages, which follow only the frames, are woken by the change itself"
+    );
+}
+
+#[tokio::test]
+async fn a_change_of_the_devices_answers_the_party_as_a_frame_does() {
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("fixtures/party.json", PARTY_FIXTURE);
+    run(
+        &running,
+        "scene party add Mira character=hero-99 hp=10 max=12",
+    )
+    .await;
+    let change =
+        df_playground::controls::ControlsChange::Device(df_playground::controls::Device::Tv);
+    let body = serde_json::to_string(&change).expect("writes");
+    let response =
+        crate::client::post_json(running.port, df_playground::path::CONTROLS_CHANGE, &body)
+            .await
+            .expect("answers");
+    let answer: serde_json::Value = serde_json::from_str(&response.body).expect("json");
+    let party = &answer["value"]["scene"]["party"]["set"];
+    assert_eq!(party[0]["name"], "Mira");
+    assert_eq!(
+        party[0]["hit_points"],
+        serde_json::Value::Null,
+        "the answer the page draws from carries the hero's numbers, not the card's own: {answer}"
     );
 }

@@ -31,7 +31,7 @@ use std::num::NonZeroU16;
 
 use df_rules::influence::{self, InfluenceInput, InfluenceOutcome, NoRollCause, RollMode};
 use df_rules::roll::{
-    D20Request, D20Test, Proficiency, RollOutcome, RollRequest, Target, TargetLabel,
+    D20Request, D20Test, Proficiency, RollOutcome, RollRequest, RollStyle, Target, TargetLabel,
 };
 use df_table::element::NameError;
 use df_table::envelope::PendingId;
@@ -281,7 +281,7 @@ fn resolve_skill_check(
         }),
         heroic_inspiration: None,
     });
-    let result = match roll::step(&request, draws)? {
+    let result = match roll::step(&request, RollStyle::default(), draws)? {
         RollStep::NeedsDraws(requests) => {
             return Ok(Resolving::answer(Resolution::NeedsDraws(requests)));
         }

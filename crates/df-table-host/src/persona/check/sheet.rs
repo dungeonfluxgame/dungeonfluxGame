@@ -10,7 +10,10 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use df_rules::roll::{Ability, AttackKind, DiceExpression, ModifierLabel, Skill};
+use df_rules::hero::Tool;
+use df_rules::roll::{
+    Ability, AttackKind, AttackStyle, DiceExpression, DieSize, ModifierLabel, Skill,
+};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -33,6 +36,9 @@ struct AttackFile {
     kind: String,
     ability: String,
     damage: String,
+    /// The Fighting Style that touches this weapon's rolls (`archery`, `great_weapon_fighting`).
+    #[serde(default)]
+    style: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -54,6 +60,13 @@ struct SheetFile {
     skill_proficiencies: BTreeMap<String, Value>,
     #[serde(default)]
     expertise: Vec<String>,
+    /// The tools the hero is proficient with, as the hero sheet names them (`Thieves' Tools`) or
+    /// by the catalog's keys.
+    #[serde(default)]
+    tool_proficiencies: Vec<String>,
+    /// The armour worn that gives Disadvantage on Dexterity (Stealth) checks, by name.
+    #[serde(default)]
+    stealth_disadvantage: Option<String>,
     #[serde(default)]
     initiative_modifier: Option<InitiativeFile>,
     #[serde(default)]
@@ -68,6 +81,14 @@ struct SheetFile {
     class_features: BTreeMap<String, Value>,
     #[serde(default)]
     species_traits: BTreeMap<String, Value>,
+    #[serde(default)]
+    not_in_play: Vec<NotInPlayFile>,
+}
+
+/// One thing a hero sheet has that is not in play yet, in the sheet's words.
+#[derive(Deserialize)]
+struct NotInPlayFile {
+    note: String,
 }
 
 #[derive(Deserialize)]
@@ -88,7 +109,7 @@ struct StationsFile {
     stations: Vec<StationFile>,
 }
 
-fn ability_of(short: &str) -> Result<Ability, String> {
+pub(super) fn ability_of(short: &str) -> Result<Ability, String> {
     match short {
         "str" => Ok(Ability::Strength),
         "dex" => Ok(Ability::Dexterity),
@@ -102,14 +123,16 @@ fn ability_of(short: &str) -> Result<Ability, String> {
     }
 }
 
-fn skill_of(key: &str) -> Result<Skill, String> {
+pub(super) fn skill_of(key: &str) -> Result<Skill, String> {
     Skill::from_key(key).ok_or_else(|| format!("'{key}' is not a skill"))
 }
 
-fn attack_kind_of(kind: &str) -> Result<AttackKind, String> {
+/// The attack kind of a sheet weapon and whether it may also be thrown.
+fn attack_kind_of(kind: &str) -> Result<(AttackKind, bool), String> {
     match kind {
-        "melee" | "melee_or_thrown" => Ok(AttackKind::Melee),
-        "ranged" => Ok(AttackKind::Ranged),
+        "melee" => Ok((AttackKind::Melee, false)),
+        "melee_or_thrown" => Ok((AttackKind::Melee, true)),
+        "ranged" => Ok((AttackKind::Ranged, false)),
         _ => Err(format!("'{kind}' is not an attack kind")),
     }
 }
@@ -139,6 +162,28 @@ fn features_of(groups: [&BTreeMap<String, Value>; 2]) -> impl Iterator<Item = Sh
     })
 }
 
+/// The id of the Unarmed Strike every character can make (SRD 5.2.1 page 15).
+pub(super) const UNARMED_STRIKE: &str = "unarmed_strike";
+
+/// The Unarmed Strike of a character with Strength modifier `strength` (SRD 5.2.1 page 15): a
+/// melee attack roll with Strength and proficiency, dealing 1 + the Strength modifier
+/// bludgeoning damage, rolled on no dice.
+pub(super) fn unarmed_strike(strength: i8) -> SheetAttack {
+    SheetAttack {
+        id: UNARMED_STRIKE.to_owned(),
+        name: "Unarmed Strike".to_owned(),
+        kind: AttackKind::Melee,
+        ability: Ability::Strength,
+        damage: DiceExpression {
+            count: 0,
+            die: DieSize::D4,
+            modifier: 1 + i16::from(strength),
+        },
+        thrown: false,
+        style: None,
+    }
+}
+
 /// The sheet the file `text` holds, or why it does not read.
 pub(super) fn read_sheet(text: &str) -> Result<CheckSheet, String> {
     let file: SheetFile = serde_json::from_str(text).map_err(|error| error.to_string())?;
@@ -158,15 +203,35 @@ pub(super) fn read_sheet(text: &str) -> Result<CheckSheet, String> {
         .attacks
         .iter()
         .map(|attack| {
+            let (kind, thrown) = attack_kind_of(&attack.kind)?;
             Ok(SheetAttack {
                 id: attack.id.clone(),
                 name: attack.name.clone(),
-                kind: attack_kind_of(&attack.kind)?,
+                kind,
                 ability: ability_of(&attack.ability)?,
                 damage: dice_of(&attack.damage)?,
+                thrown,
+                style: attack
+                    .style
+                    .as_deref()
+                    .map(|key| {
+                        AttackStyle::from_key(key)
+                            .ok_or_else(|| format!("'{key}' is not a fighting style"))
+                    })
+                    .transpose()?,
             })
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<SheetAttack>, String>>()?;
+    // Every character can make an Unarmed Strike (a punch, a kick, a shove), weapon or none.
+    let mut attacks = attacks;
+    if !attacks.iter().any(|attack| attack.id == UNARMED_STRIKE) {
+        attacks.push(unarmed_strike(
+            ability_modifiers
+                .get(&Ability::Strength)
+                .copied()
+                .unwrap_or_default(),
+        ));
+    }
     let healing = file
         .healing
         .iter()
@@ -197,6 +262,12 @@ pub(super) fn read_sheet(text: &str) -> Result<CheckSheet, String> {
             .iter()
             .map(|key| skill_of(key))
             .collect::<Result<_, _>>()?,
+        tool_proficiencies: file
+            .tool_proficiencies
+            .iter()
+            .filter_map(|named| tool_of(named))
+            .collect(),
+        stealth_disadvantage: file.stealth_disadvantage.clone(),
         initiative_proficient,
         critical_from: file
             .critical_range
@@ -208,7 +279,22 @@ pub(super) fn read_sheet(text: &str) -> Result<CheckSheet, String> {
         healing,
         equipment: file.equipment.clone(),
         features: features_of([&file.class_features, &file.species_traits]).collect(),
+        not_in_play: file
+            .not_in_play
+            .iter()
+            .map(|entry| entry.note.clone())
+            .collect(),
     })
+}
+
+/// The catalog key of a tool the sheet names, by its name (`Thieves' Tools`) or its key (SRD
+/// 5.2.1 pp. 93-95, the tools of `df_rules::hero::Tool`). A proficiency the catalog has no tool
+/// for (a gaming set) is none: a tool check is made only with a catalog tool, so it is never one.
+fn tool_of(named: &str) -> Option<String> {
+    Tool::ALL
+        .iter()
+        .find(|tool| tool.title() == named || tool.key() == named)
+        .map(|tool| tool.key().to_owned())
 }
 
 /// The station `id` of the stations file `text`, or why it is not there.

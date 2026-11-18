@@ -2,7 +2,7 @@
 //! has Jev read one line a player said and answers a `DevReply` of an `Interpreted` reading, or a
 //! typed [`InterpretRouteError`] with one `MOVE refused verb=interpret error=<key>` audit line. A
 //! reading is one `MOVE interpreted reading=<key> unclear=<key|-> declared=<key>
-//! second_reading=<bool> duration_ms=..` line. `POST /dev/move/design`
+//! second_reading=<bool> duration_ms=.. back_to=<id|->` line. `POST /dev/move/design`
 //! designs the scene a move arrives in, residents included, and answers a `DevReply` of a
 //! `SceneDesign` or a [`DesignRouteError`], with `MOVE designed ..` and `MOVE refused verb=design`
 //! lines. A refused answer to the design call is asked for again, with every rule broken so far as
@@ -30,15 +30,17 @@ use df_content::world_bible::is_valid_id;
 use serde::{Deserialize, Serialize};
 
 use super::design::{
-    DESIGN_INSTRUCTION, DesignError, MoverInventories, WalkNeeds, check_feature, check_move,
-    check_shown_items, check_walk, design_facts, design_schema, parse_design,
+    DESIGN_INSTRUCTION, DesignError, MoverInventories, WalkNeeds, check_approach, check_coins,
+    check_feature, check_move, check_shown_items, check_walk, design_facts, design_schema,
+    parse_design_among, settle_coins, with_approach,
 };
 use super::interpret::{
     InterpretError, JEV_INSTRUCTION, jev_facts, jev_schema, parse_reading, require_text,
 };
 use super::transition::Deadlines;
 use super::types::{
-    Clarification, Declared, Interpreted, MoveIntent, PartyMember, SceneDesign, TownRole, WalkAsk,
+    ApproachAsk, Clarification, Declared, Distance, Interpreted, MoveIntent, PartyMember,
+    SceneDesign, TownRole, WalkAsk,
 };
 use crate::blocking::run_owned;
 use crate::dev_http::{BodyError, DevReply, RouteError, parse_body, reply};
@@ -56,6 +58,12 @@ pub mod path {
     /// Designs the scene a move arrives in (POST a `DesignRequest`). A dev tool; it asks the text
     /// service.
     pub const MOVE_DESIGN: &str = "/dev/move/design";
+    /// POST a `BackRequest`: a move back to a place the party has been to makes it the active one
+    /// again, with no design and no plate.
+    pub const MOVE_BACK: &str = "/dev/move/back";
+    /// POST an `ApproachNote`: one moment of a step toward something on screen, as one `MOVE
+    /// approach` audit line.
+    pub const MOVE_APPROACH: &str = "/dev/move/approach";
 }
 
 /// The name of the answer object of a reading.
@@ -283,30 +291,41 @@ async fn interpret_line(
     require_text(&request.line).map_err(|_: InterpretError| InterpretRouteError::EmptyLine)?;
     let route = route_for(&routes.text, request.model.as_deref())?;
     let key = operation_key("interpret").map_err(|_| InterpretRouteError::InvalidOperationKey)?;
+    // The places the party has been to, as the closed ids a move may go back to.
+    let visited = crate::world::kept_places(&routes.app);
+    let visited_ids: Vec<String> = visited.iter().map(|place| place.id.clone()).collect();
     let facts = jev_facts(
         &request.line,
         request.speaker.as_deref(),
         request.context.as_deref(),
         request.declared,
         request.refused_before.as_ref(),
-        &request.party,
+        (&request.party, &visited),
     );
     let question = text_request(
         route.profile(),
         JEV_INSTRUCTION,
         facts,
         OUTPUT_NAME,
-        jev_schema(),
+        jev_schema(&visited_ids),
     );
     let started = Instant::now();
     let reading = route
         .ask(&key, &question, |answer| {
-            parse_reading(answer, &request.line, &request.party)
+            parse_reading(answer, &request.line, (&request.party, &visited_ids))
         })
         .await?
         .value;
+    let back_to = match &reading {
+        Interpreted::Move {
+            back_to: Some(place),
+            ..
+        } => place.as_str(),
+        _ => "-",
+    };
     routes.app.record_line(format!(
-        "MOVE interpreted reading={} unclear={} declared={} second_reading={} duration_ms={}",
+        "MOVE interpreted reading={} unclear={} declared={} second_reading={} \
+         duration_ms={} back_to={back_to}",
         reading_key(&reading),
         unclear_key(&reading),
         request.declared.key(),
@@ -344,6 +363,142 @@ async fn interpret(State(routes): State<Arc<MoveRoutes>>, bytes: Bytes) -> Respo
     )
 }
 
+/// The body of `POST /dev/move/back`: the kept place a move goes back to, by id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackRequest {
+    pub place: String,
+}
+
+/// `POST /dev/move/back`: a move whose reading goes back to a place the party has been to
+/// (`Interpreted::Move::back_to`) makes that place the active one again as it was left, spending
+/// no design and no plate. One `MOVE act back_to=<id> design=skipped` line; a place not kept is
+/// `unknown_place`.
+async fn back(State(routes): State<Arc<MoveRoutes>>, bytes: Bytes) -> Response {
+    let result = async {
+        let BackRequest { place } =
+            parse_body(&bytes).map_err(crate::world::WorldError::InvalidBody)?;
+        let app = Arc::clone(&routes.app);
+        let id = place.clone();
+        crate::blocking::run_blocking(
+            move || crate::world::revisit_place(&app, &id),
+            crate::world::WorldError::Stopped,
+        )
+        .await?
+        .ok_or(crate::world::WorldError::UnknownPlace { id: place })
+    }
+    .await;
+    match &result {
+        Ok(kept) => routes
+            .app
+            .record_line(format!("MOVE act back_to={} design=skipped", kept.id)),
+        Err(error) => routes
+            .app
+            .record_line(format!("MOVE refused verb=back error={}", error.key())),
+    }
+    reply(result)
+}
+
+/// What became of one step of an approach (`planning/explore.md`): reached (the target was within
+/// reach, so the step is its close-up, no plate), made (its plate is in the library), shown (it
+/// went up and its place is the active one), kept (made ahead and not taken: in the library,
+/// never shown) or failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApproachOutcome {
+    Reached,
+    Made,
+    Shown,
+    Kept,
+    Failed,
+}
+
+impl ApproachOutcome {
+    pub const ALL: [Self; 5] = [
+        Self::Reached,
+        Self::Made,
+        Self::Shown,
+        Self::Kept,
+        Self::Failed,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Reached => "reached",
+            Self::Made => "made",
+            Self::Shown => "shown",
+            Self::Kept => "kept",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|outcome| outcome.key() == key)
+    }
+}
+
+/// The body of `POST /dev/move/approach`: one moment of step `step` toward `target`, how far the
+/// target was before it and is after it, the step's plate, whether it was made ahead, and the
+/// milliseconds it took (the design and plate for `made`, the wait for `shown`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApproachNote {
+    pub target: String,
+    pub step: u32,
+    pub before: Distance,
+    #[serde(default)]
+    pub after: Option<Distance>,
+    #[serde(default)]
+    pub plate: Option<String>,
+    pub ahead: bool,
+    pub outcome: ApproachOutcome,
+    #[serde(default)]
+    pub took_ms: Option<u64>,
+}
+
+/// `POST /dev/move/approach`: one `MOVE approach target= step= distance=<before>[-><after>]
+/// plate= ahead= outcome= ms=` line on the host's clock; the answer is when it was recorded.
+async fn approach_note(State(routes): State<Arc<MoveRoutes>>, bytes: Bytes) -> Response {
+    let result = parse_body::<ApproachNote>(&bytes)
+        .map_err(crate::world::WorldError::InvalidBody)
+        .and_then(|note| {
+            // The ids go into an audit line: each is a place id or the note is refused.
+            let invalid = std::iter::once(&note.target)
+                .chain(note.plate.as_ref())
+                .find(|id| !is_valid_id(&id.to_ascii_lowercase()));
+            match invalid {
+                Some(id) => Err(crate::world::WorldError::InvalidWalkStage { id: id.clone() }),
+                None => Ok(note),
+            }
+        })
+        .map(|note| {
+            routes.app.record_line(format!(
+                "MOVE approach target={} step={} distance={}{} plate={} ahead={} outcome={} \
+                 ms={}",
+                note.target,
+                note.step,
+                note.before.key(),
+                note.after
+                    .map(|after| format!("->{}", after.key()))
+                    .unwrap_or_default(),
+                note.plate.as_deref().unwrap_or("-"),
+                note.ahead,
+                note.outcome.key(),
+                note.took_ms
+                    .map_or_else(|| "-".to_owned(), |took| took.to_string())
+            ));
+            crate::world::WalkNoted {
+                at_ms: routes.app.playground().clock_ms(),
+            }
+        });
+    if let Err(error) = &result {
+        routes
+            .app
+            .record_line(format!("MOVE refused verb=approach error={}", error.key()));
+    }
+    reply(result)
+}
+
 /// The body of `POST /dev/move/design`: the move, the party that may move, what the scene was and
 /// who has been talking, and the model to ask instead of the persona default. The move holds the
 /// player's line, so it has no `Debug`.
@@ -359,6 +514,63 @@ pub struct DesignRequest {
     /// The sights wanted on the way and the move's role in its town, for a move that walks.
     #[serde(default)]
     pub walk: Option<WalkAsk>,
+    /// Who the scenario says is at the destination: each must be one of the design's residents,
+    /// with that id, so the same character is met there in every run (a guild master, a smith
+    /// whose shop is theirs).
+    #[serde(default)]
+    pub residents: Vec<ExpectedResident>,
+    /// The step of an approach this move is, when it is one: its design keeps the target in sight
+    /// at a distance one step can leave it at (`check_approach`).
+    #[serde(default)]
+    pub approach: Option<ApproachAsk>,
+}
+
+/// Someone the scenario puts at a move's destination: their persona id and who they are, as the
+/// place shows them (no name).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpectedResident {
+    pub id: String,
+    pub who: String,
+}
+
+/// The words the design is told of who is at the destination, before the move's own situation.
+pub(super) fn residents_words(expected: &[ExpectedResident]) -> Option<String> {
+    if expected.is_empty() {
+        return None;
+    }
+    let people: Vec<String> = expected
+        .iter()
+        .map(|resident| format!("{} (resident id {})", resident.who.trim(), resident.id))
+        .collect();
+    Some(format!(
+        "Who is at the destination, each a resident of the design with that id: {}.",
+        people.join("; ")
+    ))
+}
+
+/// Why `design` does not hold the residents the scenario expects there, or none: each expected id
+/// is one of its residents.
+pub(super) fn expected_miss(
+    design: &SceneDesign,
+    expected: &[ExpectedResident],
+) -> Option<DesignError> {
+    expected
+        .iter()
+        .find(|resident| {
+            !design
+                .residents
+                .iter()
+                .any(|placed| placed.id == resident.id)
+        })
+        .map(|missing| DesignError::Malformed {
+            reason: format!(
+                "the destination has {} as a resident with the id {}, and the design has no \
+                 resident of that id",
+                missing.who.trim(),
+                missing.id
+            ),
+        })
 }
 
 /// The answer of the design route: the scene design, or why it was refused.
@@ -499,17 +711,32 @@ async fn design_scene(
         .collect();
     let town = crate::world::town_of(&routes.app);
     let visited = crate::world::visited_of(&routes.app);
+    // After a crossing into another region every place is designed in it: the design is told the
+    // region's look before the move's own situation.
+    // Who the scenario puts at the destination is told before the situation too.
+    let context = [
+        crate::world::region_of(&routes.app).map(|region| region.design_words()),
+        residents_words(&request.residents),
+        request.context.clone(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let context = (!context.is_empty()).then(|| context.join(" "));
     let needs = request
         .walk
         .as_ref()
         .map(|ask| WalkNeeds::of(ask, town.as_ref()));
     let started = Instant::now();
     let deadline = routes.design_deadline;
+    let met = people_met(&routes.app, request).await;
     let asked = Asked {
         request,
+        context: context.as_deref(),
         inventories: &inventories,
         needs: needs.as_ref(),
         visited: &visited,
+        met: &met,
     };
     // No count of askings is capped: a refused answer is shown to the model as every rule broken
     // so far and asked for again, so invalid answers do not lose the move, until the stage's
@@ -584,13 +811,38 @@ async fn keep_town(
     }
 }
 
+/// The ids of the stored personas, the people already met, whose ids a new resident never takes;
+/// but those the move may meet again under their own ids: whom the scenario puts at the
+/// destination, who is at the place now (a step on toward them keeps them) and what an approach
+/// walks toward. Empty when they cannot be read.
+async fn people_met(app: &Arc<AppState>, request: &DesignRequest) -> Vec<String> {
+    let here = crate::seat_pages::listener_ids(app).await;
+    crate::persona::stored_ids(app)
+        .await
+        .into_iter()
+        .filter(|id| !request.residents.iter().any(|resident| &resident.id == id))
+        .filter(|id| !here.contains(id))
+        .filter(|id| {
+            request
+                .approach
+                .as_ref()
+                .is_none_or(|ask| &ask.target != id)
+        })
+        .collect()
+}
+
 /// What one asking of the design call is about: the move, what the movers hold and what the move
 /// asks of the walk.
 struct Asked<'a> {
     request: &'a DesignRequest,
+    /// The move's situation as the design is told it: the region's words before the request's.
+    context: Option<&'a str>,
     inventories: &'a MoverInventories,
     needs: Option<&'a WalkNeeds>,
     visited: &'a [Visited],
+    /// The people already met (stored personas) but those the scenario puts at the destination:
+    /// a new resident never takes one of their ids.
+    met: &'a [String],
 }
 
 /// One asking of the design call: the move, what the movers hold and, on a later asking, every
@@ -604,19 +856,25 @@ async fn ask_design(
 ) -> Result<SceneDesign, TextAskError<DesignError>> {
     let Asked {
         request,
+        context,
         inventories,
         needs,
         visited,
+        met,
     } = asked;
     let facts = design_facts(
         &request.intent,
         &request.party,
-        request.context.as_deref(),
+        *context,
         inventories,
         refused_before,
         *needs,
         visited,
     );
+    let facts = match &request.approach {
+        Some(ask) => with_approach(facts, ask),
+        None => facts,
+    };
     let question = text_request(
         route.profile(),
         DESIGN_INSTRUCTION,
@@ -626,10 +884,18 @@ async fn ask_design(
     );
     let answered = route
         .ask(key, &question, |answer| {
-            let mut design = parse_design(answer, &request.intent, &request.party)?;
+            let mut design = parse_design_among(answer, &request.intent, &request.party, met)?;
             check_shown_items(&design, inventories)?;
+            check_coins(&design, inventories)?;
+            settle_coins(&mut design, inventories);
             check_feature(&design, visited)?;
+            if let Some(miss) = expected_miss(&design, &request.residents) {
+                return Err(miss);
+            }
             check_walk(&design, *needs)?;
+            if let Some(ask) = &request.approach {
+                check_approach(&design, ask)?;
+            }
             if let Some(needs) = needs {
                 needs.settle(&mut design);
             }
@@ -684,6 +950,8 @@ pub(crate) fn router_with_design_deadline(
     Router::new()
         .route(path::MOVE_INTERPRET, post(interpret))
         .route(path::MOVE_DESIGN, post(design))
+        .route(path::MOVE_BACK, post(back))
+        .route(path::MOVE_APPROACH, post(approach_note))
         .with_state(Arc::new(MoveRoutes {
             app,
             text,

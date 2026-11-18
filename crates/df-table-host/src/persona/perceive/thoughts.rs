@@ -8,6 +8,7 @@
 //! Keeping a thought never stops a perception: a memory that cannot be put is one `PERSONA
 //! thought_unkept who=.. error=<key>` line and the answer goes out without a memory id.
 
+use df_playground::seat::wire::SeatThought;
 use df_table::ports::Clock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -44,16 +45,23 @@ fn thought_id() -> String {
     format!("thought-{}-{ordinal}", WallClock.now_ms())
 }
 
-/// The words a thought is kept as: the thought, then what was seen and what is wanted.
-fn thought_text(perceived: &Perceived) -> String {
-    let mut text = perceived.thinking_about.trim().to_owned();
-    let saw: Vec<&str> = perceived
+/// What `perceived` saw (of others, never the character itself) and what it wants.
+fn saw_and_wanted(perceived: &Perceived) -> (Vec<String>, Vec<String>) {
+    let saw = perceived
         .sees
         .iter()
         .filter(|seen| !seen.subject.is_own())
         .map(|seen| seen.what.trim())
         .filter(|what| !what.is_empty())
+        .map(str::to_owned)
         .collect();
+    (saw, perceived.wants.clone())
+}
+
+/// The words a thought is kept as: the thought, then what was seen and what is wanted.
+fn thought_text(perceived: &Perceived) -> String {
+    let mut text = perceived.thinking_about.trim().to_owned();
+    let (saw, _) = saw_and_wanted(perceived);
     if !saw.is_empty() {
         text.push_str(&format!("\n\nSaw: {}.", saw.join("; ")));
     }
@@ -102,12 +110,24 @@ fn draft_of(perceived: &Perceived, place: Option<&PlaceNote>) -> MemoryDraft {
 }
 
 /// Keeps `perceived` as a thought of its character. The memory's id on success; on failure one
-/// `PERSONA thought_unkept` line and none.
+/// `PERSONA thought_unkept` line and none. A thought that is not the character's private side is
+/// also handed, in its parts, to the seat that plays the character (its Story page).
 pub(super) async fn keep_thought(
     app: &AppState,
     perceived: &Perceived,
     place: Option<&PlaceNote>,
 ) -> Option<String> {
+    if !perceived.leak_suspect {
+        let (saw, wanted) = saw_and_wanted(perceived);
+        let thought = SeatThought {
+            thought: perceived.thinking_about.trim().to_owned(),
+            saw,
+            wanted,
+        };
+        app.seats()
+            .talk()
+            .think(&perceived.who, perceived.picture.clone(), thought);
+    }
     let draft = draft_of(perceived, place);
     match crate::world::memory::keep(app, draft).await {
         Ok(put) => Some(put.memory.id),
@@ -140,7 +160,7 @@ pub(super) fn thought_of(memory: Memory) -> Thought {
 
 /// The newest `count` thoughts of `who`, oldest first. A store that does not read is one `PERSONA
 /// thought_unreadable` line and none.
-pub(super) async fn recent_thoughts(app: &AppState, who: &str, count: usize) -> Vec<Thought> {
+pub(crate) async fn recent_thoughts(app: &AppState, who: &str, count: usize) -> Vec<Thought> {
     match crate::world::memory::recent(app, who, THOUGHT_KIND, count).await {
         Ok(memories) => memories.into_iter().map(thought_of).collect(),
         Err(error) => {

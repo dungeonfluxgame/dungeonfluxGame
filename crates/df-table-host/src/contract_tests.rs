@@ -1,42 +1,25 @@
-//! The host's JSON and the page's types must agree: the page reads the frame's elements straight
-//! into `StageElement`, and both sides default the newer fields, so a rename on one side would make
-//! every figure draw unturned with no error. These tests tie the two, and pin the pivot rule that
-//! keeps a turned figure from jumping.
+//! The host writes the page's own element type (`ElementView`), and the newer fields default, so
+//! the host's shape of a kind must map onto the page's and a live frame must read back with the
+//! turn and pivot the host holds, or every figure would draw unturned with no error. These tests
+//! tie the two, and pin the pivot rule that keeps a turned figure from jumping.
 
-use df_playground::fixture::{ElementShape, StageElement};
+use df_playground::fixture::ElementShape;
 use df_table::event::RejectionCause;
 use df_table::kind::Shape;
 
 use crate::client::get;
 use crate::command::split_words;
 use crate::dev::{DevError, ReplyError, run_dev};
+use crate::server::request::HostError;
 use crate::test_support::{Running, STARTER_FILES, start};
-use crate::view::{ElementView, PivotView};
-
-fn page_shape(shape: Shape) -> ElementShape {
-    match shape {
-        Shape::Circle => ElementShape::Circle,
-        Shape::Rect => ElementShape::Rect,
-    }
-}
-
-fn host_shape(shape: ElementShape) -> Shape {
-    match shape {
-        ElementShape::Circle => Shape::Circle,
-        ElementShape::Rect => Shape::Rect,
-    }
-}
+use crate::view::{ElementView, PivotView, element_shape};
 
 #[test]
-fn the_two_shape_enums_name_the_same_shapes_in_json() {
+fn a_kinds_shape_is_drawn_as_the_page_shape_of_the_same_name() {
     for shape in [Shape::Circle, Shape::Rect] {
         let host = serde_json::to_value(shape).expect("writes");
-        let page = serde_json::to_value(page_shape(shape)).expect("writes");
+        let page = serde_json::to_value(element_shape(shape)).expect("writes");
         assert_eq!(host, page);
-        assert_eq!(host_shape(page_shape(shape)), shape);
-    }
-    for shape in [ElementShape::Circle, ElementShape::Rect] {
-        assert_eq!(page_shape(host_shape(shape)), shape);
     }
 }
 
@@ -48,7 +31,7 @@ fn view(rotation_degrees: u16, x_percent: u8, y_percent: u8) -> ElementView {
         y: 20.0,
         label: "door".to_owned(),
         color: Some("#ff8800".to_owned()),
-        shape: Shape::Rect,
+        shape: ElementShape::Rect,
         width_units: 8.0,
         height_units: 2.0,
         fields: serde_json::Map::new(),
@@ -63,9 +46,9 @@ fn view(rotation_degrees: u16, x_percent: u8, y_percent: u8) -> ElementView {
 }
 
 #[test]
-fn an_element_view_with_a_turn_and_a_pivot_reads_as_the_pages_stage_element() {
+fn an_element_view_with_a_turn_and_a_pivot_reads_back_as_written() {
     let json = serde_json::to_value(view(270, 0, 50)).expect("writes");
-    let stage: StageElement = serde_json::from_value(json).expect("the page reads it");
+    let stage: ElementView = serde_json::from_value(json).expect("the page reads it");
     assert_eq!(stage.rotation_degrees, 270);
     assert_eq!(
         (stage.pivot.x_percent, stage.pivot.y_percent),
@@ -86,7 +69,7 @@ async fn run(running: &Running, line: &str) -> Result<String, DevError> {
     run_dev(running.port, &split_words(line).expect("the line splits")).await
 }
 
-async fn frame_elements(running: &Running) -> Vec<StageElement> {
+async fn frame_elements(running: &Running) -> Vec<ElementView> {
     let body = get(running.port, "/playground/frame")
         .await
         .expect("answers")
@@ -117,7 +100,7 @@ async fn a_live_frame_reads_as_stage_elements_with_the_rotation_and_pivot_the_ho
 /// Where the page draws the middle of a figure: its position, moved by what turning about the
 /// pivot does to the middle, `(I - R)(pivot - middle)` (the page centres the figure on its
 /// position, then turns it clockwise about `transform-origin`).
-fn drawn_middle(element: &StageElement) -> (f32, f32) {
+fn drawn_middle(element: &ElementView) -> (f32, f32) {
     let width = element.width_units;
     let height = match element.shape {
         ElementShape::Circle => element.width_units,
@@ -165,10 +148,10 @@ async fn a_new_pivot_on_a_turned_figure_would_jump_so_it_is_refused_and_nothing_
         matches!(
             &error,
             DevError::Rejected {
-                error: ReplyError::Canvas {
-                    cause: Some(RejectionCause::InvalidTransform),
+                error: ReplyError::Host(HostError::InvalidEffect {
+                    cause: RejectionCause::InvalidTransform,
                     ..
-                },
+                }),
                 ..
             }
         ),

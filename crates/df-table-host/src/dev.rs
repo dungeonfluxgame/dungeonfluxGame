@@ -9,16 +9,17 @@ use std::path::{Path, PathBuf};
 
 use axum::http::StatusCode;
 use base64::Engine;
-use df_table::event::RejectionCause;
 
 use crate::adapters::RulesCheckError;
 use crate::cast::request::CastError;
 use crate::client::{self, ClientError, Response};
 use crate::command::{self, Command, CommandError, usage_text};
 use crate::dev_client::{self, read_answer, request_body, unexpected_answer};
+use crate::dev_http::DevReply;
 use crate::director::DirectorError;
 use crate::engine::cli::play::PlayError;
 use crate::engine::report::EngineError;
+use crate::guard::GuardError;
 use crate::imagegen::format::{format_ended, format_refusal};
 use crate::imagegen::request::{GenerateError, JobView};
 use crate::limits::UPLOAD_PIECE_BYTES;
@@ -37,7 +38,7 @@ use crate::services::{self, ServicesError};
 use crate::speech::SpeechError;
 use crate::view::CanvasView;
 use crate::wire::{
-    ClientView, ControlsBatch, ControlsReply, FixtureRemove, FixtureWrite, MediaRemove, Reply,
+    Changed, ClientView, ControlsBatch, ControlsReply, FixtureRemove, FixtureWrite, MediaRemove,
     route,
 };
 use crate::world::WorldError;
@@ -49,17 +50,17 @@ mod reads;
 /// The typed error of a route's refusal, by the routes that refused.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReplyError {
-    /// A canvas or playground route answering `wire::Reply`: its cause, when the refusal has one
-    /// (a rejected reload has none), and the problems it lists.
-    Canvas {
-        cause: Option<RejectionCause>,
-        problems: Vec<String>,
-    },
+    /// The guard in front of every route.
+    Guard(GuardError),
     /// A change of what the playground shows.
     Playground(PlaygroundChangeError),
     Engine(EngineError),
     /// A seat route (`/play/*`, `/dev/players/*`).
     Seat(crate::seat::request::SeatError),
+    /// The one seat action route (`/play/seat/action`).
+    SeatAction(crate::seat::request::SeatActionError),
+    /// A look studio route (`/play/look*`, `/dev/look/*`).
+    Look(crate::look::request::LookError),
     Director(DirectorError),
     SceneBuilder(SceneBuilderError),
     Locate(LocateError),
@@ -96,15 +97,12 @@ pub enum ReplyError {
 impl fmt::Display for ReplyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Canvas {
-                cause: Some(cause), ..
-            } => write!(formatter, "the canvas refused the request: {}", cause.key()),
-            Self::Canvas { cause: None, .. } => {
-                formatter.write_str("the canvas refused the request")
-            }
+            Self::Guard(error) => write!(formatter, "{error}"),
             Self::Playground(error) => write!(formatter, "{error}"),
             Self::Engine(error) => write!(formatter, "{error}"),
             Self::Seat(error) => write!(formatter, "{error}"),
+            Self::SeatAction(error) => write!(formatter, "{error}"),
+            Self::Look(error) => write!(formatter, "{error}"),
             Self::Director(error) => write!(formatter, "{error}"),
             Self::SceneBuilder(error) => write!(formatter, "{error}"),
             Self::Locate(error) => write!(formatter, "{error}"),
@@ -200,6 +198,18 @@ impl From<EngineError> for ReplyError {
     }
 }
 
+impl From<crate::look::request::LookError> for ReplyError {
+    fn from(error: crate::look::request::LookError) -> Self {
+        Self::Look(error)
+    }
+}
+
+impl From<crate::seat::request::SeatActionError> for ReplyError {
+    fn from(error: crate::seat::request::SeatActionError) -> Self {
+        Self::SeatAction(error)
+    }
+}
+
 impl From<crate::seat::request::SeatError> for ReplyError {
     fn from(error: crate::seat::request::SeatError) -> Self {
         Self::Seat(error)
@@ -291,20 +301,20 @@ impl From<RulesCheckError> for ReplyError {
 }
 
 /// Writes the line a refusal prints: the host's sentence, with the error's key where the routes'
-/// CLI shows one and the problems a canvas refusal lists.
+/// CLI shows one and the problems a guard refusal or a rejected reload lists.
 fn write_refusal(
     formatter: &mut fmt::Formatter<'_>,
     error: &ReplyError,
     message: &str,
 ) -> fmt::Result {
     let key = match error {
-        ReplyError::Canvas { problems, .. } => {
+        ReplyError::Host(HostError::InvalidKinds { problems }) => {
             formatter.write_str(message)?;
             return problems
                 .iter()
                 .try_for_each(|problem| write!(formatter, "\n  {problem}"));
         }
-        ReplyError::Playground(_) | ReplyError::RulesCheck(_) => {
+        ReplyError::Playground(_) | ReplyError::RulesCheck(_) | ReplyError::Guard(_) => {
             return formatter.write_str(message);
         }
         ReplyError::Generate(error) => {
@@ -312,6 +322,8 @@ fn write_refusal(
         }
         ReplyError::Engine(error) => error.key(),
         ReplyError::Seat(error) => error.key(),
+        ReplyError::SeatAction(error) => error.key(),
+        ReplyError::Look(error) => error.key(),
         ReplyError::Director(error) => error.key(),
         ReplyError::SceneBuilder(error) => error.key(),
         ReplyError::Locate(error) => error.key(),
@@ -419,6 +431,9 @@ pub enum DevError {
         path: PathBuf,
         message: String,
     },
+    /// A `creation` verb that a creation route refused, or whose sheet could not be shown or
+    /// written.
+    Creation(crate::creation::CreationCliError),
     /// A line of a script that could not be parsed. Nothing in the script has run.
     ScriptLine {
         path: PathBuf,
@@ -520,6 +535,7 @@ impl fmt::Display for DevError {
             Self::UnreadableFile { path, message } => {
                 write!(formatter, "cannot read {}: {message}", path.display())
             }
+            Self::Creation(error) => write!(formatter, "{error}"),
             Self::ScriptLine { path, line, error } => {
                 write!(formatter, "{}:{line}: {error}", path.display())
             }
@@ -545,48 +561,36 @@ async fn get_success<T: serde::de::DeserializeOwned>(port: u16, path: &str) -> R
     read_json(&dev_client::get(port, path).await?)
 }
 
-/// The text of a canvas `Reply`: its success, or its refusal as `DevError::Rejected`.
-fn canvas_answer(reply: Reply) -> Result<String, DevError> {
-    match reply {
-        Reply::Rejected {
-            cause,
-            message,
-            problems,
-        } => Err(DevError::Rejected {
-            error: ReplyError::Canvas { cause, problems },
-            message,
-        }),
-        Reply::Done { revision, notices } => Ok(describe_done(revision, &notices)),
-    }
+/// Reads the answer of a route that answers what its change made (`Changed`) or its typed error
+/// `E`. The outer error is an answer that does not read; the inner one is the route's refusal.
+fn read_change<E: serde::de::DeserializeOwned + Into<ReplyError>>(
+    response: &Response,
+) -> Result<Result<String, DevError>, DevError> {
+    let reply: DevReply<Changed, E> = read_answer(response)?;
+    Ok(dev_client::reply_value(reply)
+        .map(|changed| describe_done(changed.revision, &changed.notices)))
 }
 
-/// Reads a canvas route's answer. The outer error is an answer that does not read; the inner one
-/// is the route's refusal.
-fn read_reply(response: &Response) -> Result<Result<String, DevError>, DevError> {
-    let reply: Reply = read_answer(response)?;
-    Ok(canvas_answer(reply))
-}
-
-/// Reads a canvas route's answer: the text of its success, or why it was refused or does not read.
-pub(crate) fn read_canvas_reply(response: &Response) -> Result<String, DevError> {
-    read_reply(response)?
+/// Reads the answer of a route that answers `Changed`: the text of its success, or why it was
+/// refused or does not read.
+pub(crate) fn read_change_reply<E: serde::de::DeserializeOwned + Into<ReplyError>>(
+    response: &Response,
+) -> Result<String, DevError> {
+    read_change::<E>(response)?
 }
 
 /// Reads an answer to a change of the playground: a `ChangeReply` with the new controls or the
-/// route's refusal. A refusal by the guard in front of every route is the host's `Reply`; an
-/// answer that is neither is reported with the reason it does not read.
+/// route's refusal (the guard's included, `dev_client::read_answer`); an answer that is neither is
+/// reported with the reason it does not read.
 fn read_controls_reply(response: &Response) -> Result<Result<String, DevError>, DevError> {
     match read_answer::<ChangeReply>(response) {
         Ok(reply) => {
             Ok(dev_client::reply_value(reply)
                 .map(|value| format!("ok (revision {})", value.revision)))
         }
-        // The reason reported is why the answer is not a `ChangeReply`, not why it is not the
-        // guard's `Reply`.
-        Err(not_a_change_reply) => match serde_json::from_str::<Reply>(&response.body) {
-            Ok(refusal @ Reply::Rejected { .. }) => Ok(canvas_answer(refusal)),
-            Ok(Reply::Done { .. }) | Err(_) => Err(not_a_change_reply),
-        },
+        // A refusal does not stop the requests after it, the guard's no more than the route's.
+        Err(refused @ DevError::Rejected { .. }) => Ok(Err(refused)),
+        Err(error) => Err(error),
     }
 }
 
@@ -730,7 +734,7 @@ async fn upload_media(port: u16, name: String, path: &Path) -> Result<String, De
             });
         }
     };
-    read_canvas_reply(&response)
+    read_change_reply::<PlaygroundChangeError>(&response)
 }
 
 /// Why sending a file stopped before its end.
@@ -877,7 +881,7 @@ async fn write_fixture(port: u16, name: String, path: &Path) -> Result<String, D
         route::DEV_FIXTURE_WRITE,
         "fixture",
         &request,
-        read_reply,
+        read_change::<PlaygroundChangeError>,
     )
     .await
 }
@@ -915,7 +919,8 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
         }
         Command::MediaRemove(name) => {
             let request = [MediaRemove { name }];
-            send_requests(port, route::DEV_MEDIA_REMOVE, "media", &request, read_reply).await
+            let read = read_change::<PlaygroundChangeError>;
+            send_requests(port, route::DEV_MEDIA_REMOVE, "media", &request, read).await
         }
         Command::MediaGenerate(command) => crate::imagegen::run(port, command).await,
         Command::MusicGenerate(request) => crate::music::cli::run(port, request).await,
@@ -925,6 +930,8 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
         Command::World(command) => crate::world::cli::run(port, command).await,
         Command::Tempo(command) => crate::tempo::cli::run(port, command).await,
         Command::Players(command) => crate::seat::cli::run(port, command).await,
+        Command::Look(command) => crate::look::cli::run(port, command).await,
+        Command::Creation(command) => crate::creation::run(port, command).await,
         Command::Move(command) => crate::movement::cli::run(port, command).await,
         Command::Speech(command) => crate::speech::cli::run(port, command).await,
         Command::Clients => reads::show_clients(port).await,
@@ -944,12 +951,13 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
                 route::DEV_FIXTURE_REMOVE,
                 "fixture",
                 &request,
-                read_reply,
+                read_change::<PlaygroundChangeError>,
             )
             .await
         }
         Command::Effects(requests) => {
-            send_requests(port, route::EFFECT, "effect", &requests, read_reply).await
+            let read = read_change::<HostError>;
+            send_requests(port, route::EFFECT, "effect", &requests, read).await
         }
         Command::Canvas => show_canvas(port).await,
         Command::Kinds => {
@@ -962,7 +970,7 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
         Command::Frame { after } => reads::frame(port, after).await,
         Command::Reload => {
             let response = dev_client::post(port, route::RELOAD, "").await?;
-            read_canvas_reply(&response)
+            read_change_reply::<HostError>(&response)
         }
         Command::Help => Ok(usage_text()),
         Command::Engine(command) => crate::engine::run(port, command).await,

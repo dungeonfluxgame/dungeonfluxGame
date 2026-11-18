@@ -17,7 +17,7 @@ pub const PORT_VARIABLE: &str = "DF_TABLE_PORT";
 
 pub const SERVE_USAGE: &str = "\
 df-table serve [--port N] [--kinds DIR] [--playground DIR] [--package DIR] [--telemetry DIR]
-               [--players N] [--moves] [--quiet]
+               [--players N] [--scenario FILE] [--scenario-shell PATH] [--moves] [--quiet]
 
   --port N     loopback port for the viewer and the developer API (default 7878)
   --kinds DIR  directory of kind files (default assets/canvas/kinds, relative to here)
@@ -26,13 +26,20 @@ df-table serve [--port N] [--kinds DIR] [--playground DIR] [--package DIR] [--te
   --telemetry DIR   the telemetry store root: the canvas's records also go down the shared
                     diagnostic path to it (default: none, the records stay in this process)
   --players N  also listen on port N of every network address (0.0.0.0) for phones on this
-               network: they get only the phone page at /play and the few routes it reads,
-               never the developer API (default: off)
+               network: they get only the phone page at /play and the player routes, never
+               the developer API (default: off)
+  --scenario FILE  the beats file a phone's Start the game plays for its seated hero: the host
+                   runs development/market-thread.sh on it in player mode (default: none)
+  --scenario-shell PATH  the bash that runs the scenario's runner (default: DF_SCENARIO_SHELL,
+                   else Git Bash from the Git install; the host refuses to start without one)
   --moves      also record moves, which are frequent (the log shows gaps without them)
   --quiet      do not echo audit lines to this terminal
 
 The API has no password: any process on this machine can drive it. It stays on the loopback
-address; the player listener serves no route that changes anything but a page's own report.";
+address. A phone on the player listener can change only what its own seat key holds: join or
+leave a seat, choose a hero and make its look (the look's refines are paid image calls), say
+ready or not ready, start the game (which runs the scenario, when one is named), say its hero's
+lines when the table asks, and its page's own report.";
 
 /// Why an option was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +74,10 @@ pub struct ServeOptions {
     pub telemetry_root: Option<PathBuf>,
     /// The port of the player listener on every network address, when phones may join.
     pub players_port: Option<u16>,
+    /// The beats file the table plays when a phone starts the game, when one is named.
+    pub scenario: Option<PathBuf>,
+    /// The bash that runs the scenario's runner, when one is named.
+    pub scenario_shell: Option<PathBuf>,
     pub records_moves: bool,
     pub echoes_lines: bool,
 }
@@ -85,6 +96,8 @@ pub fn parse_serve_options(arguments: &[String]) -> Result<ServeOptions, OptionE
         package_directory: PathBuf::from(DEFAULT_PACKAGE_DIRECTORY),
         telemetry_root: None,
         players_port: None,
+        scenario: None,
+        scenario_shell: None,
         records_moves: false,
         echoes_lines: true,
     };
@@ -126,6 +139,18 @@ pub fn parse_serve_options(arguments: &[String]) -> Result<ServeOptions, OptionE
                     .next()
                     .ok_or(OptionError::MissingValue("--players"))?;
                 options.players_port = Some(parse_port(value)?);
+            }
+            "--scenario" => {
+                let value = arguments
+                    .next()
+                    .ok_or(OptionError::MissingValue("--scenario"))?;
+                options.scenario = Some(PathBuf::from(value));
+            }
+            "--scenario-shell" => {
+                let value = arguments
+                    .next()
+                    .ok_or(OptionError::MissingValue("--scenario-shell"))?;
+                options.scenario_shell = Some(PathBuf::from(value));
             }
             "--moves" => options.records_moves = true,
             "--quiet" => options.echoes_lines = false,

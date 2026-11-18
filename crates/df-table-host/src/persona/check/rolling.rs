@@ -31,6 +31,13 @@ fn skill_proficiency(sheet: &CheckSheet, skill: Skill) -> Proficiency {
 }
 
 fn difficulty(call: &CheckCall, label: TargetLabel) -> Result<Target, CheckError> {
+    // An attack's target number is the target's Armor Class from its stat block.
+    if let (TargetLabel::ArmorClass, Some(armor_class)) = (label, call.target_ac) {
+        return Ok(Target {
+            label,
+            value: i16::from(armor_class),
+        });
+    }
     let band = need(call.dc_band, AnswerField::DcBand)?;
     Ok(Target {
         label,
@@ -76,6 +83,24 @@ fn dice(
     })
 }
 
+/// The damage a hit of the attack `call` makes deals: the same weapon of `sheet` (its dice and its
+/// ability modifier), every die rolled twice on a Critical Hit (SRD 5.2.1 page 16).
+pub(super) fn hit_damage(
+    call: &CheckCall,
+    sheet: &CheckSheet,
+    critical: bool,
+) -> Result<RollRequest, CheckError> {
+    let damage = CheckCall {
+        kind: CheckKind::Damage,
+        ..call.clone()
+    };
+    let mut request = roll_request(&damage, sheet, None)?;
+    if let RollRequest::Dice(dice) = &mut request {
+        dice.critical = critical;
+    }
+    Ok(request)
+}
+
 /// The `df-rules` request `call` makes for the character of `sheet`, with Heroic Inspiration spent
 /// on the die at `inspiration` when given.
 pub(super) fn roll_request(
@@ -117,6 +142,30 @@ pub(super) fn roll_request(
                 inspiration,
             )
         }
+        // An ability check with a tool: the Proficiency Bonus is added when the character is
+        // proficient with that tool (SRD 5.2.1 p. 93, Tools); Expertise doubles it for a skill only
+        // (p. 182, Expertise), so never for a tool.
+        CheckKind::ToolCheck => {
+            let ability = need(call.ability, AnswerField::Ability)?;
+            let tool = need(call.uses.as_deref(), AnswerField::Uses)?;
+            let proficiency = if sheet.tool_proficiencies.iter().any(|held| held == tool) {
+                Proficiency::Proficient {
+                    bonus: sheet.proficiency_bonus,
+                }
+            } else {
+                Proficiency::None
+            };
+            let target = difficulty(call, TargetLabel::DifficultyClass)?;
+            d20(
+                sheet,
+                call,
+                D20Test::AbilityCheck(ability),
+                Some(ability),
+                proficiency,
+                Some(target),
+                inspiration,
+            )
+        }
         CheckKind::SavingThrow => {
             let ability = need(call.ability, AnswerField::Ability)?;
             let proficiency = if sheet.saving_throw_proficiencies.contains(&ability) {
@@ -140,9 +189,12 @@ pub(super) fn roll_request(
         }
         CheckKind::AttackRoll => {
             let attack = weapon()?;
+            // A thrown weapon makes a ranged attack with its melee ability (SRD 5.2.1 page 214).
             let test = D20Test::Attack {
                 ability: attack.ability,
-                kind: attack.kind,
+                kind: call
+                    .attack_mode
+                    .map_or(attack.kind, |mode| mode.attack_kind()),
                 critical_from: sheet.critical_from,
             };
             let proficiency = Proficiency::Proficient {

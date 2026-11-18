@@ -20,7 +20,8 @@ use crate::engine::report::reach::EventLevelReport;
 use crate::engine::request::{EventLevelRequest, InspectName, InspectQuery};
 use crate::observe::EventLevel;
 
-use super::{EngineRoutes, answer, body, engine, query};
+use super::{EngineRoutes, answer, engine};
+use crate::dev_http::{read_body, read_query};
 
 pub(super) async fn inspect(
     State(routes): State<EngineRoutes>,
@@ -30,7 +31,7 @@ pub(super) async fn inspect(
     let started = Instant::now();
     let result = async {
         let name = InspectName::from_key(&report).ok_or(EngineError::UnknownReport { report })?;
-        let InspectQuery { audience } = query(inspect_query)?;
+        let InspectQuery { audience } = read_query(inspect_query)?;
         let audience = audience.map_or(InspectAudience::Operator, |audience| audience.0);
         engine(&routes)?.inspect(name, audience).await
     }
@@ -56,18 +57,20 @@ pub(super) async fn events_level_set(
     bytes: Result<Bytes, BytesRejection>,
 ) -> Response {
     let started = Instant::now();
-    let result = body::<EventLevelRequest>(bytes).map(|EventLevelRequest { level }| {
-        let from = level_now(&routes);
-        routes.app.sink().set_level(level);
-        if let Ok(engine) = engine(&routes) {
-            engine.set_event_level(level);
-        }
-        routes.app.record_line(format!(
-            "HOST sink_level from={} to={} driven=true",
-            from.key(),
-            level.key()
-        ));
-        EventLevelReport { level }
-    });
+    let result = read_body::<EventLevelRequest>(bytes)
+        .map_err(EngineError::from)
+        .map(|EventLevelRequest { level }| {
+            let from = level_now(&routes);
+            routes.app.sink().set_level(level);
+            if let Ok(engine) = engine(&routes) {
+                engine.set_event_level(level);
+            }
+            routes.app.record_line(format!(
+                "HOST sink_level from={} to={} driven=true",
+                from.key(),
+                level.key()
+            ));
+            EventLevelReport { level }
+        });
     answer(&routes, "events_level", started, result)
 }

@@ -148,7 +148,8 @@ pub(super) async fn briefing(
         .iter()
         .filter_map(|region| region.label().map(str::to_owned))
         .collect();
-    let handles = Handles::new(&state, labels.iter().map(String::as_str));
+    let party = crate::seat::routes::party_personas(app).await;
+    let handles = Handles::new(&state, &party, labels.iter().map(String::as_str));
     let others_named: Vec<String> = labels
         .iter()
         .filter(|label| **label != who)

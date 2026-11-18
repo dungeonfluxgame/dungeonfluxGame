@@ -104,6 +104,8 @@ fn a_healing_roll_carries_the_label_and_the_dungeon_master_speaks_it() {
             mode: RollMode::Normal,
             grounds: ModeGround::None,
             uses: Some(id.to_owned()),
+            attack_mode: None,
+            target_ac: None,
         };
         let request = roll_request(&call, &sheet, None).expect("the sheet has the healing");
         let result = request.resolve(&[face]).expect("the face fits the die");
@@ -167,4 +169,38 @@ fn a_station_gives_its_setting_situation_and_designed_test() {
         (CheckKind::DeathSave, None, None)
     );
     assert!(read_station(STATIONS, "no_such_station").is_err());
+}
+
+#[test]
+fn every_character_can_punch_for_one_plus_strength_on_no_dice() {
+    // SRD 5.2.1 page 15: an Unarmed Strike's damage is 1 + the Strength modifier, bludgeoning.
+    let sheet = read_sheet(SHEET).expect("the sheet reads");
+    let unarmed = sheet
+        .attack("unarmed_strike")
+        .expect("every sheet can punch");
+    assert_eq!(unarmed.ability, Ability::Strength);
+    let strength = sheet
+        .modifier(Ability::Strength)
+        .expect("a strength modifier");
+    assert_eq!(unarmed.damage.count, 0);
+    assert_eq!(unarmed.damage.modifier, 1 + i16::from(strength));
+    let hit = CheckCall {
+        kind: CheckKind::AttackRoll,
+        ability: Some(Ability::Strength),
+        skill: None,
+        dc_band: None,
+        mode: RollMode::Normal,
+        grounds: ModeGround::None,
+        uses: Some("unarmed_strike".to_owned()),
+        attack_mode: None,
+        target_ac: Some(10),
+    };
+    let rolled = roll_request(&hit, &sheet, None)
+        .expect("a punch rolls")
+        .resolve(&[15])
+        .expect("one d20");
+    assert_eq!(rolled.target.map(|target| target.value), Some(10));
+    let damage = super::rolling::hit_damage(&hit, &sheet, false).expect("a hit deals damage");
+    let dealt = damage.resolve(&[]).expect("no dice to roll");
+    assert_eq!(dealt.total, 1 + i16::from(strength));
 }

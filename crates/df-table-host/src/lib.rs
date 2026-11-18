@@ -19,8 +19,8 @@
 //! not yet true everywhere. The routes that change what the playground shows answer the shared
 //! envelope, `dev_http::DevReply`, through `dev_http::reply`. The engine, director, scene, cast,
 //! locate and imagegen routes read bodies with `dev_http::parse_body` and their CLIs call through
-//! `dev_client`, but each still keeps its own reply type; the canvas and fixture-file routes still
-//! answer `wire::Reply`.
+//! `dev_client`, but each still keeps its own reply type. The canvas, reload, fixture and media
+//! routes answer `DevReply<wire::Changed, _>`; only the guard's refusal is still `wire::Reply`.
 //!
 //! Differences from section O of the plan are listed in the `df-table` crate docs. The host has no
 //! player surfaces yet: this is the workbench the machines and pipeline plug into.
@@ -32,6 +32,7 @@ pub mod broker;
 pub mod cast;
 pub mod client;
 pub mod command;
+pub mod creation;
 pub mod dev;
 mod dev_client;
 mod dev_http;
@@ -46,13 +47,15 @@ pub mod io_cause;
 pub mod kind_files;
 pub mod limits;
 pub mod locate;
+pub mod look;
 pub mod machine_wire;
-pub mod movement;
 mod media_ingest;
 pub mod media_library;
+mod media_links;
 mod media_range;
 mod media_store;
 mod media_upload;
+pub mod movement;
 pub mod music;
 pub mod observe;
 pub mod options;
@@ -66,6 +69,7 @@ pub mod report;
 pub mod request;
 pub mod scene_builder;
 pub mod seat;
+mod seat_pages;
 pub mod serve;
 pub mod server;
 pub mod services;
@@ -77,8 +81,8 @@ pub mod tempo;
 pub mod text;
 mod video_container;
 pub mod view;
-pub mod world;
 pub mod wire;
+pub mod world;
 
 #[cfg(test)]
 mod atomic_file_tests;
@@ -162,6 +166,8 @@ mod scene_home_tests;
 mod scene_lobby_tests;
 #[cfg(test)]
 mod scene_transition_tests;
+#[cfg(test)]
+mod seat_pages_tests;
 #[cfg(test)]
 mod seat_tests;
 #[cfg(test)]

@@ -43,7 +43,7 @@ use super::request::{
 use super::screen::{Screen, read_screen};
 use super::thoughts::{THOUGHT_KIND, keep_thought, thought_of};
 use crate::blocking::run_owned;
-use crate::dev_http::{parse_body, reply};
+use crate::dev_http::{parse_body, read_query, reply};
 use crate::state::AppState;
 use crate::text::{TextRoute, TextRuntime};
 
@@ -54,6 +54,8 @@ pub mod path {
     /// What each of several characters sees and thinks of the same picture (POST a
     /// `PerceiveSceneRequest`).
     pub const PERSONA_PERCEIVE_SCENE: &str = "/dev/persona/perceive/scene";
+    /// Whether a painted figure takes a stance (POST a `PoseCheckRequest`).
+    pub const PERSONA_PERCEIVE_POSE: &str = "/dev/persona/perceive/pose";
     /// The newest thoughts of a character (GET with `?who=&limit=`).
     pub const PERSONA_THOUGHTS: &str = "/dev/persona/thoughts";
 }
@@ -72,9 +74,9 @@ pub const MAXIMUM_THOUGHTS: usize = 1_000;
 const PICTURE_LABEL: &str = "The screen now";
 
 /// What every perception route works with: the host and the text surface the questions go to.
-struct PerceiveRoutes {
-    app: Arc<AppState>,
-    text: Arc<TextRuntime>,
+pub(super) struct PerceiveRoutes {
+    pub(super) app: Arc<AppState>,
+    pub(super) text: Arc<TextRuntime>,
 }
 
 fn bad(cause: impl Into<PerceiveCause>) -> PerceiveRouteError {
@@ -524,21 +526,36 @@ async fn scene(State(routes): State<Arc<PerceiveRoutes>>, bytes: Bytes) -> Respo
     reply::<_, PerceiveRouteError>(result)
 }
 
+async fn pose(State(routes): State<Arc<PerceiveRoutes>>, bytes: Bytes) -> Response {
+    let (who, result) = match parse_body::<super::pose::PoseCheckRequest>(&bytes) {
+        Ok(request) => {
+            let owned = Arc::clone(&routes);
+            let who = request.who.clone();
+            let result = run_owned(
+                async move { super::pose::check_pose(&owned, &request).await },
+                PerceiveRouteError::Stopped,
+            )
+            .await;
+            (Some(who), result)
+        }
+        Err(error) => (None, Err(PerceiveRouteError::InvalidBody(error))),
+    };
+    if let Err(error) = &result {
+        record_refused(&routes.app, "pose_check", who.as_deref(), error);
+    }
+    reply::<_, PerceiveRouteError>(result)
+}
+
 async fn thoughts(
     State(routes): State<Arc<PerceiveRoutes>>,
     query: Result<Query<ThoughtsQuery>, QueryRejection>,
 ) -> Response {
-    let (who, result) = match query {
-        Ok(Query(query)) => {
+    let (who, result) = match read_query(query) {
+        Ok(query) => {
             let who = query.who.clone();
             (Some(who), recall(&routes, &query).await)
         }
-        Err(rejection) => (
-            None,
-            Err(bad(PerceiveCause::Malformed {
-                detail: rejection.body_text(),
-            })),
-        ),
+        Err(error) => (None, Err(PerceiveRouteError::InvalidQuery(error))),
     };
     if let Err(error) = &result {
         record_refused(&routes.app, "thoughts", who.as_deref(), error);
@@ -551,6 +568,7 @@ pub(crate) fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>) -> Router 
     Router::new()
         .route(path::PERSONA_PERCEIVE, post(perceive))
         .route(path::PERSONA_PERCEIVE_SCENE, post(scene))
+        .route(path::PERSONA_PERCEIVE_POSE, post(pose))
         .route(path::PERSONA_THOUGHTS, get(thoughts))
         .with_state(Arc::new(PerceiveRoutes { app, text }))
 }

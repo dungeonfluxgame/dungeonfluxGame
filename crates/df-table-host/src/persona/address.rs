@@ -92,12 +92,20 @@ pub type AddressReply = DevReply<Addressed, AddressRouteError>;
 pub enum AddressError {
     EmptyLine,
     /// The speaker is not one of the characters listed.
-    UnknownSpeaker { id: String },
+    UnknownSpeaker {
+        id: String,
+    },
     /// The answer names a character who is not listed.
-    UnknownAddressed { id: String },
+    UnknownAddressed {
+        id: String,
+    },
     /// The answer names the character who spoke.
-    AddressedSelf { id: String },
-    MalformedAnswer { reason: String },
+    AddressedSelf {
+        id: String,
+    },
+    MalformedAnswer {
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for AddressError {

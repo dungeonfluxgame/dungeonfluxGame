@@ -574,12 +574,12 @@ async fn a_body_over_the_limit_is_answered_413_typed_and_logged() {
     let reply = raw_exchange(port, &post_request(path::INPUT, &body, "")).await;
 
     assert!(reply.starts_with("HTTP/1.1 413"), "{reply}");
-    assert!(reply.contains(r#""error":"unreadable_body""#), "{reply}");
+    assert!(reply.contains(r#""error":"invalid_body""#), "{reply}");
     assert!(reply.contains(r#""cause":"too_large""#), "{reply}");
     let refused = lines_starting(&host, "ENGINE refused verb=input ");
     assert_eq!(refused.len(), 1, "{refused:?}");
     assert!(
-        refused[0].contains(" error=unreadable_body duration_ms="),
+        refused[0].contains(" error=invalid_body duration_ms="),
         "{refused:?}"
     );
 }

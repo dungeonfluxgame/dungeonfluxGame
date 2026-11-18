@@ -9,7 +9,8 @@ use axum::http::StatusCode;
 use df_content::world_bible::{BibleError, Place, PriceQuote, QuoteError};
 use serde::{Deserialize, Serialize};
 
-use crate::dev_http::{BodyError, DevReply, RouteError};
+use super::inventory::ShopStock;
+use crate::dev_http::{BodyError, DevReply, QueryError, RouteError};
 use crate::io_cause::IoCause;
 
 /// The answer of a world route: its value, or why it was refused.
@@ -33,6 +34,9 @@ pub struct ArriveRequest {
     /// `feature`): kept with the places the party has been to, so the next design is told it.
     #[serde(default)]
     pub feature: Option<String>,
+    /// The traders of the place and their stock: each stocked as a shop once the party arrives.
+    #[serde(default)]
+    pub shops: Vec<ShopStock>,
 }
 
 /// `POST /dev/world/picture`: keeps `picture` as the close-up of the thing `item` at the active
@@ -42,6 +46,29 @@ pub struct ArriveRequest {
 pub struct ThingPicture {
     pub item: String,
     pub picture: String,
+}
+
+/// `path::WORLD_THING_ADD`: a thing in sight at the active place (a place designed in play), with
+/// the id the look path names it by, its name and its visible look.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThingAdd {
+    pub id: String,
+    pub name: String,
+    pub look: String,
+}
+
+/// `path::WORLD_THING_NOTE`: a note on a thing of the active place, of a kind (`label`: its state,
+/// what it reads, what is inside) that replaces the note of that kind before, and the thing's
+/// name now when it changed with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThingNote {
+    pub id: String,
+    pub label: String,
+    pub text: String,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// The query of `GET /dev/world/quote`.
@@ -99,9 +126,7 @@ pub struct Validated {
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum WorldError {
     InvalidBody(BodyError),
-    InvalidQuery {
-        detail: String,
-    },
+    InvalidQuery(QueryError),
     /// `world/bible.json` could not be read.
     BibleUnreadable {
         cause: IoCause,
@@ -145,6 +170,20 @@ pub enum WorldError {
     Quote {
         cause: QuoteError,
     },
+    /// A quest, a board or a taking of one does not stand; `reason` says why.
+    InvalidQuest {
+        reason: String,
+    },
+    /// No quest of that id is offered or taken.
+    UnknownQuest {
+        id: String,
+    },
+    /// No quest is taken yet.
+    NoQuestTaken,
+    /// A region does not stand; `reason` says why.
+    InvalidRegion {
+        reason: String,
+    },
     Stopped,
 }
 
@@ -152,7 +191,7 @@ impl WorldError {
     pub(crate) fn key(&self) -> &'static str {
         match self {
             Self::InvalidBody(_) => "invalid_body",
-            Self::InvalidQuery { .. } => "invalid_query",
+            Self::InvalidQuery(_) => "invalid_query",
             Self::BibleUnreadable { .. } => "bible_unreadable",
             Self::BibleInvalid { .. } => "bible_invalid",
             Self::StateUnreadable { .. } => "state_unreadable",
@@ -165,6 +204,10 @@ impl WorldError {
             Self::InvalidWalkStage { .. } => "invalid_walk_stage",
             Self::NoActivePlace => "no_active_place",
             Self::Quote { cause } => cause.key(),
+            Self::InvalidQuest { .. } => "invalid_quest",
+            Self::UnknownQuest { .. } => "unknown_quest",
+            Self::NoQuestTaken => "no_quest_taken",
+            Self::InvalidRegion { .. } => "invalid_region",
             Self::Stopped => "stopped",
         }
     }
@@ -180,7 +223,7 @@ impl fmt::Display for WorldError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidBody(error) => write!(formatter, "{error}"),
-            Self::InvalidQuery { detail } => write!(formatter, "the query is not valid: {detail}"),
+            Self::InvalidQuery(error) => write!(formatter, "{error}"),
             Self::BibleUnreadable { cause } => {
                 write!(formatter, "world/bible.json could not be read: {cause}")
             }
@@ -209,6 +252,10 @@ impl fmt::Display for WorldError {
                 formatter.write_str("no place is active (set one with: world place <id>)")
             }
             Self::Quote { cause } => write!(formatter, "{cause}"),
+            Self::InvalidQuest { reason } => write!(formatter, "the quest: {reason}"),
+            Self::UnknownQuest { id } => write!(formatter, "no quest {id:?} is on the board"),
+            Self::NoQuestTaken => formatter.write_str("no quest is taken yet"),
+            Self::InvalidRegion { reason } => write!(formatter, "the region: {reason}"),
             Self::Stopped => formatter.write_str("the host stopped before the work finished"),
         }
     }
@@ -220,11 +267,15 @@ impl RouteError for WorldError {
     fn status(&self) -> StatusCode {
         match self {
             Self::InvalidBody(_)
-            | Self::InvalidQuery { .. }
+            | Self::InvalidQuery(_)
             | Self::InvalidWalkStage { .. }
-            | Self::PlaceInvalid { .. } => StatusCode::BAD_REQUEST,
-            Self::UnknownPlace { .. } | Self::UnknownThing { .. } => StatusCode::NOT_FOUND,
-            Self::NoActivePlace | Self::NotDesigned | Self::Quote { .. } => {
+            | Self::PlaceInvalid { .. }
+            | Self::InvalidQuest { .. }
+            | Self::InvalidRegion { .. } => StatusCode::BAD_REQUEST,
+            Self::UnknownPlace { .. } | Self::UnknownThing { .. } | Self::UnknownQuest { .. } => {
+                StatusCode::NOT_FOUND
+            }
+            Self::NoActivePlace | Self::NotDesigned | Self::Quote { .. } | Self::NoQuestTaken => {
                 StatusCode::UNPROCESSABLE_ENTITY
             }
             Self::BibleUnreadable { .. }

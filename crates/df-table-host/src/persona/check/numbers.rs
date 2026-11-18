@@ -389,8 +389,9 @@ fn dice_result(request: &RollRequest, result: &RollResult, role: DieRole) -> Str
             "dice"
         };
         let modifiers = modifiers_phrase(result);
-        // A single die with no modifier is the whole total, which is said next.
-        if result.dice.len() > 1 || !modifiers.is_empty() {
+        // A single die with no modifier is the whole total, which is said next, and so is a flat
+        // amount rolled on no dice (an Unarmed Strike's damage).
+        if !result.dice.is_empty() && (result.dice.len() > 1 || !modifiers.is_empty()) {
             sentences.push(format!(
                 "{} on the {} {noun}{modifiers}.",
                 capitalized(&listed(&faces)),

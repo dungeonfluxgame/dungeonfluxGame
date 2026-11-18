@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::request::{
     AddRequest, BatchRequest, Changed, History, InventoryReply, InventoryView, OwnerList,
-    SetRequest, TakeRequest, TransferRequest,
+    PayRequest, PriceRequest, Priced, SetRequest, TakeRequest, TillRequest, TransferRequest,
 };
 use super::routes::path;
 use super::screen::{Screen, ShowRequest};
@@ -20,11 +20,13 @@ pub const INVENTORY_USAGE: &str = concat!(
     "world inventory [list] | world inventory get <owner> | ",
     "world inventory set <owner> <character|party|container|shop> <items.json> | ",
     "world inventory add <owner> <item> <count> [name=<text>] [look=<text>] ",
-    "[use=<consumed|kept>] [why=<text>] | ",
+    "[use=<consumed|kept>] [price=<cp>] [why=<text>] | ",
+    "world inventory price <owner> <item> <cp> [why=<text>] | ",
     "world inventory remove <owner> <item> <count> [why=<text>] | ",
     "world inventory consume <owner> <item> <count> [why=<text>] | ",
     "world inventory batch <owner> <changes.json> | ",
     "world inventory transfer <from> <to> <item> <count> [why=<text>] | ",
+    "world inventory pay <from> <to> <cp> [why=<text>] | world inventory till <owner> | ",
     "world inventory history [<owner>] [limit=<n>] | world inventory sheets <owner> | ",
     "world inventory show <owner> | world inventory hide"
 );
@@ -45,6 +47,8 @@ pub enum InventoryCommand {
         file: PathBuf,
     },
     Add(AddRequest),
+    /// An item without a price gets one.
+    Price(PriceRequest),
     Remove(TakeRequest),
     Consume(TakeRequest),
     /// Several changes (a JSON file of `InventoryChange`s) to one owner, all or none.
@@ -53,6 +57,10 @@ pub enum InventoryCommand {
         file: PathBuf,
     },
     Transfer(TransferRequest),
+    /// Coins worth `amount_cp` from one owner to another, with exact change.
+    Pay(PayRequest),
+    /// The owner keeps a till that can make change (made a shop when it has no inventory).
+    Till(TillRequest),
     /// The change lines of one owner (all when none).
     History {
         owner: Option<String>,
@@ -103,6 +111,12 @@ fn value_of<'a>(taken: &[(&'a str, &'a str)], key: &str) -> Option<&'a str> {
         .map(|(_, value)| *value)
 }
 
+/// A price in copper pieces.
+fn price_word(text: &str) -> Result<u64, CommandError> {
+    text.parse::<u64>()
+        .map_err(|_| bad_choice("price", text, "a whole number of copper pieces"))
+}
+
 /// Reads the words after `world inventory`. The owner and item words are checked by the host, which
 /// answers a typed error for each.
 pub fn parse(words: &[String]) -> Result<InventoryCommand, CommandError> {
@@ -121,7 +135,7 @@ pub fn parse(words: &[String]) -> Result<InventoryCommand, CommandError> {
             file: PathBuf::from(file),
         }),
         ("add", [owner, item, count, tail @ ..]) => {
-            let taken = pairs(tail, &["name", "look", "use", "why"])?;
+            let taken = pairs(tail, &["name", "look", "use", "price", "why"])?;
             Ok(InventoryCommand::Add(AddRequest {
                 owner: owner.clone(),
                 item: item.clone(),
@@ -134,6 +148,16 @@ pub fn parse(words: &[String]) -> Result<InventoryCommand, CommandError> {
                             .ok_or_else(|| bad_choice("use", text, "consumed or kept"))
                     })
                     .transpose()?,
+                price_cp: value_of(&taken, "price").map(price_word).transpose()?,
+                why: value_of(&taken, "why").unwrap_or_default().to_owned(),
+            }))
+        }
+        ("price", [owner, item, price, tail @ ..]) => {
+            let taken = pairs(tail, &["why"])?;
+            Ok(InventoryCommand::Price(PriceRequest {
+                owner: owner.clone(),
+                item: item.clone(),
+                price_cp: price_word(price)?,
                 why: value_of(&taken, "why").unwrap_or_default().to_owned(),
             }))
         }
@@ -165,6 +189,20 @@ pub fn parse(words: &[String]) -> Result<InventoryCommand, CommandError> {
                 why: value_of(&taken, "why").unwrap_or_default().to_owned(),
             }))
         }
+        ("pay", [from, to, amount, tail @ ..]) => {
+            let taken = pairs(tail, &["why"])?;
+            Ok(InventoryCommand::Pay(PayRequest {
+                from: from.clone(),
+                to: to.clone(),
+                amount_cp: amount
+                    .parse::<u64>()
+                    .map_err(|_| bad_choice("cp", amount, "a whole number of copper pieces"))?,
+                why: value_of(&taken, "why").unwrap_or_default().to_owned(),
+            }))
+        }
+        ("till", [owner]) => Ok(InventoryCommand::Till(TillRequest {
+            owner: owner.clone(),
+        })),
         ("history", tail) => {
             let (owner, options) = match tail.split_first() {
                 Some((first, options)) if !first.contains('=') => (Some(first.clone()), options),
@@ -295,6 +333,16 @@ pub async fn run(port: u16, command: InventoryCommand) -> Result<String, DevErro
             Ok(format_changed(&changed))
         }
         InventoryCommand::Add(request) => post(port, path::INVENTORY_ADD, &request).await,
+        InventoryCommand::Price(request) => {
+            let priced: Priced = value(post_json(port, path::INVENTORY_PRICE, &request).await?)?;
+            Ok(format!(
+                "{} {} price_cp={}{}",
+                request.owner,
+                request.item,
+                priced.price_cp,
+                if priced.set { "" } else { " (kept)" }
+            ))
+        }
         InventoryCommand::Remove(request) => post(port, path::INVENTORY_REMOVE, &request).await,
         InventoryCommand::Consume(request) => post(port, path::INVENTORY_CONSUME, &request).await,
         InventoryCommand::Batch { owner, file } => {
@@ -307,6 +355,10 @@ pub async fn run(port: u16, command: InventoryCommand) -> Result<String, DevErro
             .await
         }
         InventoryCommand::Transfer(request) => post(port, path::INVENTORY_TRANSFER, &request).await,
+        InventoryCommand::Pay(request) => post(port, path::INVENTORY_PAY, &request)
+            .await
+            .map_err(with_phone_words),
+        InventoryCommand::Till(request) => post(port, path::INVENTORY_TILL, &request).await,
         InventoryCommand::History { owner, limit } => {
             let mut address = path::INVENTORY_HISTORY.to_owned();
             let query: Vec<String> = owner
@@ -331,6 +383,25 @@ pub async fn run(port: u16, command: InventoryCommand) -> Result<String, DevErro
                 value(post_json(port, path::INVENTORY_HIDE, &serde_json::json!({})).await?)?;
             Ok(format_screen(&screen))
         }
+    }
+}
+
+/// A refused payment with the player's words for it on a line of its own (`phone: <words>`, the
+/// phone's pages kind of the refusal, `InventoryError::pages_kind`), for the runner to tell the
+/// seat why.
+fn with_phone_words(error: DevError) -> DevError {
+    match error {
+        DevError::Rejected {
+            error: crate::dev::ReplyError::Inventory(refusal),
+            message,
+        } => {
+            let words = refusal.pages_kind().player_words();
+            DevError::Rejected {
+                error: crate::dev::ReplyError::Inventory(refusal),
+                message: format!("{message}\nphone: {words}"),
+            }
+        }
+        other => other,
     }
 }
 

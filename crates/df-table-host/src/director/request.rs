@@ -233,9 +233,9 @@ impl From<&PlaygroundChangeError> for ApplyCause {
     fn from(error: &PlaygroundChangeError) -> Self {
         match error {
             // A Director's move is no body, so only the playground's checks refuse it.
-            PlaygroundChangeError::InvalidBody(_)
-            | PlaygroundChangeError::UnreadableBody { .. }
-            | PlaygroundChangeError::InvalidChange { .. } => Self::InvalidChange,
+            PlaygroundChangeError::InvalidBody(_) | PlaygroundChangeError::InvalidChange { .. } => {
+                Self::InvalidChange
+            }
             PlaygroundChangeError::FixtureChanged { .. } => Self::FixtureChanged,
             PlaygroundChangeError::FileMissing { .. } => Self::FileMissing,
             PlaygroundChangeError::FileTooLarge { .. } => Self::FileTooLarge,

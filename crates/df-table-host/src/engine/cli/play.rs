@@ -15,7 +15,7 @@
 use serde_json::{Value, json};
 
 use crate::command::CommandError;
-use crate::dev::{DevError, read_canvas_reply};
+use crate::dev::{DevError, read_change_reply};
 use crate::dev_client::{self, request_body};
 use crate::engine::format::format_submit;
 use crate::engine::machine_io::{
@@ -25,6 +25,7 @@ use crate::engine::machine_io::{
 use crate::engine::report::{EngineDump, SubmitReply};
 use crate::engine::request::{AudienceSpec, InputBody, InputRequest};
 use crate::engine::routes::{AUDIENCE_PARAMETER, path};
+use crate::playground::PlaygroundChangeError;
 use crate::wire::{FixtureRemove, FixtureWrite, route};
 
 use super::{audience_word, fetch, send, whole_number, with_query};
@@ -478,7 +479,7 @@ async fn publish(port: u16, seat: Option<u64>) -> Result<String, DevError> {
     };
     let text = request_body(&body)?;
     let response = dev_client::post(port, route::DEV_FIXTURE_WRITE, &text).await?;
-    read_canvas_reply(&response)?;
+    read_change_reply::<PlaygroundChangeError>(&response)?;
     Ok(format!(
         "1: wrote the fixture {LIVE_FIXTURE} (the shared screen and the phone of seat {seat}); \
          show it with `playground go {LIVE_FIXTURE}`"
@@ -490,7 +491,7 @@ async fn remove(port: u16) -> Result<String, DevError> {
         name: format!("{LIVE_FIXTURE}.json"),
     })?;
     let response = dev_client::post(port, route::DEV_FIXTURE_REMOVE, &text).await?;
-    read_canvas_reply(&response)?;
+    read_change_reply::<PlaygroundChangeError>(&response)?;
     Ok(format!("1: removed the fixture {LIVE_FIXTURE}"))
 }
 

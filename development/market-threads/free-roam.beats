@@ -102,3 +102,26 @@
 @move market
 @move town
 @roam_show You have painted all through the season and it is time to show it. Go to the centre of this town, to its square, and lay out all your paintings there to show them. Say in one line, to yourself, that you are going to the centre of town to show your paintings, and why.
+# Played from a phone (`@roam_player <seat>`, or `DF_RUN_PLAYER=<seat>` for one run; bind the seat
+# first with `players persona <seat> danny`): the player's own words are Danny's three lines, spoken
+# exactly as written. The prompts and the suggested cards the phone offers:
+@roam_player_ask_move Where do you go next?
+@roam_player_ask_look What do you step up to?
+@roam_player_ask_declare What are your hands doing?
+@roam_player_card road Take the road | I've seen what I came for here. I'm taking the road on to the next town.
+@roam_player_card town Another corner of town | I'm not done with this town yet. I'll find another corner of it worth painting.
+@roam_player_card market The market | I'm running low. I'm off to this town's market to stock up.
+@roam_player_card _show_ Show the work | It's time to show what I've made. I'm going to the town square to lay out my paintings.
+@roam_player_look_line {thing} | I step right up to the {thing} and take a close look at it.
+@roam_player_declare_line Paint the {thing} | I set a board on the easel and start laying in the {thing} with my brush.
+@roam_player_ask_painted What do you say as you finish the painting?
+@roam_player_painted_line Finish the {thing} | That's the {thing} done. I've used up the board, a little ochre and umber, some oil and a rag.
+@roam_player_ask_trade What do you offer, and what do you ask for?
+@roam_player_trade_line Sell a painting | I'll sell you one of my small paintings for five silver pennies, and with them I'll buy boards and pigment.
+@roam_player_ask_show What do you say about the day's work?
+@roam_player_show_line Look over the day | A whole season of roads and towns, laid out here in front of me. Not bad for one pair of hands.
+# Played by the player's own hero (the host starts the day for the seated hero; see the runner):
+# the hero's persona is written from this hint, and the day's first plate is painted from the
+# hero's reference sheet with this look (no name ever reaches an image prompt).
+@roam_hero_hint {name} is a {species} {class} who has taken to the road as a travelling painter, walking from town to town with a folding easel on their back, trading small pictures for bread and a bed, and painting whatever stops them in their tracks.
+@roam_start_plate A lone traveller with a folding wooden easel on their back walks along a dirt road between fields toward a small town, in the morning.

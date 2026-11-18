@@ -1,5 +1,5 @@
+use df_playground::fixture::ElementShape;
 use df_table::canvas::Canvas;
-use df_table::kind::Shape;
 use df_table::testkit::{CHARACTER_KIND, MARKER_KIND, RecordingSink, registry_from};
 use serde_json::json;
 
@@ -87,7 +87,7 @@ fn an_element_is_drawn_with_its_kind_shape_color_and_label() {
 #[test]
 fn a_rectangular_kind_is_drawn_as_a_rect_centred_on_the_element() {
     let mut view = CanvasView::from_canvas(&character_canvas()).expect("copies");
-    view.elements[0].shape = Shape::Rect;
+    view.elements[0].shape = ElementShape::Rect;
     view.elements[0].width_units = 10.0;
     view.elements[0].height_units = 4.0;
     let html = page(&view, &[]);
@@ -124,7 +124,7 @@ fn hostile_element() -> ElementView {
         y: 10.0,
         label: "<img src=x onerror=1>".into(),
         color: Some("\"><script>".into()),
-        shape: Shape::Circle,
+        shape: ElementShape::Circle,
         width_units: 4.0,
         height_units: 4.0,
         fields: serde_json::Map::from_iter([("note".to_owned(), json!("<i>"))]),

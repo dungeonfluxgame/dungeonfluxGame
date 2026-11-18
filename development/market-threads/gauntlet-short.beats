@@ -1,0 +1,38 @@
+# The short dice gauntlet: one station of each family of gauntlet.stations.json (a Strength, a
+# Dexterity, a Wisdom and a Charisma skill, a saving throw, a melee attack and its damage, initiative,
+# healing and the percentile table), ten in all, for a first run played from a phone. The runner's
+# gauntlet mode plays it (see gauntlet.beats for the full run, planning/dice-gauntlet.md for the
+# brief and development/runbook-dev-playground.md, "The gauntlet run", for the procedure).
+# Started by the host for a seat (`serve --scenario` with this file), the seat's hero is the character:
+# its persona, its derived creation sheet and a hero version of each station plate (see the runner).
+# A player station's line comes from the phone: after the goal the station has the player's ask
+# ("You've decided to .. What do you do?") and one suggested card, the goal as a first-person act
+# with no dice or skill words (`@station <id> | player | <scene> | <goal> | <ask> | <card>`). Run with
+# no seat (or `--plan`) it is gauntlet_warrior's, as the full gauntlet is. Every scene and goal names
+# no weapon or armour of his, so it is true of any hero.
+@gauntlet gauntlet_warrior
+@gauntlet_persona development/market-threads/gauntlet_warrior.persona.json
+@gauntlet_sheet development/market-threads/gauntlet_warrior.sheet.json
+@gauntlet_stations development/market-threads/gauntlet.stations.json
+@gauntlet_look a broad grey-bearded man in chain mail with a round wooden shield
+@gauntlet_portrait ref-gauntlet_warrior.png
+@gauntlet_subset on
+@gauntlet_fade 800
+@gauntlet_breath 1.5
+@gauntlet_limit 180
+@station athletics | player | A sheer grey cliff rises ahead of you with ledges and cracks in the stone and a rope hanging down the face. The only way on is up. | You have decided to go up this cliff by the rope and the cracks in the rock, and you do it now. Say, in one short line, exactly what you do. | You've decided to climb the cliff by the rope and the cracks in the rock. What do you do? | I grab the rope, wedge my boot into a crack and haul myself up the rock.
+@station stealth | player | A long stone corridor runs away into shadow, lit by a single torch far off. A guard dozes on a stool at the end of it. | The prisoner you came to free is locked in the room behind the dozing guard, and you have decided to creep past him along the wall, and you do it now. Say, in one short line, exactly what you do. | You've decided to creep past the dozing guard to the prisoner's door. What do you do? | I keep low against the wall and slip past the guard one slow step at a time.
+@station perception | player | You stand on a stone watchtower on a ridge above a wide valley, and far off something is moving. | A column of riders may be coming, and you have decided to scan the valley from the watchtower for anything that moves, and you do it now. Say, in one short line, exactly what you do. | You've decided to scan the valley from the watchtower for anything that moves. What do you do? | I shade my eyes and sweep the valley slowly, from the treeline down to the river.
+@station persuasion | player | A village elder sits on a bench before his thatched cottage with his hands folded, and he will not be hurried. | The elder's word decides whether the village shelters the refugees with you, and you have decided to make your honest case to him, and you do it now. Say, in one short line, exactly what you tell him. | You've decided to make your honest case to the elder for the refugees. What do you do? | I sit down beside the elder and tell him plainly that these people have nowhere else to go.
+@station save_dex | narrator | A blade swings out of the corridor wall at chest height.
+# The bout at the ford, against the bandit of the intimidation plate (a live foe with an armor class).
+# The damage scene says the blow has already landed, so a damage roll is called, not a new attack.
+@station_plate attack_melee gauntlet-ford.png
+@station_place attack_melee A river ford where a bandit with a cudgel has come to blows with the adventurer.
+@station_plate damage gauntlet-ford.png
+@station_place damage A river ford where a bandit with a cudgel has come to blows with the adventurer.
+@station attack_melee | player | At the river ford the bandit has had enough of talk. He swings his cudgel at your head, and it whistles past your ear. | The bandit's cudgel just missed your head, and you have decided to strike back at him with your weapon. You do it now. Say, in one short line, exactly what you do. | The bandit's cudgel just missed your head. You've decided to strike back at him. What do you do? | I step inside his swing and strike at him with my weapon.
+@station damage | player | Your blow has opened the bandit's guard and your weapon bites into him. | Your blow has already landed on the bandit, and you press it home with all your weight behind it. You do it now. Say, in one short line, exactly what you do. | Your blow has landed on the bandit. You've decided to drive it home. What do you do? | I put all my weight behind the blow and drive it home.
+@station initiative | narrator | The forest road runs quiet between the trees, and then something stirs on both sides of it.
+@station healing | player | A quiet campfire burns in a woodland clearing, with a bedroll and a water flask beside it. The cut across your ribs is still bleeding, and the road will not wait. | The cut across your ribs is still bleeding and you must close it before the road, so you have decided to catch your breath by the fire and tend the wound with what you have. You do it now. Say, in one short line, exactly what you do. | The cut across your ribs is still bleeding. You've decided to tend it before you take the road. What do you do? | I sit by the fire, catch my breath and tend the cut with what I carry.
+@station table_d100 | player | A stone table in the treasure vault is heaped with coins, and chests stand open behind it. An offering urn of lots stands at its edge. | The vault holds more than you can carry, and you have decided to draw a lot from the offering urn to choose which prize is within your reach. You do it now. Say, in one short line, exactly what you do. | You've decided to draw a lot from the offering urn to choose your prize. What do you do? | I reach into the offering urn and draw out a single lot.

@@ -28,18 +28,21 @@ const NARRATION_KEYS_TEXT: &str = concat!(
     "text=, speaker=, badge=, continue=, voice=true|false, placement=center|right, ",
     "scene=I/N[:TITLE]",
 );
-const SEAT_KEYS: [&str; 8] = [
+const SEAT_KEYS: [&str; 9] = [
     "class",
     "level",
     "portrait",
     "glyph",
     "accent",
+    "character",
     "hp",
     "max",
     "conditions",
 ];
-const SEAT_KEYS_TEXT: &str =
-    "class=, level=N, portrait=FILE, glyph=NAME, accent=#rrggbb, hp=N, max=N, conditions=a,b";
+const SEAT_KEYS_TEXT: &str = concat!(
+    "class=, level=N, portrait=FILE, glyph=NAME, accent=#rrggbb, character=ID, hp=N, max=N, ",
+    "conditions=a,b"
+);
 
 /// A text field: `none` takes it away, anything else sets it.
 fn text_edit(value: &str) -> Edit<String> {
@@ -151,6 +154,7 @@ fn seat(words: &[String]) -> Result<Command, CommandError> {
             let (mut class, mut level_edit, mut portrait) = (Edit::Keep, Edit::Keep, Edit::Keep);
             let (mut glyph, mut accent) = (Edit::Keep, Edit::Keep);
             let (mut hit_points, mut maximum_hit_points, mut conditions) = (None, None, None);
+            let mut character = None;
             for (key, value) in keyed(pairs, SEAT_KEYS_TEXT, &SEAT_KEYS)? {
                 match key {
                     "class" => class = text_edit(value),
@@ -158,6 +162,7 @@ fn seat(words: &[String]) -> Result<Command, CommandError> {
                     "portrait" => portrait = text_edit(value),
                     "glyph" => glyph = glyph_edit(key, value)?,
                     "accent" => accent = text_edit(value),
+                    "character" => character = Some(value.to_owned()),
                     "hp" => hit_points = Some(count("hp", value)?),
                     "max" => maximum_hit_points = Some(count("max", value)?),
                     _ => conditions = Some(split_list(value)),
@@ -165,6 +170,7 @@ fn seat(words: &[String]) -> Result<Command, CommandError> {
             }
             Ok(Command::Scene(SceneChange::SeatSet {
                 name: name.clone(),
+                character,
                 class,
                 level: level_edit,
                 portrait,

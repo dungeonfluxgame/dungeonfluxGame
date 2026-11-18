@@ -313,6 +313,8 @@ async fn the_clue_route_commits_what_a_line_found_once_and_reads_it_back() {
     let request = CluesRequest {
         place: "library".to_owned(),
         line: "warrior: The ink on the record is fresh.".to_owned(),
+        spell: None,
+        look: false,
         model: None,
     };
     let first: CluesReply = post_json(port, PERSONA_STORY_CLUES, &request)
@@ -362,6 +364,7 @@ async fn the_narrator_is_told_what_the_record_holds() {
         place: "library".to_owned(),
         moment: Moment::Found,
         recent: Vec::new(),
+        told: super::story_narrate::Told::default(),
         model: None,
     };
     let reply: NarrateReply = post_json(port, PERSONA_STORY_NARRATE, &request)
@@ -445,4 +448,59 @@ fn progress_or_a_new_place_starts_a_new_stretch() {
     );
     let stalled = player_lines(&mut stretch, "vault", &[2; STALLED_PLAYER_LINES]);
     assert_eq!(stalled.last(), Some(&true), "a new stretch may hint again");
+}
+
+#[tokio::test]
+async fn a_heros_own_look_reaches_a_piece_up_close_whatever_the_words_say_of_it() {
+    let reached = json!({"seen": ["record"], "worked_out": []});
+    let (running, port, asked) = story_host(&story(), vec![reached]).await;
+    let request = CluesRequest {
+        place: "library".to_owned(),
+        line: "warrior: I wipe the dust off the record and read it closely.".to_owned(),
+        spell: None,
+        look: true,
+        model: None,
+    };
+    let reply: CluesReply = post_json(port, PERSONA_STORY_CLUES, &request)
+        .await
+        .unwrap();
+    let DevReply::Done { value } = reply else {
+        panic!("{reply:?}");
+    };
+    assert_eq!(ids(&value.seen), ["record"]);
+    assert_eq!(pieces(&stored(&running).findings.seen), ["record"]);
+    let instructions = asked.lock().unwrap()[0].instructions.clone();
+    assert!(
+        instructions.contains("in the player's own words"),
+        "{instructions}"
+    );
+}
+
+#[tokio::test]
+async fn a_spell_lays_bare_what_it_reads_and_works_nothing_out() {
+    // The judge answers the record seen and, wrongly, worked out: a spell finds, players work out.
+    let laid_bare = json!({"seen": ["record"], "worked_out": ["record"]});
+    let (running, port, asked) = story_host(&story(), vec![laid_bare]).await;
+    let request = CluesRequest {
+        place: "library".to_owned(),
+        line: "warrior: casts Comprehend Languages".to_owned(),
+        spell: Some("You understand the literal meaning of any language you see.".to_owned()),
+        look: false,
+        model: None,
+    };
+    let reply: CluesReply = post_json(port, PERSONA_STORY_CLUES, &request)
+        .await
+        .unwrap();
+    let DevReply::Done { value } = reply else {
+        panic!("{reply:?}");
+    };
+    assert_eq!(ids(&value.seen), ["record"]);
+    assert!(value.worked_out.is_empty(), "a spell works nothing out");
+    assert!(stored(&running).findings.worked_out.is_empty());
+    let asked = asked.lock().unwrap();
+    assert!(asked[0].instructions.contains("spell cast"));
+    assert_eq!(
+        asked[0].facts["spell"],
+        "You understand the literal meaning of any language you see."
+    );
 }

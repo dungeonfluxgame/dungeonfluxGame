@@ -33,6 +33,7 @@ mod answer;
 mod attending;
 pub(super) mod cli;
 mod facts;
+pub mod pose;
 pub mod request;
 pub mod routes;
 mod screen;
@@ -40,3 +41,4 @@ mod thoughts;
 
 pub(crate) use self::attending::attending;
 pub(crate) use self::routes::router_with;
+pub(crate) use self::screen::read_image;

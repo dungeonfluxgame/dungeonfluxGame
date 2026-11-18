@@ -12,8 +12,7 @@ use axum::http::StatusCode;
 use crate::client;
 use crate::command::{CommandError, split_words};
 use crate::dev::{DevError, ReplyError, run_dev};
-use crate::dev_http::{BodyCause, DevReply, RouteError};
-use crate::engine::report::UnreadableBodyCause;
+use crate::dev_http::{BodyCause, BodyError, DevReply, RouteError};
 use crate::engine::routes::path;
 use crate::test_support::{STARTER_FILES, start};
 
@@ -420,11 +419,9 @@ async fn a_body_over_the_limit_is_refused_413_typed_and_logged() {
     let DevReply::Rejected { error, .. } = parsed else {
         panic!("not a refusal: {}", reply.body);
     };
-    assert_eq!(
-        error,
-        RulesCheckError::UnreadableBody {
-            cause: UnreadableBodyCause::TooLarge
-        }
+    assert!(
+        matches!(&error, RulesCheckError::InvalidBody(body) if body.cause == BodyCause::TooLarge),
+        "{error:?}"
     );
     let logged = host.state.log().after_sequence(0, 100_000);
     let refused: Vec<_> = logged
@@ -434,8 +431,7 @@ async fn a_body_over_the_limit_is_refused_413_typed_and_logged() {
         .collect();
     assert_eq!(refused.len(), 1, "{refused:?}");
     assert!(
-        refused[0]
-            .starts_with("ENGINE refused verb=rules_check error=unreadable_body duration_ms="),
+        refused[0].starts_with("ENGINE refused verb=rules_check error=invalid_body duration_ms="),
         "{refused:?}"
     );
 }
@@ -484,16 +480,8 @@ fn every_refusal_answers_its_status_and_its_key_is_its_serde_tag() {
             StatusCode::BAD_REQUEST,
         ),
         (
-            RulesCheckError::UnreadableBody {
-                cause: UnreadableBodyCause::TooLarge,
-            },
+            RulesCheckError::InvalidBody(BodyError::too_large(1)),
             StatusCode::PAYLOAD_TOO_LARGE,
-        ),
-        (
-            RulesCheckError::UnreadableBody {
-                cause: UnreadableBodyCause::Interrupted,
-            },
-            StatusCode::BAD_REQUEST,
         ),
         (RulesCheckError::ScriptedBackend, StatusCode::CONFLICT),
         (

@@ -40,7 +40,7 @@ use super::request::{
     Answered, AskRequest, Audience, BackfillRecord, BackfillRequest, Backfilled, CastOutcome,
     CastRow, CoverageRequest, Covered, EditRequest, Edited, GenerateCastRequest, GenerateRequest,
     Generation, PersonaError, PersonaRemoved, PersonaReply, PersonaStored, PersonaSummary,
-    RemoveRequest, SayRequest, Spoken, VoiceRequest,
+    RemoveRequest, SayExpect, SayRequest, Spoken, VoiceRequest,
 };
 use super::routes::{NarrateLine, Narrated, path};
 use super::state_view::{
@@ -70,9 +70,10 @@ pub const PERSONA_USAGE: &str = concat!(
     "persona state <id> [reset | set <emotion> <level> | rapport <toward> <-100..100> | ",
     "knows <toward> [true|false]] | ",
     "persona edit <id> <file.json> | persona generate <character|all> [overwrite=true|false] ",
-    "[model=<name>] <guidance options> [hint <text...>] | ",
+    "[unplaced=true|false] [model=<name>] <guidance options> [hint <text...>] | ",
     "persona say <character> [model=<name>] [speak=true|false] [recent=<text>]... ",
-    "[from=<id>] [intent=<text>] [strike=true|false] <situation...> | ",
+    "[from=<id>] [intent=<text>] [strike=true|false] [text=<the line, spoken as written>] ",
+    "[expect=inventory|attempt|said_inventory] <situation...> | ",
     "persona check judge|run <character> [sheet=<file>] [stations=<file>] [station=<id>] ",
     "[action=<line>] [moment=player|narrator] [place=<words>] [sight=<words>]... ",
     "[checked=<kind>[:<ability>[:<skill>]]]... [intent=<kind>[:<ability>[:<skill>]]] ",
@@ -83,25 +84,36 @@ pub const PERSONA_USAGE: &str = concat!(
     "[uses=<item id>,<item id>...] [<situation...>] | ",
     "persona converse [turns=N] [opener=<character>] [speak=true|false] [pace=true|false] ",
     "[model=<name>] [frames=<name> <frame options>] [<topic...>] | ",
-    "persona frame [gate=0-100] [model=<name>] [line=<text>]... <what the picture shows...> | ",
+    "persona frame [gate=0-100] [model=<name>] [line=<text>]... ",
+    "[count=<what> count_picture=<picture>] <what the picture shows...> | ",
     "persona watch frames=<name> <frame options> (lines '<speaker id> | <line>' on stdin) | ",
     "persona show-picture <picture> room=<picture> [caption=<text>] [hold=<seconds>] | ",
     "persona story plot [cast=<id>,<id>...] scenes=<id>,<id>... [model=<name>] <premise...> | ",
-    "persona story show | persona story reset | ",
+    "persona story show | persona story reset | persona story author players=<id>,.. <file> | ",
     "persona story apply [model=<name>] | persona story moves [model=<name>] <scene> | ",
     "persona story beats <scene> | persona story ways [model=<name>] | ",
     "persona story way-plates party=<id>,<id>... <how the party looks...> | ",
     "persona story next [opening=true] [after=<id>] [arrived=<n>] [recent=<line>]... ",
     "[model=<name>] <place> | ",
-    "persona story clues [model=<name>] <place> <line...> | ",
+    "persona story clues [spell=<what a spell cast there does>] [look=true|false] [model=<name>] ",
+    "<place> <line...> | ",
     "persona story item [model=<name>] <place> <what is looked at...> | ",
     "persona story item_picture <item> <picture> | ",
-    "persona story narrate [recent=<line>]... ",
-    "[model=<name>] <place> arrival|found|worked_out|stalled|approach | ",
+    "persona story narrate [recent=<line>]... [hero=<id> deed=<line> [outcome=<words>] ",
+    "[scene=<what the plate shows>] [sees=<what the hero sees on it>]... [way=<a way on>]... ",
+    "[reads=true] [hero_look=<words>] [looks_into=<what is looked into>] [impossible=true] ",
+    "[stays=true] [stance=<words>] [unanswered=true]] ",
+    "[model=<name>] <place> arrival|found|worked_out|stalled|approach|look|act|answer | ",
     "persona story phase [arrived=<n>] [recent=<line>]... [model=<name>] | ",
     "persona narrate [speak=true|false] <text...> | ",
+    "persona quest pick [recent=<line>]... [model=<name>] <speaker> <line...> | ",
+    "persona riddle ask <riddle> | ",
+    "persona riddle judge [recent=<line>]... [model=<name>] <riddle> <speaker> <line...> | ",
     "persona addressed <speaker> [recent=<text>]... [intent=<text>] [reply=true|false] ",
     "[model=<name>] <line...> | ",
+    "persona intent scene <speaker> | persona intent [recent=<line>]... [way=<id>|<meaning>]... ",
+    "[distance=<id>:<band>]... [approaching=<id>|<name>|<steps>] [picked=<id>] ",
+    "[model=<name>] <speaker> <line...> | ",
     "persona perceive <who> [mode=glance|study] [picture=<name>] [focus=<id>] [recent=<text>]... ",
     "[scene=<words>] [vision=true|false] [model=<name>] | ",
     "persona perceive scene [who=<id>,<id>...] [mode=glance|study] [picture=<name>] ",
@@ -181,13 +193,14 @@ pub const PERSONA_EXPERTISE_USAGE: &str =
 pub const PERSONA_EDIT_USAGE: &str = "persona edit <id> <file.json>";
 /// `persona generate`: have the text service write personas.
 pub const PERSONA_GENERATE_USAGE: &str = concat!(
-    "persona generate <character|all> [overwrite=true|false] [model=<name>] <guidance options> ",
-    "[hint <text...>]",
+    "persona generate <character|all> [overwrite=true|false] [unplaced=true|false] ",
+    "[model=<name>] <guidance options> [hint <text...>]",
 );
 /// `persona say`: a line from a character, cued on the scene.
 pub const PERSONA_SAY_USAGE: &str = concat!(
     "persona say <character> [model=<name>] [speak=true|false] [recent=<text>]... [from=<id>] ",
-    "[intent=<text>] [strike=true|false] <situation...>",
+    "[intent=<text>] [strike=true|false] [text=<the line, spoken as written>] ",
+    "[expect=inventory|attempt|said_inventory] <situation...>",
 );
 /// `persona converse`: the characters of the shown scene talk to each other.
 pub const PERSONA_CONVERSE_USAGE: &str = concat!(
@@ -199,8 +212,10 @@ pub const PERSONA_CONVERSE_USAGE: &str = concat!(
     "[judge_model=<name>]] [<topic...>]",
 );
 /// `persona frame`: how much the picture would visibly change for these lines.
-pub const PERSONA_FRAME_USAGE: &str =
-    "persona frame [gate=0-100] [model=<name>] [line=<text>]... <what the picture shows...>";
+pub const PERSONA_FRAME_USAGE: &str = concat!(
+    "persona frame [gate=0-100] [model=<name>] [line=<text>]... ",
+    "[count=<what> count_picture=<picture>] <what the picture shows...>"
+);
 /// `persona show-picture`: a picture the library already holds, shown as it is for a while.
 pub const PERSONA_SHOW_PICTURE_USAGE: &str = concat!(
     "persona show-picture <picture> room=<the picture the room goes back to> ",
@@ -226,18 +241,32 @@ pub const PERSONA_ADDRESSED_USAGE: &str = concat!(
 /// own guidance.
 pub const PERSONA_STORY_USAGE: &str = concat!(
     "persona story plot [cast=<id>,<id>...] scenes=<id>,<id>... [model=<name>] <premise...> | ",
-    "persona story show | persona story reset | ",
+    "persona story show | persona story reset | persona story author players=<id>,.. <file> | ",
     "persona story apply [model=<name>] | persona story moves [model=<name>] <scene> | ",
     "persona story beats <scene> | persona story ways [model=<name>] | ",
     "persona story way-plates party=<id>,<id>... <how the party looks...> | ",
     "persona story next [opening=true] [after=<id>] [arrived=<n>] [recent=<line>]... ",
     "[model=<name>] <place> | ",
-    "persona story clues [model=<name>] <place> <line...> | ",
+    "persona story clues [spell=<what a spell cast there does>] [look=true|false] [model=<name>] ",
+    "<place> <line...> | ",
     "persona story item [model=<name>] <place> <what is looked at...> | ",
     "persona story item_picture <item> <picture> | ",
-    "persona story narrate [recent=<line>]... ",
-    "[model=<name>] <place> arrival|found|worked_out|stalled|approach | ",
+    "persona story narrate [recent=<line>]... [hero=<id> deed=<line> [outcome=<words>] ",
+    "[scene=<what the plate shows>] [sees=<what the hero sees on it>]... [way=<a way on>]... ",
+    "[reads=true] [hero_look=<words>] [looks_into=<what is looked into>] [impossible=true] ",
+    "[stays=true] [stance=<words>] [unanswered=true]] ",
+    "[model=<name>] <place> arrival|found|worked_out|stalled|approach|look|act|answer | ",
     "persona story phase [arrived=<n>] [recent=<line>]... [model=<name>]",
+);
+/// `persona quest pick`: which offered quest a line takes up (Jev).
+pub const PERSONA_QUEST_USAGE: &str =
+    "persona quest pick [recent=<line>]... [model=<name>] <speaker> <line...>";
+/// `persona riddle`: the riddle put to the party, and a line at the door judged against it (Jev).
+/// `<riddle>` is one word: `<id>|<the door's words>|<answer id>|<the answer>|<clue,ids>`.
+pub const PERSONA_RIDDLE_USAGE: &str = concat!(
+    "persona riddle ask <riddle> | ",
+    "persona riddle judge [recent=<line>]... [model=<name>] <riddle> <speaker> <line...>; ",
+    "<riddle> is one word: <id>|<the door's words>|<answer id>|<the answer>|<clue,ids>"
 );
 /// `persona narrate`: a line of the dungeon master, shown in its box and voiced when asked.
 pub const PERSONA_NARRATE_USAGE: &str = "persona narrate [speak=true|false] <text...>";
@@ -306,6 +335,8 @@ pub enum PersonaCommand {
     Generate {
         target: GenerateTarget,
         overwrite: bool,
+        /// One character not in the shown scene (`unplaced=true`).
+        unplaced: bool,
         hint: Option<String>,
         asking: Asking,
     },
@@ -320,6 +351,10 @@ pub enum PersonaCommand {
         intent: Option<String>,
         /// Whether the line is the story's strike (`story next`'s `strike`).
         strike: bool,
+        /// The line itself, spoken as written (`text=`).
+        text: Option<String>,
+        /// What the line is expected to do (`expect=inventory`), judged by a call of its own.
+        expect: Option<SayExpect>,
     },
     /// Have the text service write only the voice, expertise and packs of a stored persona.
     VoiceGenerate {
@@ -362,6 +397,8 @@ pub enum PersonaCommand {
         lines: Vec<String>,
         gate_percent: Option<u8>,
         model: Option<String>,
+        /// How many of a thing a picture of the library shows, asked of the judge too.
+        count: Option<super::frame::PieceCount>,
     },
     /// Make frames for lines said elsewhere, read from standard input.
     Watch(FrameOptions),
@@ -403,10 +440,26 @@ pub enum PersonaCommand {
         arrived: usize,
         model: Option<String>,
     },
+    /// A story written in the scenario, kept with the players' heroes in the `player` part.
+    StoryAuthor {
+        file: std::path::PathBuf,
+        players: Vec<String>,
+    },
+    /// Which offered quest a line takes up.
+    QuestPick(super::story_quest::QuestPickRequest),
+    /// What a player means to do with a line in free roam, or the scene it is read against.
+    Intent(super::intent::IntentCommand),
+    /// The riddle put to the party (`judging` false), or a line at the door judged against it.
+    Riddle {
+        request: super::story_quest::RiddleRequest,
+        judging: bool,
+    },
     /// What a line said at a place found of the story's evidence.
     StoryClues {
         place: String,
         line: String,
+        spell: Option<String>,
+        look: bool,
         model: Option<String>,
     },
     /// The reference sheet of what is looked at at a place: kept, or designed now.
@@ -440,6 +493,9 @@ pub enum PersonaCommand {
         moment: Moment,
         /// The lines said at the place so far.
         recent: Vec<String>,
+        /// At a look or an act: the hero, what they did or looked toward, how a check came out
+        /// and what the plate shows.
+        told: super::story_narrate::Told,
         model: Option<String>,
     },
     /// Show a line of the dungeon master in its box, voiced when `speak` is asked.
@@ -557,11 +613,18 @@ fn parse_generate(words: &[String]) -> Result<PersonaCommand, CommandError> {
     } else {
         GenerateTarget::Character(id_word(target)?)
     };
-    let keys = [&["overwrite", "model"][..], &GUIDANCE_KEYS].concat();
+    let keys = [&["overwrite", "unplaced", "model"][..], &GUIDANCE_KEYS].concat();
     let (given, rest) = take_options(rest, &keys);
     let mut overwrite = false;
     for (_, value) in given.iter().filter(|(key, _)| *key == "overwrite") {
         overwrite = flag("overwrite", value)?;
+    }
+    let mut unplaced = false;
+    for (_, value) in given.iter().filter(|(key, _)| *key == "unplaced") {
+        unplaced = flag("unplaced", value)?;
+    }
+    if unplaced && target == GenerateTarget::All {
+        return Err(usage());
     }
     let hint = match rest {
         [] => None,
@@ -571,6 +634,7 @@ fn parse_generate(words: &[String]) -> Result<PersonaCommand, CommandError> {
     Ok(PersonaCommand::Generate {
         target,
         overwrite,
+        unplaced,
         hint,
         asking: asking_from(&given)?,
     })
@@ -598,9 +662,15 @@ fn parse_say(words: &[String]) -> Result<PersonaCommand, CommandError> {
     };
     let (given, situation) = take_options(
         rest,
-        &["model", "speak", "recent", "from", "intent", "strike"],
+        &[
+            "model", "speak", "recent", "from", "intent", "strike", "text", "expect",
+        ],
     );
     let (recent, asked_by) = talk_from(&given)?;
+    let text = given
+        .iter()
+        .find(|(key, _)| *key == "text")
+        .map(|(_, value)| value.to_string());
     let (mut speak, mut strike) = (false, false);
     for (_, value) in given.iter().filter(|(key, _)| *key == "speak") {
         speak = flag("speak", value)?;
@@ -608,9 +678,23 @@ fn parse_say(words: &[String]) -> Result<PersonaCommand, CommandError> {
     for (_, value) in given.iter().filter(|(key, _)| *key == "strike") {
         strike = flag("strike", value)?;
     }
+    let mut expect = None;
+    for (_, value) in given.iter().filter(|(key, _)| *key == "expect") {
+        let expected = SayExpect::ALL
+            .into_iter()
+            .find(|expected| expected.key() == *value)
+            .ok_or(CommandError::Usage(PERSONA_SAY_USAGE))?;
+        if expect.replace(expected).is_some() {
+            return Err(CommandError::DuplicateKey("expect".to_owned()));
+        }
+    }
     Ok(PersonaCommand::Say {
         character: id_word(character)?,
-        situation: free_text(situation, PERSONA_SAY_USAGE)?,
+        situation: if text.is_some() {
+            situation.join(" ")
+        } else {
+            free_text(situation, PERSONA_SAY_USAGE)?
+        },
         model: asking_from(&given)?.model,
         speak,
         recent,
@@ -620,6 +704,8 @@ fn parse_say(words: &[String]) -> Result<PersonaCommand, CommandError> {
             .find(|(key, _)| *key == "intent")
             .map(|(_, value)| value.to_string()),
         strike,
+        text,
+        expect,
     })
 }
 
@@ -827,9 +913,12 @@ fn frame_options(given: &[(&str, &str)]) -> Result<Option<FrameOptions>, Command
 fn parse_frame(words: &[String]) -> Result<PersonaCommand, CommandError> {
     let mut lines = Vec::new();
     let (mut gate_percent, mut model, mut rest) = (None, None, words);
+    let (mut what, mut counted) = (None, None);
     while let Some((word, after)) = rest.split_first() {
         match word.split_once('=') {
             Some(("line", line)) => lines.push(line.to_owned()),
+            Some(("count", text)) => what = Some(text.to_owned()),
+            Some(("count_picture", picture)) => counted = Some(picture.to_owned()),
             Some(("model", name)) => model = Some(name.to_owned()),
             Some(("gate", text)) => {
                 gate_percent = Some(
@@ -845,6 +934,11 @@ fn parse_frame(words: &[String]) -> Result<PersonaCommand, CommandError> {
         }
         rest = after;
     }
+    let count = match (what, counted) {
+        (Some(what), Some(picture)) => Some(super::frame::PieceCount { picture, what }),
+        (None, None) => None,
+        _ => return Err(CommandError::Usage(PERSONA_FRAME_USAGE)),
+    };
     if rest.is_empty() || lines.is_empty() {
         return Err(CommandError::Usage(PERSONA_FRAME_USAGE));
     }
@@ -853,6 +947,7 @@ fn parse_frame(words: &[String]) -> Result<PersonaCommand, CommandError> {
         lines,
         gate_percent,
         model,
+        count,
     })
 }
 
@@ -889,6 +984,88 @@ fn parse_addressed(words: &[String]) -> Result<PersonaCommand, CommandError> {
     })
 }
 
+/// `persona quest pick [recent=<line>]... [model=<name>] <speaker> <line...>`.
+fn parse_quest(words: &[String]) -> Result<PersonaCommand, CommandError> {
+    let usage = || CommandError::Usage(PERSONA_QUEST_USAGE);
+    let Some((verb, rest)) = words.split_first() else {
+        return Err(usage());
+    };
+    let (given, rest) = take_options(rest, &["recent", "model"]);
+    match (verb.as_str(), rest) {
+        ("pick", [speaker, line @ ..]) if !line.is_empty() => Ok(PersonaCommand::QuestPick(
+            super::story_quest::QuestPickRequest {
+                speaker: id_word(speaker)?.to_string(),
+                line: line.join(" "),
+                recent: values_of(&given, "recent"),
+                model: values_of(&given, "model").pop(),
+            },
+        )),
+        _ => Err(usage()),
+    }
+}
+
+/// Every value given for `key`, in order.
+fn values_of(given: &[(&str, &str)], key: &str) -> Vec<String> {
+    given
+        .iter()
+        .filter(|(seen, _)| *seen == key)
+        .map(|(_, value)| (*value).to_owned())
+        .collect()
+}
+
+/// A riddle written as one word: `<id>|<the door's words>|<answer id>|<the answer>|<clue,ids>`.
+fn riddle_word(word: &str) -> Result<super::story_quest::Riddle, CommandError> {
+    let fields: Vec<&str> = word.split('|').map(str::trim).collect();
+    let [id, door, answer_id, answer, clues] = fields[..] else {
+        return Err(CommandError::Usage(PERSONA_RIDDLE_USAGE));
+    };
+    Ok(super::story_quest::Riddle {
+        id: id.to_owned(),
+        door: door.to_owned(),
+        answer_id: answer_id.to_owned(),
+        answer: answer.to_owned(),
+        clues: clues
+            .split(',')
+            .map(str::trim)
+            .filter(|clue| !clue.is_empty())
+            .map(str::to_owned)
+            .collect(),
+    })
+}
+
+/// `persona riddle ask <riddle>` and `persona riddle judge [recent=..].. [model=..] <riddle>
+/// <speaker> <line...>`.
+fn parse_riddle(words: &[String]) -> Result<PersonaCommand, CommandError> {
+    let usage = || CommandError::Usage(PERSONA_RIDDLE_USAGE);
+    let Some((verb, rest)) = words.split_first() else {
+        return Err(usage());
+    };
+    let (given, rest) = take_options(rest, &["recent", "model"]);
+    match (verb.as_str(), rest) {
+        ("ask", [riddle]) if given.is_empty() => Ok(PersonaCommand::Riddle {
+            request: super::story_quest::RiddleRequest {
+                riddle: riddle_word(riddle)?,
+                speaker: None,
+                line: None,
+                recent: Vec::new(),
+                model: None,
+            },
+            judging: false,
+        }),
+        ("judge", [riddle, speaker, line @ ..]) if !line.is_empty() => Ok(PersonaCommand::Riddle {
+            request: super::story_quest::RiddleRequest {
+                riddle: riddle_word(riddle)?,
+                speaker: Some(id_word(speaker)?.to_string()),
+                line: Some(line.join(" ")),
+                recent: values_of(&given, "recent"),
+                model: values_of(&given, "model").pop(),
+            },
+            judging: true,
+        }),
+        _ => Err(usage()),
+    }
+}
+
 fn parse_story(words: &[String]) -> Result<PersonaCommand, CommandError> {
     let Some((verb, rest)) = words.split_first() else {
         return Err(CommandError::Usage(PERSONA_STORY_USAGE));
@@ -896,7 +1073,30 @@ fn parse_story(words: &[String]) -> Result<PersonaCommand, CommandError> {
     let (given, rest) = take_options(
         rest,
         &[
-            "cast", "scenes", "recent", "after", "arrived", "opening", "model", "party",
+            "cast",
+            "scenes",
+            "recent",
+            "after",
+            "arrived",
+            "opening",
+            "model",
+            "party",
+            "players",
+            "spell",
+            "look",
+            "hero",
+            "deed",
+            "outcome",
+            "scene",
+            "sees",
+            "way",
+            "reads",
+            "hero_look",
+            "looks_into",
+            "impossible",
+            "stays",
+            "stance",
+            "unanswered",
         ],
     );
     // A verb takes only its own options: one it does not take is refused, never ignored.
@@ -967,11 +1167,24 @@ fn parse_story(words: &[String]) -> Result<PersonaCommand, CommandError> {
                 model: value("model"),
             })
         }
-        ("clues", false) if rest.len() >= 2 && only(&["model"]) => Ok(PersonaCommand::StoryClues {
-            place: plain(&rest[0])?,
-            line: rest[1..].join(" "),
-            model: value("model"),
-        }),
+        ("author", false) if rest.len() == 1 && only(&["players"]) => {
+            Ok(PersonaCommand::StoryAuthor {
+                file: std::path::PathBuf::from(&rest[0]),
+                players: ids("players")?,
+            })
+        }
+        ("clues", false) if rest.len() >= 2 && only(&["model", "spell", "look"]) => {
+            Ok(PersonaCommand::StoryClues {
+                place: plain(&rest[0])?,
+                line: rest[1..].join(" "),
+                spell: value("spell"),
+                look: value("look")
+                    .map(|text| flag("look", &text))
+                    .transpose()?
+                    .unwrap_or(false),
+                model: value("model"),
+            })
+        }
         ("item", false) if rest.len() >= 2 && only(&["model"]) => Ok(PersonaCommand::StoryItem {
             place: plain(&rest[0])?,
             subject: rest[1..].join(" "),
@@ -1005,17 +1218,51 @@ fn parse_story(words: &[String]) -> Result<PersonaCommand, CommandError> {
                 model: value("model"),
             })
         }
-        ("narrate", false) if rest.len() == 2 && only(&["recent", "model"]) => {
+        ("narrate", false)
+            if rest.len() == 2
+                && only(&[
+                    "recent",
+                    "model",
+                    "hero",
+                    "deed",
+                    "outcome",
+                    "scene",
+                    "sees",
+                    "way",
+                    "reads",
+                    "hero_look",
+                    "looks_into",
+                    "impossible",
+                    "stays",
+                    "stance",
+                    "unanswered",
+                ]) =>
+        {
             Ok(PersonaCommand::StoryNarrate {
                 place: plain(&rest[0])?,
                 moment: Moment::from_key(&rest[1]).ok_or_else(|| {
                     bad_choice(
                         "moment",
                         &rest[1],
-                        "arrival, found, worked_out, stalled or approach",
+                        "arrival, found, worked_out, stalled, approach, look, act or answer",
                     )
                 })?,
                 recent: all("recent"),
+                told: super::story_narrate::Told {
+                    hero: value("hero").map(|hero| plain(&hero)).transpose()?,
+                    deed: value("deed"),
+                    outcome: value("outcome"),
+                    scene: value("scene"),
+                    seen: all("sees"),
+                    ways: all("way"),
+                    reads: value("reads").as_deref() == Some("true"),
+                    hero_look: value("hero_look"),
+                    looks_into: value("looks_into"),
+                    impossible: value("impossible").as_deref() == Some("true"),
+                    stays: value("stays").as_deref() == Some("true"),
+                    stance: value("stance"),
+                    unanswered: value("unanswered").as_deref() == Some("true"),
+                },
                 model: value("model"),
             })
         }
@@ -1302,7 +1549,10 @@ pub fn parse(words: &[String]) -> Result<PersonaCommand, CommandError> {
         ("frame", words) => parse_frame(words),
         ("watch", words) => parse_watch(words),
         ("story", words) => parse_story(words),
+        ("quest", words) => parse_quest(words),
+        ("riddle", words) => parse_riddle(words),
         ("addressed", words) => parse_addressed(words),
+        ("intent", words) => super::intent::parse_intent(words).map(PersonaCommand::Intent),
         ("perceive", words) => {
             super::perceive::cli::parse_perceive(words).map(PersonaCommand::Perceive)
         }
@@ -1427,6 +1677,7 @@ async fn generate(
     port: u16,
     target: GenerateTarget,
     overwrite: bool,
+    unplaced: bool,
     hint: Option<String>,
     asking: Asking,
 ) -> Result<String, DevError> {
@@ -1440,6 +1691,9 @@ async fn generate(
                 guidance,
                 model,
                 overwrite,
+                unplaced,
+                names_taken: Vec::new(),
+                as_painted: None,
             };
             let done: Generation =
                 reply_value(post_json(port, path::PERSONA_GENERATE, &request).await?)?;
@@ -1555,24 +1809,7 @@ async fn show_backfills(port: u16, id: PersonaId) -> Result<String, DevError> {
     Ok(format_backfills(&id, &records))
 }
 
-async fn say(
-    port: u16,
-    character: PersonaId,
-    situation: String,
-    model: Option<String>,
-    speak: bool,
-    talk: (Vec<String>, Option<String>, Option<String>, bool),
-) -> Result<String, DevError> {
-    let request = SayRequest {
-        character: character.to_string(),
-        situation,
-        model,
-        speak,
-        recent: talk.0,
-        asked_by: talk.1,
-        intent: talk.2,
-        strike: talk.3,
-    };
+async fn say(port: u16, request: SayRequest) -> Result<String, DevError> {
     let spoken: Spoken = reply_value(post_json(port, path::PERSONA_SAY, &request).await?)?;
     let sheets =
         super::plate::sheets_for_gains(port, &spoken.character, &spoken.said.inventory).await;
@@ -1707,9 +1944,10 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
         PersonaCommand::Generate {
             target,
             overwrite,
+            unplaced,
             hint,
             asking,
-        } => generate(port, target, overwrite, hint, asking).await,
+        } => generate(port, target, overwrite, unplaced, hint, asking).await,
         PersonaCommand::Ask {
             character,
             question,
@@ -1750,7 +1988,8 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             lines,
             gate_percent,
             model,
-        } => judge_frame(port, picture, lines, gate_percent, model).await,
+            count,
+        } => judge_frame(port, picture, lines, (gate_percent, model), count).await,
         PersonaCommand::Watch(options) => watch_lines(port, options).await,
         PersonaCommand::ShowPicture {
             picture,
@@ -1803,8 +2042,33 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             };
             super::story_next::next_story_move(port, request).await
         }
-        PersonaCommand::StoryClues { place, line, model } => {
-            let request = super::story_clues::CluesRequest { place, line, model };
+        PersonaCommand::StoryAuthor { file, players } => {
+            let text = crate::dev::read_text_file(&file).await?;
+            let story = serde_json::from_str(&text).map_err(|error| DevError::UnreadableFile {
+                path: file.clone(),
+                message: error.to_string(),
+            })?;
+            let request = super::story::AuthorRequest { story, players };
+            super::story::author_story(port, request).await
+        }
+        PersonaCommand::QuestPick(request) => super::story_quest::quest_pick(port, request).await,
+        PersonaCommand::Riddle { request, judging } => {
+            super::story_quest::riddle_line(port, request, judging).await
+        }
+        PersonaCommand::StoryClues {
+            place,
+            line,
+            spell,
+            look,
+            model,
+        } => {
+            let request = super::story_clues::CluesRequest {
+                place,
+                line,
+                spell,
+                look,
+                model,
+            };
             super::story_clues::line_clues(port, request).await
         }
         PersonaCommand::StoryItem {
@@ -1846,12 +2110,14 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             place,
             moment,
             recent,
+            told,
             model,
         } => {
             let request = NarrateRequest {
                 place,
                 moment,
                 recent,
+                told,
                 model,
             };
             story_narration(port, request).await
@@ -1882,6 +2148,7 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
         PersonaCommand::Perceive(command) => super::perceive::cli::run(port, command).await,
         PersonaCommand::Declare(command) => super::declare::run(port, command).await,
         PersonaCommand::Check(command) => super::check::cli::run(port, command).await,
+        PersonaCommand::Intent(command) => super::intent::run(port, command).await,
         PersonaCommand::StoryApply { model } => super::story::apply_story(port, model).await,
         PersonaCommand::Say {
             character,
@@ -1892,16 +2159,22 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             asked_by,
             intent,
             strike,
+            text,
+            expect,
         } => {
-            say(
-                port,
-                character,
+            let request = SayRequest {
+                character: character.to_string(),
                 situation,
                 model,
                 speak,
-                (recent, asked_by, intent, strike),
-            )
-            .await
+                recent,
+                asked_by,
+                intent,
+                strike,
+                text,
+                expect,
+            };
+            say(port, request).await
         }
         PersonaCommand::VoiceGenerate { id, model } => generate_voice(port, id, model).await,
         PersonaCommand::TemperamentGenerate { id, model } => {

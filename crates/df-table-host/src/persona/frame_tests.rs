@@ -125,6 +125,7 @@ fn an_inspected_item_is_one_offered_here_or_null() {
             look: None,
             keeper: Some("weapon_seller".to_owned()),
             picture: None,
+            lying: None,
         },
         PlaceItem {
             id: "well".to_owned(),
@@ -133,6 +134,7 @@ fn an_inspected_item_is_one_offered_here_or_null() {
             look: Some("mossy stones, a rope worn pale".to_owned()),
             keeper: None,
             picture: Some("well-closeup.png".to_owned()),
+            lying: None,
         },
     ];
     let answer = |inspected: serde_json::Value| {
@@ -271,9 +273,24 @@ fn a_watch_line_is_a_speaker_and_a_line_or_a_focus_on_a_clue() {
         WatchInput::parse("village_torchbearer | Look at this wheel."),
         WatchInput::Line {
             speaker: "village_torchbearer",
-            line: "Look at this wheel."
+            line: "Look at this wheel.",
+            chosen: None,
         }
     );
+    assert_eq!(
+        WatchInput::parse("@look garden_gate | danny | I step up to the gate."),
+        WatchInput::Line {
+            speaker: "danny",
+            line: "I step up to the gate.",
+            chosen: Some("garden_gate"),
+        }
+    );
+    assert_eq!(
+        WatchInput::parse("@look garden_gate | I step up."),
+        WatchInput::Unreadable
+    );
+    // TODO(DEV-12): a frame request with chosen_item closes the judge's inspected_item to it or
+    // null, and an item not offered here is refused as unknown_item.
     assert_eq!(
         WatchInput::parse("@focus A wooden wheel bears monkish signs.  "),
         WatchInput::Focus {
@@ -865,6 +882,8 @@ async fn a_picture_over_its_target_is_asked_again_with_why_and_never_cut() {
         last_shot: None,
         peak_percent: 0,
         last_inspected: None,
+        chosen_item: None,
+        count: None,
         ask: FrameAsk::Line {},
         picture_target_characters: Some(100),
     };
@@ -947,6 +966,8 @@ fn lamp_request() -> FrameRequest {
         last_shot: None,
         peak_percent: 0,
         last_inspected: None,
+        chosen_item: None,
+        count: None,
         ask: FrameAsk::Line {},
         picture_target_characters: None,
     }
@@ -1094,6 +1115,8 @@ fn held(id: &str, name: &str) -> InventoryItem {
         look: format!("the {name} as it looks"),
         usage: crate::world::ItemUse::Consumed,
         count: 1,
+        price_cp: None,
+        coin: None,
     }
 }
 
@@ -1186,6 +1209,7 @@ fn a_thing_in_sight_studied_aloud_begins_a_look_though_the_judge_says_it_goes_on
         look: Some("worn blue paint over brown wood, an iron latch".to_owned()),
         keeper: None,
         picture: None,
+        lying: None,
     }];
     let answer = json!({
         "changed_percent": 0, "changes": [], "next_picture": "The blue door fills the frame.",
@@ -1284,6 +1308,8 @@ async fn a_look_at_a_thing_in_sight_of_a_designed_place_cuts_to_an_insert() {
         last_shot: None,
         peak_percent: 0,
         last_inspected: last_inspected.map(str::to_owned),
+        chosen_item: None,
+        count: None,
         ask: FrameAsk::Line {},
         picture_target_characters: None,
     };
@@ -1327,7 +1353,7 @@ async fn a_look_at_a_thing_in_sight_of_a_designed_place_cuts_to_an_insert() {
         .filter(|text| text.starts_with("PERSONA frame_judged "))
         .collect();
     assert!(
-        judged[0].contains(" offered=1 inspected=blue_door inspection=true reason=line "),
+        judged[0].contains(" offered=1 inspected=blue_door chosen=- inspection=true reason=line "),
         "{judged:?}"
     );
 }
@@ -1471,4 +1497,39 @@ async fn a_second_look_shows_the_kept_close_up_and_makes_none() {
         host.lines_starting_with("IMAGEGEN requested").is_empty(),
         "no picture was asked for"
     );
+}
+
+#[tokio::test]
+async fn a_count_asks_the_judge_to_count_in_the_picture_itself() {
+    use crate::dev_client::post_json;
+    use crate::dev_http::DevReply;
+
+    let mut answer = smelly_answer("light");
+    answer["pieces_shown"] = json!(5);
+    let (running, port, _calls, asked) = frame_route_scripted(vec![answer]).await;
+    running.write_asset("media/show-plate.png", "png bytes");
+    let request = FrameRequest {
+        count: Some(super::frame::PieceCount {
+            picture: "show-plate.png".to_owned(),
+            what: "paintings set out".to_owned(),
+        }),
+        ..lamp_request()
+    };
+    let judged: FrameReply = post_json(port, PERSONA_FRAME, &request).await.unwrap();
+    let DevReply::Done { value } = judged else {
+        panic!("judged: {judged:?}");
+    };
+    assert_eq!(value.pieces_shown, Some(5));
+    let asked = asked.lock().unwrap();
+    assert_eq!(asked[0].images.len(), 1, "the picture counted is attached");
+    assert_eq!(asked[0].facts["count"]["what"], "paintings set out");
+    assert!(
+        asked[0].output_schema["required"]
+            .as_array()
+            .is_some_and(|required| required.contains(&json!("pieces_shown")))
+    );
+    assert!(logged(
+        &running,
+        "PERSONA frame_counted picture=show-plate.png pieces_shown=5"
+    ));
 }

@@ -10,6 +10,7 @@
 use std::io::ErrorKind;
 use std::path::Path;
 
+use df_playground::look::wire::{HeroPack, LookDraft, PackItem, PackStatus};
 use df_playground::seat::wire::{FriendCard, HeroCard, JoinStatus, PlayerKind, SeatCard};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -63,17 +64,9 @@ pub(crate) struct SeatRecord {
     /// The hero the player chose for this seat; none until they choose one.
     #[serde(default)]
     pub(crate) hero: Option<u64>,
-}
-
-impl SeatRecord {
-    pub(crate) fn card(&self) -> SeatCard {
-        SeatCard {
-            seat: self.seat,
-            name: self.name.clone(),
-            kind: self.holder.kind(),
-            hero: self.hero,
-        }
-    }
+    /// The persona the seat's hero plays (`danny`); only this seat speaks for it from a phone.
+    #[serde(default)]
+    pub(crate) persona: Option<String>,
 }
 
 /// A friend profile of the account holder.
@@ -102,7 +95,45 @@ pub(crate) struct HeroRecord {
     pub(crate) species: String,
     pub(crate) class: String,
     pub(crate) portrait: Option<String>,
+    /// The pictures made from the portrait at lock-in (`look`).
+    #[serde(default)]
+    pub(crate) pack: HeroPack,
+    /// Whether the look is locked in. The one mark of a finished hero: set at lock-in whatever
+    /// became of its pictures (REF-059), so a hero whose portrait failed still plays.
+    #[serde(default)]
+    pub(crate) locked: bool,
+    /// The look the hero was locked in with, read by Jev and checked: a portrait that failed is
+    /// made again from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) look: Option<LookDraft>,
+    /// A sheet recorded before the pack existed: read into `pack` when the library loads.
+    #[serde(default, rename = "sheet", skip_serializing)]
+    pub(crate) legacy_sheet: Option<String>,
+    /// A ready picture recorded before the pack existed: read into `pack` when the library loads.
+    #[serde(default, rename = "ready", skip_serializing)]
+    pub(crate) legacy_ready: Option<String>,
     pub(crate) last_played_ms: Option<u64>,
+}
+
+impl HeroRecord {
+    /// The record as the pack keeps it: an older record's sheet and ready picture are made pack
+    /// items, and an item a stopped run left pending is not made yet.
+    fn settled(mut self) -> Self {
+        // A hero with a portrait from before the lock mark was locked in.
+        self.locked |= self.portrait.is_some();
+        if let Some(picture) = self.legacy_sheet.take() {
+            self.pack.sheet = PackStatus::Ready { picture };
+        }
+        if let Some(picture) = self.legacy_ready.take() {
+            self.pack.ready = PackStatus::Ready { picture };
+        }
+        for item in PackItem::ALL {
+            if *self.pack.get(item) == PackStatus::Pending {
+                self.pack.set(item, PackStatus::Missing);
+            }
+        }
+        self
+    }
 }
 
 /// A request for a seat as a friend, waiting for the host.
@@ -179,6 +210,7 @@ impl Books {
         let SeatBookFile { mut seats } = read_book(directory, SEAT_BOOK_FILE)?;
         let FriendsFile { friends } = read_book(directory, FRIENDS_FILE)?;
         let HeroesFile { heroes } = read_book(directory, HEROES_FILE)?;
+        let heroes = heroes.into_iter().map(HeroRecord::settled).collect();
         seats.sort_by_key(|record| record.seat);
         Ok(Self {
             seats,
@@ -275,6 +307,7 @@ impl Books {
         let kept = self.seat_of(key).filter(|record| record.seat == seat);
         let joined_ms = kept.map_or(now_ms, |record| record.joined_ms);
         let hero = kept.and_then(|record| record.hero);
+        let persona = kept.and_then(|record| record.persona.clone());
         self.seats
             .retain(|record| &record.key != key && record.seat != seat);
         let record = SeatRecord {
@@ -285,8 +318,9 @@ impl Books {
             joined_ms,
             last_seen_ms: now_ms,
             hero,
+            persona,
         };
-        let card = record.card();
+        let card = self.card_of(&record);
         self.seats.push(record);
         self.seats.sort_by_key(|record| record.seat);
         card
@@ -380,7 +414,7 @@ impl Books {
     pub(crate) fn status(&mut self, key: &KeyHash) -> JoinStatus {
         if let Some(record) = self.seat_of(key) {
             return JoinStatus::Seated {
-                seat: record.card(),
+                seat: self.card_of(record),
             };
         }
         let Some(index) = self.pending.iter().position(|pending| &pending.key == key) else {
@@ -441,6 +475,29 @@ impl Books {
 
     /// The heroes the player at `key` may see: a guest's under their key, a friend's under their
     /// profile. Nobody sees another player's heroes.
+    /// Makes the hero at `seat` play `persona`, or no persona. A persona plays at one seat only.
+    pub(crate) fn bind_persona(
+        &mut self,
+        seat: u64,
+        persona: Option<&str>,
+    ) -> Result<(), SeatError> {
+        if let Some(other) = self
+            .seats
+            .iter()
+            .find(|record| record.seat != seat && record.persona.as_deref() == persona)
+            .filter(|_| persona.is_some())
+        {
+            return Err(SeatError::PersonaTaken { seat: other.seat });
+        }
+        let record = self
+            .seats
+            .iter_mut()
+            .find(|record| record.seat == seat)
+            .ok_or(SeatError::UnknownSeat { seat })?;
+        record.persona = persona.map(str::to_owned);
+        Ok(())
+    }
+
     /// Makes `hero`, one of the player's own heroes, the one they play at their seat.
     pub(crate) fn choose_hero(&mut self, key: &KeyHash, hero: u64) -> Result<SeatCard, SeatError> {
         let record = self.seat_of(key).ok_or(SeatError::UnknownKey)?;
@@ -458,7 +515,105 @@ impl Books {
             .find(|record| &record.key == key)
             .ok_or(SeatError::UnknownKey)?;
         record.hero = Some(hero);
-        Ok(record.card())
+        let record = record.clone();
+        Ok(self.card_of(&record))
+    }
+
+    /// The seat `record` as its phone is told it: whether the chosen hero's look is locked in comes
+    /// from the hero library (a locked look has its approved portrait).
+    pub(crate) fn card_of(&self, record: &SeatRecord) -> SeatCard {
+        SeatCard {
+            seat: record.seat,
+            name: record.name.clone(),
+            kind: record.holder.kind(),
+            hero: record.hero,
+            hero_locked: record
+                .hero
+                .and_then(|hero| self.hero(hero))
+                .is_some_and(|hero| hero.locked),
+            plays: record.persona.clone(),
+        }
+    }
+
+    pub(crate) fn hero(&self, hero: u64) -> Option<&HeroRecord> {
+        self.heroes.iter().find(|known| known.id == hero)
+    }
+
+    fn hero_mut(&mut self, hero: u64) -> Result<&mut HeroRecord, SeatError> {
+        self.heroes
+            .iter_mut()
+            .find(|known| known.id == hero)
+            .ok_or(SeatError::UnknownHero { hero })
+    }
+
+    /// Points `hero` at its locked-in portrait (`look`).
+    pub(crate) fn set_portrait(
+        &mut self,
+        hero: u64,
+        portrait: Option<String>,
+    ) -> Result<(), SeatError> {
+        self.hero_mut(hero)?.portrait = portrait;
+        Ok(())
+    }
+
+    /// Sets how item `item` of `hero`'s pack stands (`look`).
+    pub(crate) fn set_pack(
+        &mut self,
+        hero: u64,
+        item: PackItem,
+        status: PackStatus,
+    ) -> Result<(), SeatError> {
+        self.hero_mut(hero)?.pack.set(item, status);
+        Ok(())
+    }
+
+    /// Locks `hero` in with its portrait (none when it failed) and its look, every pack item
+    /// pending, in one change, so nothing else starts the pack meanwhile.
+    pub(crate) fn lock_hero(
+        &mut self,
+        hero: u64,
+        portrait: Option<String>,
+        look: Option<LookDraft>,
+    ) -> Result<(), SeatError> {
+        let record = self.hero_mut(hero)?;
+        record.locked = true;
+        record.portrait = portrait;
+        record.look = look;
+        for item in PackItem::ALL {
+            record.pack.set(item, PackStatus::Pending);
+        }
+        Ok(())
+    }
+
+    /// Claims the pack items of `hero` to make, marking them pending in the same change: `item`
+    /// unless it is being made, or every item `unmade` takes. The portrait goes first when the
+    /// hero has none, as every other item is made from it.
+    pub(crate) fn claim_pack(
+        &mut self,
+        hero: u64,
+        item: Option<PackItem>,
+        unmade: impl Fn(&PackStatus) -> bool,
+    ) -> Result<Vec<PackItem>, SeatError> {
+        let record = self.hero_mut(hero)?;
+        // A hero not locked in has no pack to make yet.
+        if !record.locked {
+            return Ok(Vec::new());
+        }
+        let mut items: Vec<PackItem> = match item {
+            Some(item) if *record.pack.get(item) != PackStatus::Pending => vec![item],
+            Some(_) => Vec::new(),
+            None => PackItem::ALL
+                .into_iter()
+                .filter(|item| unmade(record.pack.get(*item)))
+                .collect(),
+        };
+        if record.portrait.is_none() {
+            items.sort_by_key(|item| *item != PackItem::Portrait);
+        }
+        for item in &items {
+            record.pack.set(*item, PackStatus::Pending);
+        }
+        Ok(items)
     }
 
     pub(crate) fn heroes_of(&self, key: &KeyHash) -> Result<Vec<HeroCard>, SeatError> {
@@ -500,6 +655,11 @@ impl Books {
             species: species.to_owned(),
             class: class.to_owned(),
             portrait: None,
+            pack: HeroPack::default(),
+            locked: false,
+            look: None,
+            legacy_sheet: None,
+            legacy_ready: None,
             last_played_ms: None,
         };
         let card = hero_card(&hero);
@@ -508,8 +668,9 @@ impl Books {
     }
 
     /// The books as `players` lists them.
-    pub(crate) fn report(&self) -> PlayersReport {
+    pub(crate) fn report(&self, room_code: String) -> PlayersReport {
         PlayersReport {
+            room_code,
             seats: self
                 .seats
                 .iter()
@@ -520,6 +681,7 @@ impl Books {
                     profile: record.holder.profile(),
                     joined_ms: record.joined_ms,
                     last_seen_ms: record.last_seen_ms,
+                    persona: record.persona.clone(),
                 })
                 .collect(),
             friends: self.friend_cards(),
@@ -548,6 +710,7 @@ fn hero_card(hero: &HeroRecord) -> HeroCard {
         species: hero.species.clone(),
         class: hero.class.clone(),
         portrait: hero.portrait.clone(),
+        pack: hero.pack.clone(),
         last_played_ms: hero.last_played_ms,
     }
 }

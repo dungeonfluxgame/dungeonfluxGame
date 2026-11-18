@@ -446,6 +446,8 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
             asked_by: None,
             intent: None,
             strike: false,
+            text: None,
+            expect: None,
         };
         let spoken = match say_once(port, &say).await {
             Ok(spoken) => spoken,
@@ -497,7 +499,7 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
                 match frames.as_mut() {
                     Some(watch) => {
                         match watch
-                            .line_request(port, &speaker, &line, &mut transcript)
+                            .line_request(port, &speaker, (&line, None), &mut transcript)
                             .await
                         {
                             Some(request) => Some(ask_judge(port, &request).await),

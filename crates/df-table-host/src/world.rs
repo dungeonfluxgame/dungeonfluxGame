@@ -27,6 +27,8 @@
 //! - `POST /dev/world/walk`: notes one stage of a move's walk in the audit log (see `walk_note`).
 //! - `/dev/world/inventory/..`: the standard inventory of any number of owners (see `inventory`).
 //! - `/dev/world/memory/..`: the standard memory of any number of owners (see `memory`).
+//! - `/dev/world/quests..`: the quests offered and taken (see `quest`).
+//! - `/dev/world/region`: the region the party is in (see `region`).
 //!
 //! The dev CLI's `world` verbs are these routes.
 
@@ -34,6 +36,8 @@ pub mod cli;
 mod facts;
 pub mod inventory;
 pub mod memory;
+pub mod quest;
+pub mod region;
 pub mod request;
 pub mod routes;
 mod store;
@@ -42,11 +46,17 @@ mod visited;
 mod walk_note;
 
 pub use self::cli::{WorldCommand, parse};
+pub(crate) use self::inventory::logged_id;
 pub use self::inventory::{
-    GainSource, Inventory, InventoryApplied, InventoryDelta, InventoryItem, InventoryMiss,
-    InventoryReason, ItemCount, ItemUse, follow_judged, inventory_of, judged_miss, sheet_name,
-    take_judged_changes,
+    CoinPrice, DealRecord, DealState, GainSource, Inventory, InventoryApplied, InventoryChange,
+    InventoryDelta, InventoryError, InventoryItem, InventoryMiss, InventoryReason, ItemCount,
+    ItemUse, OpenDeal, OpenDeals, ShopStock, change_own, deal_miss, drop_own, follow_judged,
+    inventory_of, judged_miss, prices_in_coin, settle_deal, sheet_name, stock_shop,
+    take_judged_changes, without_deal, worth_cp,
 };
+pub(crate) use self::quest::clear_quests;
+pub use self::quest::{Quest, QuestRecord, QuestStanding, quests_of};
+pub use self::region::{Region, region_of};
 pub use self::request::WorldError;
 pub use self::routes::router_with;
 pub use self::town::{Town, TownView, end_town, seed_town, town_of};
@@ -61,6 +71,8 @@ use crate::state::AppState;
 mod inventory_tests;
 #[cfg(test)]
 mod memory_tests;
+#[cfg(test)]
+mod quest_tests;
 #[cfg(test)]
 mod town_tests;
 #[cfg(test)]
@@ -157,6 +169,10 @@ pub struct PlaceItem {
     /// The close-up kept as its reference sheet, for a thing in sight that has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture: Option<String>,
+    /// How many of it lie on the ground here, left there by a line (thrown, dropped, set down) and
+    /// there to be picked back up; none for what belongs to the place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lying: Option<u64>,
 }
 
 /// Adds `things`, noticed by `via` (a feature's name), to the active place, which must be a place
@@ -168,12 +184,70 @@ pub async fn add_things(
     via: &str,
     things: Vec<df_content::world_bible::Thing>,
 ) -> Result<String, WorldError> {
+    keep_things(app, via, things, false).await
+}
+
+/// Puts `thing`, as it is now, at the active place ([`add_things`]): a thing the place has under
+/// its id already is replaced by it (what its sign reads, kept on it), its close-up kept.
+pub async fn put_thing(
+    app: &AppState,
+    via: &str,
+    thing: df_content::world_bible::Thing,
+) -> Result<String, WorldError> {
+    keep_things(app, via, vec![thing], true).await
+}
+
+/// Notes `text` on the thing `id` of the active place as its note of kind `label` (its state, what
+/// it reads, what is inside), replacing that kind's note before and never the thing's own look,
+/// and names it `name` when given (an open gate shut is the gate). One `WORLD thing_noted place=
+/// id= label=` line; a refusal is one `WORLD refused verb=note_thing error=` line.
+pub async fn note_thing(
+    app: &AppState,
+    id: &str,
+    label: &str,
+    (text, name): (&str, Option<&str>),
+) -> Result<String, WorldError> {
+    let directory = store::world_directory(app);
+    let (id_owned, label_owned) = (id.to_owned(), label.to_owned());
+    let (text, name) = (text.to_owned(), name.map(str::to_owned));
+    let noted = crate::blocking::run_blocking(
+        move || {
+            store::note_thing(
+                &directory,
+                &id_owned,
+                &label_owned,
+                (&text, name.as_deref()),
+            )
+        },
+        WorldError::Stopped,
+    )
+    .await;
+    match &noted {
+        Ok(place) => app.record_line(format!(
+            "WORLD thing_noted place={place} id={} label={}",
+            logged_id(id),
+            logged_id(label)
+        )),
+        Err(error) => app.record_line(format!(
+            "WORLD refused verb=note_thing error={}",
+            error.key()
+        )),
+    }
+    noted
+}
+
+async fn keep_things(
+    app: &AppState,
+    via: &str,
+    things: Vec<df_content::world_bible::Thing>,
+    replace: bool,
+) -> Result<String, WorldError> {
     let directory = store::world_directory(app);
     let ids: Vec<String> = things.iter().map(|thing| thing.id.clone()).collect();
     let added = crate::blocking::run_blocking(
         move || {
             let bible = store::read_bible(&directory)?;
-            store::add_things(&directory, &bible, things)
+            store::add_things(&directory, &bible, things, replace)
         },
         WorldError::Stopped,
     )
@@ -215,6 +289,7 @@ pub fn place_items(app: &AppState) -> Vec<PlaceItem> {
                         look: None,
                         keeper: Some(stall.keeper.clone()),
                         picture: None,
+                        lying: None,
                     });
                 }
             }
@@ -226,13 +301,91 @@ pub fn place_items(app: &AppState) -> Vec<PlaceItem> {
             look: Some(thing.look.clone()),
             keeper: None,
             picture: thing.picture.clone(),
+            lying: None,
         }));
+        // What a line left on the ground here is in sight too, for as long as it lies there.
+        for lies in inventory::lying_items_here(app) {
+            let lies_here = if lies.count == 1 {
+                "It lies on the ground here.".to_owned()
+            } else {
+                format!("{} of them lie on the ground here.", lies.count)
+            };
+            let look = match lies.look.trim() {
+                "" => lies_here,
+                own if own.ends_with('.') => format!("{own} {lies_here}"),
+                own => format!("{own}. {lies_here}"),
+            };
+            match items.iter_mut().find(|seen| seen.id == lies.id) {
+                Some(seen) => seen.lying = Some(lies.count),
+                None => items.push(PlaceItem {
+                    id: lies.id,
+                    name: lies.name,
+                    tags: Vec::new(),
+                    look: Some(look),
+                    keeper: None,
+                    picture: None,
+                    lying: Some(lies.count),
+                }),
+            }
+        }
         Ok::<_, WorldError>(items)
     })();
     items.unwrap_or_else(|error| {
         app.record_line(format!("WORLD items_unavailable error={}", error.key()));
         Vec::new()
     })
+}
+
+/// A place designed in play the party has been to and can go back to (`world place <id>`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct KeptPlace {
+    pub id: String,
+    pub name: String,
+}
+
+/// The places designed in play the party can go back to, oldest first, the active one left out;
+/// none when the state cannot be read (written as `WORLD place_unavailable error=..`). Blocking.
+pub fn kept_places(app: &AppState) -> Vec<KeptPlace> {
+    match store::read_kept(&store::world_directory(app)) {
+        Ok(places) => places
+            .into_iter()
+            .map(|place| KeptPlace {
+                id: place.id,
+                name: place.name,
+            })
+            .collect(),
+        Err(error) => {
+            app.record_line(format!("WORLD place_unavailable error={}", error.key()));
+            Vec::new()
+        }
+    }
+}
+
+/// Makes the kept place designed in play `id` the active one again, as it was left (`world place`
+/// for a kept place: the town and the places visited stay); `None` when no such place is kept.
+/// Blocking.
+pub fn revisit_place(app: &AppState, id: &str) -> Result<Option<KeptPlace>, WorldError> {
+    Ok(
+        store::revisit(&store::world_directory(app), id)?.map(|place| KeptPlace {
+            id: place.id,
+            name: place.name,
+        }),
+    )
+}
+
+/// The name of the active place (designed on arrival, or the bible's), or none with no place or
+/// when the bible cannot be had (written as `WORLD place_unavailable error=..`). Blocking.
+pub fn active_place_name(app: &AppState) -> Option<String> {
+    let directory = store::world_directory(app);
+    let place = store::read_bible(&directory)
+        .and_then(|bible| store::read_active_place(&directory, &bible));
+    match place {
+        Ok(place) => place.map(|place| place.name),
+        Err(error) => {
+            app.record_line(format!("WORLD place_unavailable error={}", error.key()));
+            None
+        }
+    }
 }
 
 /// The result of checking a quoted total against the stall's rules.

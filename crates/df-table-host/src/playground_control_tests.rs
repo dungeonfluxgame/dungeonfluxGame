@@ -8,7 +8,7 @@ use crate::client::{get, post_json};
 use crate::dev_http::DevReply;
 use crate::playground::{ChangeReply, PlaygroundChangeError, fixture_file_name};
 use crate::test_support::{Running, STARTER_FILES, post_request, raw_exchange, start};
-use crate::wire::{ControlsReply, EventsReply, Reply};
+use crate::wire::{Changed, ControlsReply, EventsReply};
 
 const MINIMAL_FIXTURE: &str = r#"{
     "name": "One",
@@ -204,8 +204,8 @@ async fn a_fixture_that_reads_is_written_listed_shown_and_removed() {
         .expect("answers");
     assert_eq!(response.status, StatusCode::OK);
     assert!(matches!(
-        serde_json::from_str::<Reply>(&response.body),
-        Ok(Reply::Done { .. })
+        serde_json::from_str::<DevReply<Changed, PlaygroundChangeError>>(&response.body),
+        Ok(DevReply::Done { .. })
     ));
     let list = get(running.port, "/playground/fixtures.json")
         .await

@@ -159,7 +159,13 @@ fn lobby_join(pairs: &[String]) -> Result<Command, CommandError> {
     )? {
         match key {
             "code" => join.game_code = text(value),
-            "link" => join.join_link = text(value),
+            "link" => {
+                // The TV draws the link's QR code as the host makes it; an empty link has none.
+                join.qr = crate::seat::room::qr_modules(value)
+                    .ok()
+                    .filter(|_| !value.trim().is_empty());
+                join.join_link = text(value);
+            }
             _ => join.hint = text(value),
         }
     }

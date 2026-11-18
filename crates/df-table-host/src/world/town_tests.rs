@@ -49,6 +49,7 @@ async fn arrive(host: &Running, id: &str) {
             things: Vec::new(),
         },
         feature: None,
+        shops: Vec::new(),
     };
     let reply: WorldReply<PlaceSet> = post_json(host.port, path::WORLD_ARRIVE, &request)
         .await
@@ -223,6 +224,7 @@ async fn the_features_of_the_places_arrived_at_are_kept_until_a_bible_place_is_m
                     things: Vec::new(),
                 },
                 feature: feature.map(str::to_owned),
+                shops: Vec::new(),
             };
             let reply: WorldReply<PlaceSet> =
                 post_json(port, path::WORLD_ARRIVE, &request).await.unwrap();

@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 use super::cli::{WorldCommand, parse};
 use super::request::{PlaceSet, Quoted, Validated, WorldReply, WorldView};
 use super::routes::path;
-use super::{PlaceItem, available_packs, check_quote, context_for, context_for_viewer, place_items};
+use super::{
+    PlaceItem, available_packs, check_quote, context_for, context_for_viewer, place_items,
+};
 use crate::command::CommandError;
 use crate::dev_client::{get_json, post_json};
 use crate::dev_http::DevReply;
@@ -490,6 +492,7 @@ async fn a_designed_place_is_the_active_one_and_offers_its_things_without_a_keep
             look: Some("mossy stones".to_owned()),
             keeper: None,
             picture: None,
+            lying: None,
         }]
     );
     let facts = context_for(&host.state, &[]).facts;
@@ -547,6 +550,239 @@ async fn a_thing_keeps_its_first_close_up_as_its_sheet_at_a_designed_place() {
     );
     assert_eq!(
         refusal(keep(json!({"item": "cart", "picture": "x.png"})).await),
+        "unknown_thing"
+    );
+}
+
+#[tokio::test]
+async fn a_place_designed_in_play_is_gone_back_to_as_it_was_left_and_a_thing_can_be_added() {
+    let host = host().await;
+    let arrive = |body: Value| {
+        let port = host.port;
+        async move {
+            let set: PlaceSet = done(post_json(port, path::WORLD_ARRIVE, &body).await.unwrap());
+            set
+        }
+    };
+    arrive(json!({"place": {"id": "roam-03", "name": "a square",
+        "things": [{"id": "well", "name": "the old well", "look": "mossy stones"}]},
+        "feature": "the old well"}))
+    .await;
+    // A thing the runner saw in the picture becomes a real thing of the place.
+    let cart = json!({"id": "cart", "name": "a hay cart", "look": "a cart piled with hay"});
+    let added: PlaceSet = done(
+        post_json(host.port, path::WORLD_THING_ADD, &cart)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(added.place.as_deref(), Some("roam-03"));
+    arrive(json!({"place": {"id": "roam-04", "name": "a mill",
+        "things": [{"id": "wheel", "name": "the wheel", "look": "a dripping wheel"}]},
+        "feature": "the wheel"}))
+    .await;
+    let back = done(set_place(&host, Some("roam-03")).await);
+    assert_eq!(back.place.as_deref(), Some("roam-03"));
+    let ids: Vec<String> = place_items(&host.state)
+        .into_iter()
+        .map(|item| item.id)
+        .collect();
+    assert_eq!(ids, ["well", "cart"], "the place as it was left");
+    // A thing added again under its id is that thing as it is now (what its sign reads): it
+    // replaces the one kept, so it reads the same the next time.
+    let read = json!({"id": "well", "name": "the old well",
+                      "look": "mossy stones. Its plaque reads: Drink and be thankful"});
+    done::<PlaceSet>(
+        post_json(host.port, path::WORLD_THING_ADD, &read)
+            .await
+            .unwrap(),
+    );
+    let items = place_items(&host.state);
+    assert_eq!(items.len(), 2, "no second well");
+    assert_eq!(
+        items[0].look.as_deref(),
+        Some("mossy stones. Its plaque reads: Drink and be thankful")
+    );
+    let directory = super::store::world_directory(&host.state);
+    assert_eq!(
+        super::store::read_visited(&directory).unwrap().len(),
+        2,
+        "the places visited stay"
+    );
+    assert_eq!(
+        refusal(set_place(&host, Some("roam-99")).await),
+        "unknown_place"
+    );
+}
+
+/// Moves the paused clock on by `ms` and lets the fading task finish.
+async fn pass(ms: u64) {
+    tokio::time::advance(std::time::Duration::from_millis(ms)).await;
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+        std::thread::yield_now();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_party_strip_shows_at_a_new_place_and_fades_out_fifteen_seconds_later() {
+    let host = host().await;
+    host.write_asset("world/bible.json", &bible(3));
+    host.write_asset(
+        "fixtures/one.json",
+        concat!(
+            r#"{"name": "One", "tv": {"place": "Here", "status": {"kind": "ok"}, "#,
+            r#""elements": []}, "#,
+            r#""phone": {"hero": "Pip", "status": {"kind": "ok"}}}"#
+        ),
+    );
+    let hidden = |host: &Running| {
+        host.state
+            .playground()
+            .snapshot()
+            .scene
+            .party_hidden
+            .set_value()
+            .copied()
+    };
+    let strip_lines = |host: &Running| {
+        host.state
+            .log()
+            .after_sequence(0, usize::MAX)
+            .into_iter()
+            .map(|line| line.text)
+            .filter(|text| text.starts_with("PLAYGROUND party_strip "))
+            .collect::<Vec<_>>()
+    };
+    let shown_ms = super::routes::PARTY_STRIP_SHOWN.as_millis() as u64;
+    done(set_place(&host, Some("market")).await);
+    assert_eq!(hidden(&host), Some(false));
+    pass(shown_ms - 1_000).await;
+    assert_eq!(hidden(&host), Some(false), "still up a second before");
+    // A new place before it fades shows it again and starts the wait anew.
+    done(set_place(&host, Some("market")).await);
+    pass(shown_ms - 1_000).await;
+    assert_eq!(hidden(&host), Some(false));
+    pass(1_000).await;
+    assert_eq!(hidden(&host), Some(true));
+    let lines = strip_lines(&host);
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(lines[0].starts_with("PLAYGROUND party_strip shown place=market at_ms="));
+    assert!(lines[2].starts_with("PLAYGROUND party_strip hidden at_ms="));
+    // Nothing but a new place brings it back.
+    pass(shown_ms * 2).await;
+    assert_eq!(hidden(&host), Some(true));
+    assert_eq!(strip_lines(&host).len(), 3);
+}
+
+#[test]
+fn world_arrive_reads_a_place_with_no_things_yet() {
+    let words = |text: &str| text.split(' ').map(str::to_owned).collect::<Vec<_>>();
+    let Ok(WorldCommand::Arrive(request)) = parse(&words(
+        "arrive roam-00-hero-11 the road before the town gate | a walled town's open gate",
+    )) else {
+        panic!("world arrive reads");
+    };
+    assert_eq!(request.place.id, "roam-00-hero-11");
+    assert_eq!(request.place.name, "the road before the town gate");
+    assert_eq!(
+        request.place.description,
+        "In sight: a walled town's open gate."
+    );
+    assert!(request.place.things.is_empty() && request.shops.is_empty());
+    for bad in ["arrive Road x | y", "arrive road x", "arrive road | y"] {
+        assert!(parse(&words(bad)).is_err(), "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn a_thing_dropped_from_the_bag_lies_in_sight_at_that_place_only() {
+    let host = host().await;
+    let _: Value = post_json(
+        host.port,
+        super::inventory::routes::path::INVENTORY_SET,
+        &json!({"owner": "hero-11", "kind": "character", "items": [
+            {"id": "dagger", "name": "Dagger", "look": "a plain dagger", "use": "kept",
+             "count": 2}
+        ]}),
+    )
+    .await
+    .unwrap();
+    let field = |id: &str| {
+        json!({"place": {"id": id, "name": "a field",
+            "things": [{"id": "old-oak", "name": "the old oak", "look": "a broad oak"}]}})
+    };
+    let arrive = |body: Value| {
+        let port = host.port;
+        async move {
+            post_json::<_, WorldReply<PlaceSet>>(port, path::WORLD_ARRIVE, &body)
+                .await
+                .unwrap()
+        }
+    };
+    done(arrive(field("field-1")).await);
+    let applied = super::drop_own(&host.state, "hero-11", "dagger", 1).unwrap();
+    assert_eq!(applied[0].after, 1);
+    let lying = PlaceItem {
+        id: "dagger".to_owned(),
+        name: "Dagger".to_owned(),
+        tags: Vec::new(),
+        look: Some("a plain dagger. It lies on the ground here.".to_owned()),
+        keeper: None,
+        picture: None,
+        lying: Some(1),
+    };
+    assert_eq!(place_items(&host.state)[1], lying);
+    assert!(
+        host.state
+            .log()
+            .after_sequence(0, usize::MAX)
+            .iter()
+            .any(|line| line.text == "INVENTORY left owner=hero-11 item=dagger qty=1 at=field-1")
+    );
+    done(arrive(field("field-2")).await);
+    assert_eq!(place_items(&host.state).len(), 1);
+    done(arrive(field("field-1")).await);
+    assert_eq!(place_items(&host.state)[1], lying);
+}
+
+#[tokio::test]
+async fn a_note_on_a_thing_is_told_after_its_look_and_replaces_only_its_own_kind() {
+    let host = host().await;
+    let gate = json!({"place": {"id": "road-1", "name": "the road before the gate",
+        "things": [{"id": "gate", "name": "open timber gate", "look": "weathered timber"}]}});
+    let _: WorldReply<PlaceSet> = post_json(host.port, path::WORLD_ARRIVE, &gate)
+        .await
+        .unwrap();
+    let note = |label: &str, text: &str, name: Option<&str>| {
+        let mut body = json!({"id": "gate", "label": label});
+        body["text"] = json!(text);
+        body["name"] = json!(name);
+        body
+    };
+    for body in [
+        note("state", "It stands open now.", None),
+        note("read", "Read: \"Keep it shut\".", None),
+        note("state", "It stands closed now.", Some("timber gate")),
+    ] {
+        let _: WorldReply<PlaceSet> = post_json(host.port, path::WORLD_THING_NOTE, &body)
+            .await
+            .unwrap();
+    }
+    let gate = &place_items(&host.state)[0];
+    assert_eq!(gate.name, "timber gate");
+    assert_eq!(
+        gate.look.as_deref(),
+        Some("weathered timber Read: \"Keep it shut\". It stands closed now.")
+    );
+    let unknown = note("state", "It stands open now.", None);
+    let mut unknown = unknown;
+    unknown["id"] = json!("well");
+    assert_eq!(
+        refusal(
+            post_json::<_, WorldReply<PlaceSet>>(host.port, path::WORLD_THING_NOTE, &unknown)
+                .await
+                .unwrap()
+        ),
         "unknown_thing"
     );
 }

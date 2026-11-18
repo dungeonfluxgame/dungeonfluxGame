@@ -530,6 +530,7 @@ fn force(words: &[String]) -> Result<EngineCommand, CommandError> {
         machine: machine.clone(),
         state: state.clone(),
         payload,
+        clear_scene: false,
     }))
 }
 

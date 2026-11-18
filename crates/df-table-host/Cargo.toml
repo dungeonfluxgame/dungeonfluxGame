@@ -20,6 +20,7 @@ df-api = { path = "../df-api" }
 df-protocol = { path = "../df-protocol" }
 df-observe = { path = "../df-observe" }
 df-rules = { path = "../df-rules" }
+df-campaign = { path = "../df-campaign" }
 df-imagery = { path = "../df-imagery" }
 df-ai = { path = "../df-ai" }
 df-providers = { path = "../df-providers" }

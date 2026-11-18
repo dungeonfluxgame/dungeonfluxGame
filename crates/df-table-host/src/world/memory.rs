@@ -46,7 +46,7 @@ use df_content::world_bible::is_valid_id;
 use df_playground::media::{MediaKind, media_kind};
 use serde::{Deserialize, Serialize};
 
-pub(crate) use self::host::{keep, recent};
+pub(crate) use self::host::{keep, keep_next, recent};
 use self::limits::{
     MAXIMUM_CREATED_BY_CHARS, MAXIMUM_DESCRIPTION_CHARS, MAXIMUM_LINKS, MAXIMUM_PICTURES,
     MAXIMUM_TAGS, MAXIMUM_TITLE_CHARS,

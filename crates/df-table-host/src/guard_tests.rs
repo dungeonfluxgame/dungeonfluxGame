@@ -348,3 +348,27 @@ fn the_developer_api_still_refuses_this_machines_network_address() {
         Err(GuardError::ForeignHost)
     );
 }
+
+#[test]
+fn a_developer_header_is_refused_on_the_player_listener_and_taken_on_the_loopback_one() {
+    let players = Audience::Players {
+        addresses: Vec::new(),
+        port: 7880,
+    };
+    let as_seat = headers(&[("host", "127.0.0.1:7880"), ("x-df-dev-seat", "3")]);
+    assert_eq!(
+        check_for(&players, &Method::GET, "/play/seat/view", &as_seat),
+        Err(GuardError::DevHeader)
+    );
+    assert_eq!(GuardError::DevHeader.status(), StatusCode::FORBIDDEN);
+    let loopback = headers(&[("host", "127.0.0.1:7879"), ("x-df-dev-seat", "3")]);
+    assert_eq!(
+        check_for(
+            &Audience::Developer,
+            &Method::GET,
+            "/play/seat/view",
+            &loopback
+        ),
+        Ok(())
+    );
+}

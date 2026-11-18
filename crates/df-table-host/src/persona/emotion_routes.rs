@@ -40,7 +40,7 @@ use super::state_view::{
 };
 use super::storage::{persona_directory, persona_id, read_persona};
 use crate::blocking::{run_blocking, run_owned};
-use crate::dev_http::{parse_body, reply};
+use crate::dev_http::{parse_body, read_query, reply};
 use crate::state::AppState;
 use crate::text::{TextRoute, TextRuntime};
 
@@ -112,12 +112,9 @@ async fn show(
     query: Result<Query<StateTarget>, QueryRejection>,
 ) -> Response {
     let app = &routes.app;
-    let result = match query {
-        Ok(Query(target)) => view_of(app, &target.id).await,
-        Err(rejection) => Err(PersonaError::InvalidQuery {
-            detail: rejection.body_text(),
-        }
-        .into()),
+    let result = match read_query(query) {
+        Ok(target) => view_of(app, &target.id).await,
+        Err(error) => Err(PersonaError::InvalidQuery(error).into()),
     };
     answer(app, "state", None, result)
 }

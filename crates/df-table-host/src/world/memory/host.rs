@@ -2,7 +2,7 @@
 //! newest memories of a kind, through the same operations and the same audit line the routes use.
 //! A feature never reaches the store any other way.
 
-use super::operations::put;
+use super::operations::{put, put_next};
 use super::request::MemoryError;
 use super::routes::{paths, record_put};
 use super::store::{memory_directory, read_book};
@@ -14,6 +14,24 @@ use crate::state::AppState;
 pub(crate) async fn keep(app: &AppState, draft: MemoryDraft) -> Result<Put, MemoryError> {
     let paths = paths(app);
     let kept = run_blocking(move || put(&paths, draft), MemoryError::Stopped).await?;
+    record_put(app, &kept);
+    Ok(kept)
+}
+
+/// Puts the memory `make` writes for the id the next `seq` of `owner` gives (`derived_id` of
+/// `kind`), as `keep` does, and records it: a memory with no id of its own.
+pub(crate) async fn keep_next(
+    app: &AppState,
+    owner: &str,
+    kind: &str,
+    make: impl FnOnce(String) -> MemoryDraft + Send + 'static,
+) -> Result<Put, MemoryError> {
+    let (paths, owner, kind) = (paths(app), owner.to_owned(), kind.to_owned());
+    let kept = run_blocking(
+        move || put_next(&paths, &owner, &kind, make),
+        MemoryError::Stopped,
+    )
+    .await?;
     record_put(app, &kept);
     Ok(kept)
 }

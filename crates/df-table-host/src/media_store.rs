@@ -9,7 +9,6 @@ use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use axum::body::Bytes;
-use axum::http::StatusCode;
 use tokio::sync::mpsc::Receiver;
 
 use crate::blocking::WriteLock;
@@ -37,13 +36,6 @@ impl AddError {
         match self {
             Self::Ingest(error) => error.key(),
             Self::File(error) => error.key(),
-        }
-    }
-
-    pub(crate) fn status(&self) -> StatusCode {
-        match self {
-            Self::Ingest(error) => error.status(),
-            Self::File(error) => error.status(),
         }
     }
 }

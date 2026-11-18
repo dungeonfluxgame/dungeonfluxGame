@@ -12,7 +12,6 @@ use std::fmt;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::time::Duration;
 
-use axum::http::StatusCode;
 use df_playground::media::{
     AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, MediaEntry, MediaKind, VIDEO_EXTENSIONS, media_kind,
 };
@@ -138,14 +137,6 @@ impl IngestError {
             Self::DurationUnreadable { .. } => "duration_unreadable",
             Self::TooLong { .. } => "too_long",
             Self::FileFailed(_) => "file_failed",
-        }
-    }
-
-    pub(crate) fn status(&self) -> StatusCode {
-        match self {
-            Self::TooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::FileFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            _ => StatusCode::BAD_REQUEST,
         }
     }
 }

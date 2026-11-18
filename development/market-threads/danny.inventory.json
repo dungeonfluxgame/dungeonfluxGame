@@ -99,6 +99,7 @@
   },
   {
     "id": "coins",
+    "coin": "sp",
     "name": "silver pennies",
     "look": "Worn silver pennies in a small drawstring purse.",
     "use": "consumed",

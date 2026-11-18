@@ -147,3 +147,21 @@ fn body_cause_keys_are_its_serde_names() {
     }
     assert_eq!(BodyCause::from_key("Syntax"), None);
 }
+
+#[test]
+fn a_body_too_large_answers_413_and_every_other_cause_400() {
+    let too_large = BodyError::too_large(8);
+    assert_eq!(too_large.cause, BodyCause::TooLarge);
+    assert_eq!(too_large.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(
+        too_large.to_string().contains("larger than 8 bytes"),
+        "{too_large}"
+    );
+    for cause in [BodyCause::Syntax, BodyCause::Data, BodyCause::Truncated] {
+        let error = BodyError {
+            cause,
+            ..too_large.clone()
+        };
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST, "{cause:?}");
+    }
+}

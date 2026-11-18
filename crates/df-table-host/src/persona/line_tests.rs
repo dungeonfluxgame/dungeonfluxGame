@@ -6,6 +6,9 @@
 //!
 //! TODO(DEV-12): a concurrent ask of one persona while its backfill runs (the `Busy` outcome), and
 //! the tone cued on the scene once the cue carries one.
+//! TODO(DEV-12): the inventory and deal judges overlapping in time on a slow text service, a gain
+//! found at an offered thing (`where` closed to the place's ids), and a deal still refused at the
+//! text deadline.
 
 use std::time::Duration;
 
@@ -398,7 +401,7 @@ fn cottage_study_hands(host: &ScriptedHost) {
     );
 }
 
-/// One entry of `inventory_changes` as the judge fills it.
+/// One entry of `changes` as the inventory judge fills it.
 fn entry(
     item: &str,
     change: i64,
@@ -415,102 +418,52 @@ fn entry(
     })
 }
 
-/// The deal of run 9 with the three coins named in full for each of the two goods.
-fn cottage_study_claimed_twice() -> Value {
-    let mut answer = line_answer("Three pennies for the study; the pigment and two boards.");
-    answer["inventory_changes"] = json!([
-        entry("painting_06", -1, "sold", None, &[]),
-        entry(
-            "coins",
-            3,
-            "gained",
-            Some("exchange"),
-            &[("painting_06", 1)]
-        ),
-        entry("coins", -3, "used_up", None, &[]),
-        entry("verdigris", 1, "gained", Some("exchange"), &[("coins", 3)]),
-        entry("boards", 2, "gained", Some("exchange"), &[("coins", 3)]),
-    ]);
-    answer
+/// The inventory judge's answer listing `changes`, or saying outright that nothing changed.
+fn judged(changes: Vec<Value>) -> Value {
+    json!({"nothing_changed": changes.is_empty(), "changes": changes})
 }
 
-/// The same deal with the three coins split between the two goods.
+/// The same deal with the three coins split between the two goods, as the inventory judge might
+/// list it.
 fn cottage_study_split() -> Value {
-    let mut answer = line_answer("Three pennies for the study; the pigment and two boards.");
-    answer["inventory_changes"] = json!([
+    judged(vec![
         entry("painting_06", -1, "sold", None, &[]),
         entry(
             "coins",
             3,
             "gained",
             Some("exchange"),
-            &[("painting_06", 1)]
+            &[("painting_06", 1)],
         ),
         entry("coins", -3, "used_up", None, &[]),
         entry("verdigris", 1, "gained", Some("exchange"), &[("coins", 2)]),
         entry("boards", 2, "gained", Some("exchange"), &[("coins", 1)]),
-    ]);
-    answer
+    ])
 }
 
 #[tokio::test]
-async fn a_refused_deal_is_judged_again_with_the_refusals_and_then_applies_fully() {
-    let host = scripted_host(vec![cottage_study_claimed_twice(), cottage_study_split()]).await;
-    cottage_study_hands(&host);
-    let said = done(say(&host, CHARACTER, json!({})).await).said;
-    assert_eq!(host.calls(), 2);
-    assert!(host.facts_of(0)["now"].get("retry_reason").is_none());
-    let reason = host.facts_of(1)["now"]["retry_reason"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert!(
-        reason.contains("unsourced_gain boards") && reason.contains("coins named 6, goes down 3"),
-        "{reason}"
-    );
-    let moved: Vec<(&str, u64, u64)> = said
-        .inventory
-        .iter()
-        .map(|applied| (applied.item.as_str(), applied.before, applied.after))
-        .collect();
-    assert_eq!(
-        moved,
-        [("painting_06", 1, 0), ("verdigris", 0, 1), ("boards", 1, 3)],
-        "the coin rose by three and fell by three: not changed"
-    );
-    assert_eq!(
-        host.lines_starting_with("WORLD retry"),
-        ["WORLD retry verb=inventory_judged attempt=2 reason=unsourced_gain"]
-    );
-}
-
-#[tokio::test]
-async fn a_deal_refused_again_is_asked_again_with_every_refusal_so_far() {
+async fn a_sale_and_purchase_one_line_lists_moves_nothing_without_a_deal() {
+    // The judge's own word on a deal (run 9: the painting, the coins, the pigment and the
+    // boards) never moves goods between owners: only a deal both sides agree to does.
     let host = scripted_host(vec![
-        cottage_study_claimed_twice(),
-        cottage_study_claimed_twice(),
+        line_answer("Three pennies for the study; the pigment and two boards."),
         cottage_study_split(),
     ])
     .await;
     cottage_study_hands(&host);
     let said = done(say(&host, CHARACTER, json!({})).await).said;
-    assert_eq!(host.calls(), 3, "asked again until it stands");
-    let reason = host.facts_of(2)["now"]["retry_reason"]
-        .as_str()
-        .unwrap()
-        .to_owned();
     assert_eq!(
-        reason.matches("unsourced_gain boards").count(),
+        host.calls(),
         2,
-        "{reason}"
+        "nothing to ask again: nothing of it is taken"
     );
-    assert_eq!(said.inventory.len(), 3);
+    assert!(said.inventory.is_empty(), "{:?}", said.inventory);
     assert_eq!(
-        host.lines_starting_with("WORLD retry"),
-        [
-            "WORLD retry verb=inventory_judged attempt=2 reason=unsourced_gain",
-            "WORLD retry verb=inventory_judged attempt=3 reason=unsourced_gain"
-        ]
+        host.lines_starting_with("PERSONA deal_entries"),
+        [concat!(
+            "PERSONA deal_entries id=innkeeper deal=- moved_by_deal=painting_06:sold|",
+            "coins:gained|coins:used_up|verdigris:gained|boards:gained"
+        )]
     );
 }
 
@@ -531,28 +484,22 @@ fn painters_shelf(host: &ScriptedHost) {
     );
 }
 
-fn uses(line: &str, items: &[&str]) -> Value {
-    let mut answer = line_answer(line);
-    answer["inventory_changes"] = json!(
+/// The inventory judge's answer: one of each of `items` used up.
+fn uses(items: &[&str]) -> Value {
+    judged(
         items
             .iter()
             .map(|item| entry(item, -1, "used_up", None, &[]))
-            .collect::<Vec<_>>()
-    );
-    answer
+            .collect(),
+    )
 }
 
 #[tokio::test]
 async fn a_painted_line_using_what_is_not_held_changes_nothing_and_is_judged_again() {
     let host = scripted_host(vec![
-        uses(
-            "It's finished. I used a board, ochre, lamp black, a little oil, and a rag.",
-            &["boards", "ochre", "lamp_black", "linseed_oil", "rags"],
-        ),
-        uses(
-            "I am out of boards, so there is no study; I only mixed ochre and lamp black.",
-            &["ochre", "lamp_black"],
-        ),
+        line_answer("It's finished. I used a board, ochre, lamp black, a little oil, and a rag."),
+        uses(&["boards", "ochre", "lamp_black", "linseed_oil", "rags"]),
+        uses(&["ochre", "lamp_black"]),
     ])
     .await;
     painters_shelf(&host);
@@ -565,8 +512,8 @@ async fn a_painted_line_using_what_is_not_held_changes_nothing_and_is_judged_aga
         .await,
     )
     .said;
-    assert_eq!(host.calls(), 2);
-    let reason = host.facts_of(1)["now"]["retry_reason"]
+    assert_eq!(host.calls(), 3);
+    let reason = host.facts_of(2)["now"]["retry_reason"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -593,16 +540,6 @@ async fn a_painted_line_using_what_is_not_held_changes_nothing_and_is_judged_aga
         .map(|applied| (applied.item.as_str(), applied.before, applied.after))
         .collect();
     assert_eq!(moved, [("ochre", 1, 0), ("lamp_black", 2, 1)]);
-}
-
-#[tokio::test]
-async fn a_line_whose_inventory_changes_stand_is_not_asked_again() {
-    let host = scripted_host(vec![cottage_study_split()]).await;
-    cottage_study_hands(&host);
-    let said = done(say(&host, CHARACTER, json!({})).await).said;
-    assert_eq!(host.calls(), 1);
-    assert_eq!(said.inventory.len(), 3);
-    assert!(host.lines_starting_with("WORLD retry").is_empty());
 }
 
 #[tokio::test]
@@ -776,6 +713,7 @@ async fn an_order_total_is_the_sum_held_and_a_price_said_without_its_slot_is_wor
             order("Both come to {order_total}."),
             order("That is {price:7}."),
             order("A {bargain} for {order_total}."),
+            order("Both come to {order_total}."),
         ],
         Arc::new(FakePort::unconfigured()),
     )
@@ -785,14 +723,16 @@ async fn an_order_total_is_the_sum_held_and_a_price_said_without_its_slot_is_wor
     let said = done(say(&host, "fruit_vendor", json!({})).await).said;
     assert!(said.repeat_retried, "a number written out is worded again");
     assert_eq!(said.line, "Both come to 54 cp.");
-    // A slot for a lot not quoted, then one that is no slot: kept as written after the one retry.
+    // A slot for a lot not quoted, then one that is no slot: a line with a brace in it is never
+    // shown, so it is worded again once more for its slots.
     let kept = done(say(&host, "fruit_vendor", json!({})).await).said;
     let reason = kept.retry_reason.unwrap();
-    assert!(
-        reason.contains("{price:7} names a lot you did not quote"),
-        "{reason}"
+    assert!(reason.contains("{bargain} is no price slot"), "{reason}");
+    assert_eq!(kept.line, "Both come to 54 cp.");
+    assert_eq!(
+        host.lines_starting_with("PERSONA price_slots_unfilled"),
+        ["PERSONA price_slots_unfilled id=fruit_vendor reworded=yes"]
     );
-    assert_eq!(kept.line, "A {bargain} for {order_total}.");
 }
 
 #[tokio::test]
@@ -891,4 +831,1827 @@ async fn the_line_is_audited_with_its_timings_and_no_text() {
         assert!(line.contains(expected), "{expected}: {line}");
     }
     assert!(!line.contains("Marta"), "{line}");
+}
+
+/// Wren's kit at the first painting of loop 4: boards, ochre, umber, linseed oil and rags.
+fn wrens_kit(host: &ScriptedHost) {
+    write_persona(&host.directory(), &innkeeper()).unwrap();
+    let item = |id: &str, count: u64| {
+        json!({"id": id, "name": id, "look": format!("{id} up close"), "use": "consumed",
+               "count": count})
+    };
+    host.running.write_asset(
+        "world/inventory/innkeeper.json",
+        &json!({"schema": 1, "owner": CHARACTER, "kind": "character", "items": [
+            item("boards", 12), item("ochre", 6), item("umber", 6),
+            item("linseed_oil", 12), item("rags", 12)
+        ]})
+        .to_string(),
+    );
+}
+
+/// The finishing line of loop 4 as the inventory judge reads it: the five supplies used up and
+/// the painting made from them.
+fn finished_painting() -> Value {
+    let supplies = ["boards", "ochre", "umber", "linseed_oil", "rags"];
+    let mut answer = uses(&supplies);
+    let changes = answer["changes"].as_array_mut().unwrap();
+    changes.push(json!({
+        "item": "painting_01", "change": 1, "reason": "gained", "why": "the study is done",
+        "name": "Weathered gate study", "look": "a small oil study of a wooden gate",
+        "use": "kept", "source": "made", "paid_with": [],
+        "made_from": supplies.iter().map(|item| json!({"item": item, "count": 1}))
+            .collect::<Vec<_>>(),
+        "where": null, "from": null, "what_happened": null, "to": null
+    }));
+    answer
+}
+
+/// What the painted line moved, each item with its count before and after.
+fn moved_counts(said: &SaidLine) -> Vec<(&str, u64, u64)> {
+    said.inventory
+        .iter()
+        .map(|applied| (applied.item.as_str(), applied.before, applied.after))
+        .collect()
+}
+
+const PAINTED: [(&str, u64, u64); 6] = [
+    ("boards", 12, 11),
+    ("ochre", 6, 5),
+    ("umber", 6, 5),
+    ("linseed_oil", 12, 11),
+    ("rags", 12, 11),
+    ("painting_01", 0, 1),
+];
+
+#[tokio::test]
+async fn a_line_expected_to_use_up_supplies_is_judged_for_them_by_a_call_of_its_own() {
+    // Loop 8: the trough's finishing line came back from the line call with no changes. A call of
+    // its own, which must say outright when nothing changed, judges what the words move.
+    let given = "That's the copper-spouted stone trough done. I've used up the board, a little \
+                 ochre and umber, some oil and a rag.";
+    let host = scripted_host(vec![line_answer(given), finished_painting()]).await;
+    wrens_kit(&host);
+    let said = done(
+        say(
+            &host,
+            CHARACTER,
+            json!({"text": given, "expect": "inventory"}),
+        )
+        .await,
+    )
+    .said;
+    assert_eq!(host.calls(), 2);
+    let schema = host.asked.lock().unwrap()[1].output_schema.clone();
+    assert!(
+        schema["required"] == json!(["nothing_changed", "changes"]),
+        "{schema}"
+    );
+    let reasons = &schema["properties"]["changes"]["items"]["properties"]["reason"]["enum"];
+    assert_eq!(
+        *reasons,
+        json!([
+            "gained", "used_up", "worn_out", "broken", "lost", "left", null
+        ]),
+        "a trade is never the inventory judge's"
+    );
+    let facts = host.facts_of(1);
+    assert_eq!(facts["now"]["line"], given, "{facts}");
+    assert_eq!(facts["now"]["occasion"], "finishing", "{facts}");
+    assert!(facts["context"]["inventory"].is_array(), "{facts}");
+    assert_eq!(moved_counts(&said), PAINTED);
+    let judged_line = host.lines_starting_with("PERSONA inventory_judged");
+    assert!(
+        judged_line[0].starts_with(concat!(
+            "PERSONA inventory_judged id=innkeeper expected=yes occasion=finishing ",
+            "entries=6 ms="
+        )),
+        "{judged_line:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_line_said_already_is_judged_for_what_it_moves_and_never_cued_again() {
+    // B1: the hero says the deed first, the roll comes after, and only then is what the deed
+    // moved judged (`expect=said_inventory`): finished work, with no second cue or voice.
+    let given = "That's the copper-spouted stone trough done. I've used up the board, a little \
+                 ochre and umber, some oil and a rag.";
+    let host = scripted_host(vec![line_answer(given), finished_painting()]).await;
+    wrens_kit(&host);
+    let spoken = done(
+        say(
+            &host,
+            CHARACTER,
+            json!({"text": given, "expect": "said_inventory", "speak": true}),
+        )
+        .await,
+    );
+    assert_eq!(host.facts_of(1)["now"]["occasion"], "finishing");
+    assert_eq!(moved_counts(&spoken.said), PAINTED);
+    assert_eq!(spoken.revision, 0, "nothing is cued");
+    assert_eq!(spoken.voice, None, "nothing is voiced");
+}
+
+#[tokio::test]
+async fn a_deed_said_before_its_roll_moves_nothing_yet() {
+    // "I search the base of the gate and find a rope", said before the roll (`expect=attempt`):
+    // the inventory judge is not asked, so nothing is found before the dice decide it.
+    let given = "I search the base of the gate and find a coil of rope.";
+    let host = scripted_host(vec![line_answer(given)]).await;
+    wrens_kit(&host);
+    let spoken = done(
+        say(
+            &host,
+            CHARACTER,
+            json!({"text": given, "expect": "attempt"}),
+        )
+        .await,
+    );
+    assert_eq!(host.calls(), 1, "only the line is asked for");
+    assert!(
+        spoken.said.inventory.is_empty(),
+        "{:?}",
+        spoken.said.inventory
+    );
+    assert!(
+        host.lines_starting_with("PERSONA inventory_judged")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn an_inventory_judgment_that_lists_nothing_without_saying_so_is_asked_again() {
+    let given = "That's the trough done.";
+    let host = scripted_host(vec![
+        line_answer(given),
+        json!({"nothing_changed": false, "changes": []}),
+        finished_painting(),
+    ])
+    .await;
+    wrens_kit(&host);
+    let said = done(
+        say(
+            &host,
+            CHARACTER,
+            json!({"text": given, "expect": "inventory"}),
+        )
+        .await,
+    )
+    .said;
+    let reason = host.facts_of(2)["now"]["retry_reason"].clone();
+    assert!(
+        reason
+            .as_str()
+            .is_some_and(|reason| reason.contains("nothing_changed is false")),
+        "{reason}"
+    );
+    assert_eq!(moved_counts(&said), PAINTED);
+}
+
+/// The answer of loop 9 move 3: nothing changed, and entries all the same.
+fn contradictory() -> Value {
+    json!({"nothing_changed": true, "changes": [entry("boards", -1, "used_up", None, &[])]})
+}
+
+#[tokio::test]
+async fn a_malformed_judgment_is_one_attempt_and_never_refuses_the_line() {
+    let declared = "I set a board on the easel and start laying in the mossy steps with my brush.";
+    let mut answer = line_answer(declared);
+    answer["declared_action"] = json!({
+        "doing": "sets a board on an easel and lays in mossy steps", "pose": null,
+        "items_in_use": ["boards"]
+    });
+    // Twice malformed, then an answer that stands: the line stands with that answer's entries.
+    let host = scripted_host(vec![
+        answer.clone(),
+        contradictory(),
+        contradictory(),
+        uses(&["ochre"]),
+    ])
+    .await;
+    wrens_kit(&host);
+    let declare = json!({"character": CHARACTER, "situation": "The study begins."});
+    let spoken: PersonaReply<Spoken> = post_json(host.port, "/dev/persona/declare", &declare)
+        .await
+        .unwrap();
+    let said = done(spoken).said;
+    assert_eq!(said.line, declared);
+    assert_eq!(moved_counts(&said), [("ochre", 6, 5)]);
+    assert_eq!(
+        host.lines_starting_with("WORLD retry verb=inventory_judged"),
+        [
+            "WORLD retry verb=inventory_judged attempt=2 reason=malformed",
+            "WORLD retry verb=inventory_judged attempt=3 reason=malformed",
+        ]
+    );
+    // Three times malformed: the line still stands, nothing changes, and the judge gives up.
+    let host = scripted_host(vec![
+        answer,
+        contradictory(),
+        contradictory(),
+        contradictory(),
+    ])
+    .await;
+    wrens_kit(&host);
+    let spoken: PersonaReply<Spoken> = post_json(host.port, "/dev/persona/declare", &declare)
+        .await
+        .unwrap();
+    let said = done(spoken).said;
+    assert_eq!(said.line, declared);
+    assert!(said.inventory.is_empty(), "{:?}", said.inventory);
+    assert_eq!(
+        host.lines_starting_with("PERSONA judge_gave_up"),
+        ["PERSONA judge_gave_up judge=inventory id=innkeeper attempts=3 reason=malformed"]
+    );
+}
+
+#[tokio::test]
+async fn a_line_of_someone_who_carries_anything_is_judged_for_it_and_the_line_call_moves_nothing() {
+    // One owner of what a line moves: the line call has no field for it, and every line of a
+    // character who carries anything is judged by the inventory call, expected or not.
+    let given = "That's the weathered wooden gate done. I've used up the board, a little ochre \
+                 and umber, some oil and a rag.";
+    let host = scripted_host(vec![line_answer(given), finished_painting()]).await;
+    wrens_kit(&host);
+    let said = done(say(&host, CHARACTER, json!({"text": given})).await).said;
+    assert_eq!(moved_counts(&said), PAINTED);
+    let said_line = host.lines_starting_with("PERSONA said");
+    assert!(said_line[0].ends_with("changes=6"), "{said_line:?}");
+    assert!(
+        host.lines_starting_with("PERSONA inventory_judged")[0].starts_with(concat!(
+            "PERSONA inventory_judged id=innkeeper expected=no occasion=speaking ",
+            "entries=6 ms="
+        ))
+    );
+    // Nobody else present holds anything: no trade facts and no deal judge.
+    assert_eq!(host.calls(), 2);
+    assert!(!host.instructions_of(0).contains("now.open_deals"));
+    let schema = host.asked.lock().unwrap()[0].output_schema.clone();
+    assert!(schema["properties"].get("deal").is_none(), "{schema}");
+    assert!(
+        schema["properties"].get("inventory_changes").is_none(),
+        "{schema}"
+    );
+}
+
+/// Wren's coins and painting, and the pigment seller's stock, as the painter's day (host9) had
+/// them: boards and verdigris at 20 cp each, both sides paying in silver.
+fn verdigris_stall(host: &ScriptedHost) {
+    write_persona(&host.directory(), &vendor("wren")).unwrap();
+    write_persona(&host.directory(), &vendor("pigment_seller")).unwrap();
+    let item = |id: &str, name: &str, count: u64| {
+        let mut item = json!({"id": id, "name": name, "look": format!("{name} up close"),
+                              "use": "consumed", "count": count});
+        match id {
+            "coins" => item["coin"] = json!("sp"),
+            "boards" | "verdigris" => item["price_cp"] = json!(20),
+            _ => {}
+        }
+        item
+    };
+    host.running.write_asset(
+        "world/inventory/wren.json",
+        &json!({"schema": 1, "owner": "wren", "kind": "character", "items": [
+            item("coins", "silver pennies", 20), item("painting_01", "gate study", 1)
+        ]})
+        .to_string(),
+    );
+    host.running.write_asset(
+        "world/inventory/pigment_seller.json",
+        &json!({"schema": 1, "owner": "pigment_seller", "kind": "shop", "items": [
+            item("boards", "primed boards", 10), item("verdigris", "verdigris", 5),
+            item("coins", "silver pennies", 14)
+        ]})
+        .to_string(),
+    );
+}
+
+/// The SRD coins (SRD 5.2.1 p.89), as a deal answer names money.
+const COIN_KEYS: [&str; 5] = ["cp", "sp", "ep", "gp", "pp"];
+
+/// The deal judge's answer: `state` (`none` for no trade), its reason and the terms from the
+/// speaker's side: an entry named by a coin key (`("sp", 2)`) is money in that coin, the rest
+/// goods.
+fn terms(state: Option<&str>, gives: &[(&str, u64)], gets: &[(&str, u64)]) -> Value {
+    let goods = |items: &[(&str, u64)]| {
+        items
+            .iter()
+            .filter(|(item, _)| !COIN_KEYS.contains(item))
+            .map(|(item, count)| json!({"item": item, "count": count}))
+            .collect::<Vec<_>>()
+    };
+    let coins = |items: &[(&str, u64)]| {
+        items
+            .iter()
+            .filter(|(item, _)| COIN_KEYS.contains(item))
+            .map(|(coin, amount)| json!({"amount": amount, "coin": coin}))
+            .collect::<Vec<_>>()
+    };
+    // Each side knows the other by a stranger's handle.
+    json!({"with": "person-1", "state": state.unwrap_or("none"), "because": "the judge's reason",
+           "claims_exchange": false, "gives": goods(gives), "gives_coins": coins(gives),
+           "gets": goods(gets), "gets_coins": coins(gets)})
+}
+
+/// `answer`, a deal judge's answer, saying the line claims goods or money change hands now.
+fn claiming(mut answer: Value) -> Value {
+    answer["claims_exchange"] = json!(true);
+    answer
+}
+
+#[tokio::test]
+async fn the_host9_offer_counter_and_accept_are_judged_on_their_own_and_settle_at_three_silver() {
+    let offer = "I'll take four of your primed boards and a pot of verdigris. Two silver for \
+                 the lot?";
+    let counter = "Four boards and the verdigris are worth more than that. I'll take three silver \
+                   for the lot.";
+    let accept = "Three silver it is, then. Here you are.";
+    let thanks = "Pleasure doing business, love.";
+    let wares = [("boards", 4), ("verdigris", 1)];
+    let nothing = judged(Vec::new());
+    let host = scripted_host_cast(
+        &["wren", "pigment_seller"],
+        vec![
+            line_answer(offer),
+            nothing.clone(),
+            // An accept with nothing open is refused by code and asked again with why.
+            terms(Some("accept"), &[("sp", 2)], &wares),
+            terms(Some("offer"), &[("sp", 2)], &wares),
+            line_answer(counter),
+            nothing.clone(),
+            terms(Some("counter"), &wares, &[("sp", 3)]),
+            line_answer(accept),
+            // The payment listed as spent: the deal alone moves it.
+            judged(vec![entry("coins", -3, "used_up", None, &[])]),
+            terms(Some("accept"), &[("sp", 3)], &wares),
+            line_answer(thanks),
+            nothing,
+            // The settled terms put again by a pleasantry are refused, and the judge says none.
+            terms(Some("offer"), &wares, &[("sp", 3)]),
+            terms(None, &[], &[]),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    verdigris_stall(&host);
+    done(say(&host, "wren", json!({"text": offer})).await);
+    assert_eq!(host.calls(), 4);
+    let deal_call = host.asked.lock().unwrap()[2].clone();
+    assert_eq!(deal_call.output_name, "persona_deal");
+    let deal = &deal_call.output_schema["properties"];
+    assert_eq!(
+        deal["gives"]["items"]["properties"]["item"]["enum"],
+        json!(["painting_01"]),
+        "gives is closed to the goods the speaker holds"
+    );
+    assert_eq!(
+        deal["gets"]["items"]["properties"]["item"]["enum"],
+        json!(["boards", "verdigris"])
+    );
+    assert_eq!(
+        deal["gives_coins"]["items"]["properties"]["coin"]["enum"],
+        json!(["cp", "sp", "ep", "gp", "pp"]),
+        "money is an amount of an SRD coin"
+    );
+    assert_eq!(deal["with"]["enum"], json!(["person-1"]));
+    assert!(deal_call.facts["context"]["others"]["person-1"].is_array());
+    assert_eq!(deal_call.facts["now"]["line"], offer);
+    assert!(
+        host.facts_of(3)["now"]["retry_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("no open terms")),
+        "{}",
+        host.facts_of(3)
+    );
+    done(say(&host, "pigment_seller", json!({"text": counter})).await);
+    // The keeper's line knows the open terms and her prices, so her words and the books agree.
+    let keeper = host.facts_of(4);
+    let open = &keeper["now"]["open_deals"][0];
+    assert_eq!(open["put_by"], "them", "{open}");
+    assert_eq!(open["gets"]["coins"], json!([{"amount": 2, "coin": "sp"}]));
+    assert_eq!(open["gets"]["coins_cp"], 20);
+    assert_eq!(open["settles"], true, "{open}");
+    assert!(
+        keeper["now"]["prices"]
+            .as_array()
+            .is_some_and(|prices| prices.len() == 2)
+    );
+    assert!(
+        host.instructions_of(4)
+            .contains("now.open_deals holds the terms open")
+    );
+    let settled = done(say(&host, "wren", json!({"text": accept})).await).said;
+    let moved: Vec<(&str, &str, u64, u64)> = settled
+        .inventory
+        .iter()
+        .map(|applied| {
+            (
+                applied.owner.as_str(),
+                applied.item.as_str(),
+                applied.before,
+                applied.after,
+            )
+        })
+        .collect();
+    assert_eq!(
+        moved,
+        [
+            ("pigment_seller", "boards", 10, 6),
+            ("wren", "boards", 0, 4),
+            ("pigment_seller", "verdigris", 5, 4),
+            ("wren", "verdigris", 0, 1),
+            ("wren", "coins", 20, 17),
+            ("pigment_seller", "coins", 14, 17),
+        ],
+        "the coins are paid once"
+    );
+    assert_eq!(
+        host.lines_starting_with("PERSONA deal_entries"),
+        ["PERSONA deal_entries id=wren deal=accept moved_by_deal=coins:used_up"]
+    );
+    done(say(&host, "pigment_seller", json!({"text": thanks})).await);
+    assert_eq!(host.calls(), 14);
+    let world = host.lines_starting_with("WORLD deal");
+    assert_eq!(
+        world,
+        [
+            "WORLD deal_open state=offer owner=wren with=pigment_seller \
+             gives=silver-piece*2 gets=boards*4|verdigris*1",
+            "WORLD deal_open state=counter owner=pigment_seller with=wren \
+             gives=boards*4|verdigris*1 gets=silver-piece*3",
+            "WORLD deal_settled owner=wren with=pigment_seller gives=silver-piece*3 \
+             gets=boards*4|verdigris*1 wares_cp=100 coins_cp=30",
+        ]
+    );
+    let judged_states: Vec<String> = host
+        .lines_starting_with("PERSONA deal_judged")
+        .iter()
+        .map(|line| {
+            line.split(' ')
+                .find(|part| part.starts_with("state="))
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        judged_states,
+        ["state=offer", "state=counter", "state=accept", "state=none"]
+    );
+    assert!(
+        host.lines_starting_with("PERSONA deal_judged")[3].starts_with(concat!(
+            "PERSONA deal_judged id=pigment_seller counterparty=- state=none gives=0 ",
+            "gets=0 ms="
+        ))
+    );
+}
+
+#[tokio::test]
+async fn a_line_said_to_one_keeper_deals_with_that_keeper_whatever_the_judge_names() {
+    let offer = "I'll take three of your primed boards for six silver pennies.";
+    let host = scripted_host_cast(
+        &["wren", "pigment_seller", "fruit_vendor"],
+        // The judge names someone else; the line was said to the pigment seller.
+        vec![
+            line_answer(offer),
+            judged(Vec::new()),
+            json!({"with": "person-2", "state": "offer", "because": "it names goods and a price",
+                   "claims_exchange": false, "gives": [],
+                   "gives_coins": [{"amount": 6, "coin": "sp"}],
+                   "gets": [{"item": "boards", "count": 3}], "gets_coins": []}),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    verdigris_stall(&host);
+    write_persona(&host.directory(), &vendor("fruit_vendor")).unwrap();
+    host.running.write_asset(
+        "world/inventory/fruit_vendor.json",
+        &json!({"schema": 1, "owner": "fruit_vendor", "kind": "shop", "items": [
+            {"id": "apples", "name": "apples", "look": "red", "use": "consumed", "count": 9,
+             "price_cp": 1}
+        ]})
+        .to_string(),
+    );
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": offer, "asked_by": "pigment_seller"}),
+        )
+        .await,
+    );
+    let others = host.facts_of(0)["now"]["others_inventory"].clone();
+    assert_eq!(others.as_object().map(|map| map.len()), Some(1), "{others}");
+    let shown = host.facts_of(2)["context"]["others"].clone();
+    assert_eq!(shown.as_object().map(|map| map.len()), Some(1), "{shown}");
+    assert!(
+        host.lines_starting_with("WORLD deal_open")[0]
+            .starts_with("WORLD deal_open state=offer owner=wren with=pigment_seller")
+    );
+}
+
+#[tokio::test]
+async fn an_inventory_judge_still_refused_after_three_attempts_gives_up_and_moves_nothing() {
+    let wrong = uses(&["boards", "ochre"]);
+    let host = scripted_host(vec![
+        line_answer("It's finished. I used a board and some ochre."),
+        wrong.clone(),
+        wrong.clone(),
+        wrong,
+    ])
+    .await;
+    painters_shelf(&host);
+    let said = done(say(&host, CHARACTER, json!({})).await).said;
+    assert_eq!(host.calls(), 4, "the line, then three attempts and no more");
+    assert!(said.inventory.is_empty(), "{:?}", said.inventory);
+    assert_eq!(
+        host.lines_starting_with("PERSONA judge_gave_up"),
+        ["PERSONA judge_gave_up judge=inventory id=innkeeper attempts=3 reason=insufficient"]
+    );
+}
+
+#[tokio::test]
+async fn a_deal_judge_still_refused_after_three_attempts_gives_up_and_makes_no_deal() {
+    let offer = "Two silver for four boards and the verdigris?";
+    // An accept with nothing open, every time.
+    let accept = terms(Some("accept"), &[("sp", 2)], &[("boards", 4)]);
+    let host = scripted_host_cast(
+        &["wren", "pigment_seller"],
+        vec![
+            line_answer(offer),
+            judged(Vec::new()),
+            accept.clone(),
+            accept.clone(),
+            accept,
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    verdigris_stall(&host);
+    done(say(&host, "wren", json!({"text": offer})).await);
+    assert_eq!(host.calls(), 5);
+    assert!(host.lines_starting_with("WORLD deal_").is_empty());
+    assert_eq!(
+        host.lines_starting_with("PERSONA judge_gave_up"),
+        [concat!(
+            "PERSONA judge_gave_up judge=deal id=wren attempts=3 ",
+            "reason=there are no open terms with pigment_seller to accept"
+        )]
+    );
+    assert!(host.lines_starting_with("PERSONA deal_judged")[0].contains(" state=none "));
+}
+
+#[tokio::test]
+async fn a_declared_action_in_progress_is_judged_as_declaring_and_uses_nothing_up() {
+    // Loop 9: the declaration that starts the painting used up the board and the paints, and the
+    // finishing line used them again. The judge is told the line declares work under way.
+    let declared = "I set a board on the easel and start laying in the mossy steps with my brush.";
+    let mut answer = line_answer(declared);
+    answer["declared_action"] = json!({
+        "doing": "sets a board on an easel and lays in mossy steps", "pose": null,
+        "items_in_use": ["boards"]
+    });
+    let host = scripted_host(vec![answer, judged(Vec::new())]).await;
+    wrens_kit(&host);
+    let spoken: PersonaReply<Spoken> = post_json(
+        host.port,
+        "/dev/persona/declare",
+        &json!({"character": CHARACTER, "situation": "The study begins."}),
+    )
+    .await
+    .unwrap();
+    let said = done(spoken).said;
+    assert!(said.inventory.is_empty(), "{:?}", said.inventory);
+    assert_eq!(host.calls(), 2);
+    assert_eq!(host.facts_of(1)["now"]["occasion"], "declaring");
+    assert!(
+        host.instructions_of(1)
+            .contains("so a declaring line lists none of them")
+    );
+    assert!(
+        host.lines_starting_with("PERSONA inventory_judged")[0]
+            .contains(" occasion=declaring entries=0 ")
+    );
+}
+
+#[tokio::test]
+async fn something_eaten_in_an_ordinary_line_is_used_up() {
+    let host = scripted_host(vec![
+        line_answer("I eat an apple."),
+        judged(vec![entry("apple", -1, "used_up", None, &[])]),
+    ])
+    .await;
+    write_persona(&host.directory(), &innkeeper()).unwrap();
+    host.running.write_asset(
+        "world/inventory/innkeeper.json",
+        &json!({"schema": 1, "owner": CHARACTER, "kind": "character", "items": [
+            {"id": "apple", "name": "apple", "look": "A red apple.", "use": "consumed",
+             "count": 3}
+        ]})
+        .to_string(),
+    );
+    let said = done(say(&host, CHARACTER, json!({})).await).said;
+    assert_eq!(host.facts_of(1)["now"]["occasion"], "speaking");
+    assert_eq!(moved_counts(&said), [("apple", 3, 2)]);
+}
+
+/// The hero's coins and the pigment vendor's stock in loop 9: three primed boards are a silver and
+/// five copper, a pot of madder red eight copper.
+fn madder_stall(host: &ScriptedHost) {
+    write_persona(&host.directory(), &vendor("wren")).unwrap();
+    write_persona(&host.directory(), &vendor("pigment_vendor")).unwrap();
+    host.running.write_asset(
+        "world/inventory/wren.json",
+        &json!({"schema": 1, "owner": "wren", "kind": "character", "items": [
+            {"id": "coins", "name": "silver pennies", "look": "small silver coins",
+             "use": "consumed", "count": 20, "coin": "sp"}
+        ]})
+        .to_string(),
+    );
+    host.running.write_asset(
+        "world/inventory/pigment_vendor.json",
+        &json!({"schema": 1, "owner": "pigment_vendor", "kind": "shop", "items": [
+            {"id": "boards", "name": "primed boards", "look": "white boards", "use": "consumed",
+             "count": 10, "price_cp": 5},
+            {"id": "madder", "name": "madder red", "look": "a red pot", "use": "consumed",
+             "count": 4, "price_cp": 8},
+            {"id": "coins", "name": "silver pennies", "look": "small silver coins",
+             "use": "consumed", "count": 9, "coin": "sp"}
+        ]})
+        .to_string(),
+    );
+}
+
+#[tokio::test]
+async fn an_offer_put_as_a_question_opens_terms_and_a_reasoned_decline_refuses_them() {
+    let offer = "I'd like three of your primed boards and a pot of madder red. Two silver for the \
+                 lot?";
+    let decline = "That's below fair trade, friend. Three boards are 1 silver and 5 copper, and \
+                   the madder's 8 copper; I can't take two silver for the lot.";
+    let nothing = judged(Vec::new());
+    let host = scripted_host_cast(
+        &["wren", "pigment_vendor"],
+        vec![
+            line_answer(offer),
+            nothing.clone(),
+            terms(Some("offer"), &[("sp", 2)], &[("boards", 3), ("madder", 1)]),
+            line_answer(decline),
+            nothing,
+            terms(Some("refuse"), &[], &[]),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    madder_stall(&host);
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": offer, "asked_by": "pigment_vendor"}),
+        )
+        .await,
+    );
+    let deal_call = host.asked.lock().unwrap()[2].clone();
+    let state = &deal_call.output_schema["properties"]["state"];
+    assert_eq!(
+        state["enum"],
+        json!(["none", "offer", "counter", "accept", "refuse", "gift"]),
+        "no trade is said outright"
+    );
+    assert!(
+        deal_call.output_schema["required"]
+            .as_array()
+            .is_some_and(|required| required.contains(&json!("because")))
+    );
+    assert!(
+        deal_call
+            .instructions
+            .contains("A proposal put as a question is an offer of those terms")
+    );
+    done(
+        say(
+            &host,
+            "pigment_vendor",
+            json!({"text": decline, "asked_by": "wren"}),
+        )
+        .await,
+    );
+    assert_eq!(host.calls(), 6);
+    assert_eq!(
+        host.lines_starting_with("WORLD deal"),
+        [
+            "WORLD deal_open state=offer owner=wren with=pigment_vendor \
+             gives=silver-piece*2 gets=boards*3|madder*1",
+            "WORLD deal_dropped owner=pigment_vendor with=wren reason=refused",
+        ]
+    );
+    let judged_lines = host.lines_starting_with("PERSONA deal_judged");
+    assert!(
+        judged_lines[1].contains(" state=refuse ")
+            && judged_lines[1].ends_with(" because=the judge's reason"),
+        "{judged_lines:?}"
+    );
+}
+
+/// A coin item of `coin` (`cp`..`pp`), as an inventory's JSON holds it.
+fn coin(id: &str, count: u64, coin: &str) -> Value {
+    json!({"id": id, "name": id, "look": "struck coins", "use": "consumed", "count": count,
+           "coin": coin})
+}
+
+/// The explore run's stall (play-1794897430565, steps 09-11): the hero holds only gold, and the
+/// produce seller has apples at three copper and, when `till` is set, a till that can make change.
+fn produce_stall(host: &ScriptedHost, till: bool) {
+    write_persona(&host.directory(), &vendor("wren")).unwrap();
+    write_persona(&host.directory(), &vendor("produce_vendor")).unwrap();
+    host.running.write_asset(
+        "world/inventory/wren.json",
+        &json!({"schema": 1, "owner": "wren", "kind": "character", "items": [
+            coin("gold-piece", 78, "gp")
+        ]})
+        .to_string(),
+    );
+    let mut stock = vec![
+        json!({"id": "apple", "name": "apples", "look": "red apples",
+                                "use": "consumed", "count": 10, "price_cp": 3}),
+    ];
+    if till {
+        stock.extend([
+            coin("copper-piece", 20, "cp"),
+            coin("silver-piece", 20, "sp"),
+            coin("gold-piece", 10, "gp"),
+        ]);
+    }
+    host.running.write_asset(
+        "world/inventory/produce_vendor.json",
+        &json!({"schema": 1, "owner": "produce_vendor", "kind": "shop", "items": stock})
+            .to_string(),
+    );
+}
+
+#[tokio::test]
+async fn six_copper_said_from_a_purse_of_gold_is_judged_as_six_copper_and_the_accept_settles() {
+    let offer = "Six copper it is, here you go. I'll take the two apples.";
+    let accept = "There we are, neighbor. Two apples for six copper.";
+    // The run's answer: six of the gold the purse holds. Money is an amount of the coin said.
+    let as_gold = json!({"with": "person-1", "state": "offer", "because": "the judge's reason",
+                         "claims_exchange": false,
+                         "gives": [{"item": "gold-piece", "count": 6}], "gives_coins": [],
+                         "gets": [{"item": "apple", "count": 2}], "gets_coins": []});
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            line_answer(offer),
+            judged(Vec::new()),
+            as_gold,
+            // An amount of none is no amount.
+            terms(Some("offer"), &[("cp", 0)], &[("apple", 2)]),
+            terms(Some("offer"), &[("cp", 6)], &[("apple", 2)]),
+            line_answer(accept),
+            judged(Vec::new()),
+            terms(Some("accept"), &[("apple", 2)], &[("cp", 6)]),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    produce_stall(&host, true);
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": offer, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    let deal = host.asked.lock().unwrap()[2].output_schema["properties"].clone();
+    assert_eq!(
+        deal["gives"]["maxItems"], 0,
+        "a purse of coins has no goods to give"
+    );
+    let retries = host.lines_starting_with("WORLD retry verb=deal");
+    assert_eq!(retries.len(), 2, "{retries:?}");
+    assert!(
+        retries[0].contains("names the coin gold-piece as goods"),
+        "{retries:?}"
+    );
+    assert!(
+        retries[1].contains("an amount of cp is none"),
+        "{retries:?}"
+    );
+    // The seller's line knows the open terms in the coin said, and that they would settle.
+    let said = done(
+        say(
+            &host,
+            "produce_vendor",
+            json!({"text": accept, "asked_by": "wren"}),
+        )
+        .await,
+    )
+    .said;
+    let open = &host.facts_of(5)["now"]["open_deals"][0];
+    assert_eq!(
+        open["gets"]["coins"],
+        json!([{"amount": 6, "coin": "cp"}]),
+        "{open}"
+    );
+    assert_eq!(open["settles"], true, "{open}");
+    assert_eq!(
+        host.facts_of(5)["now"]["prices"][0]["price"],
+        json!({"amount": 3, "coin": "cp"}),
+        "an apple is priced at three copper, never a gold piece"
+    );
+    assert!(
+        host.instructions_of(5)
+            .contains("A line never says goods or coins changed hands unless")
+    );
+    assert!(
+        !said.inventory.is_empty(),
+        "the accept settles: {:?}",
+        said.inventory
+    );
+    assert_eq!(
+        host.lines_starting_with("WORLD deal"),
+        [
+            "WORLD deal_open state=offer owner=wren with=produce_vendor gives=copper-piece*6 \
+             gets=apple*2",
+            "WORLD deal_settled owner=produce_vendor with=wren gives=apple*2 \
+             gets=copper-piece*6 wares_cp=6 coins_cp=6",
+        ]
+    );
+    let paid = host.lines_starting_with("INVENTORY deal");
+    assert!(
+        paid[0].starts_with(
+            "INVENTORY deal owner=wren with=produce_vendor payer=wren cp=6 handed_cp=100 \
+             change_cp=94 coins_before=7800 coins_after=7794 "
+        ),
+        "{paid:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_accept_the_books_refuse_is_worded_again_and_never_claims_the_sale() {
+    let offer = "Six copper for two apples?";
+    let sold = "There we are, neighbor. Two apples for six copper.";
+    let cannot = "I can't break a gold piece, neighbor. Have you anything smaller?";
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            line_answer(offer),
+            judged(Vec::new()),
+            terms(Some("offer"), &[("cp", 6)], &[("apple", 2)]),
+            line_answer(sold),
+            judged(Vec::new()),
+            terms(Some("accept"), &[("apple", 2)], &[("cp", 6)]),
+            // Worded again with why: the seller cannot make change for a gold piece.
+            line_answer(cannot),
+            judged(Vec::new()),
+            terms(None, &[], &[]),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    produce_stall(&host, false);
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": offer, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    let said = done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await).said;
+    assert_eq!(host.calls(), 9);
+    assert_eq!(said.line, cannot);
+    // The seller's line was told the open terms would not settle, and why.
+    let open = &host.facts_of(3)["now"]["open_deals"][0];
+    assert_eq!(open["settles"], false, "{open}");
+    assert_eq!(open["refused"], "no_change", "{open}");
+    assert!(said.inventory.is_empty(), "{:?}", said.inventory);
+    assert!(
+        host.facts_of(6)["now"]["retry_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("no_change")
+                && reason.contains("must not say the trade is done")),
+        "{}",
+        host.facts_of(6)
+    );
+    assert_eq!(
+        host.lines_starting_with("PERSONA deal_unsettled"),
+        ["PERSONA deal_unsettled id=produce_vendor reason=no_change reworded=yes"]
+    );
+    assert!(host.lines_starting_with("WORLD deal_settled").is_empty());
+    assert!(
+        host.running
+            .state
+            .deals()
+            .settled_of("produce_vendor")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_hand_over_of_open_terms_judged_none_is_asked_again_and_settles_as_an_accept() {
+    let offer = "Six copper for two apples, if you please.";
+    let handed = "There you are. Two apples, as agreed.";
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            line_answer(offer),
+            judged(Vec::new()),
+            terms(Some("offer"), &[("cp", 6)], &[("apple", 2)]),
+            line_answer(handed),
+            judged(Vec::new()),
+            // Host 36: "hands over the two apples under the already agreed terms": none.
+            claiming(terms(None, &[], &[])),
+            claiming(terms(Some("accept"), &[("apple", 2)], &[("cp", 6)])),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    produce_stall(&host, true);
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": offer, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    let said = done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await).said;
+    assert_eq!(host.calls(), 7);
+    assert!(
+        host.facts_of(6)["now"]["retry_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("such a line accepts those terms")),
+        "{}",
+        host.facts_of(6)
+    );
+    assert_eq!(
+        host.lines_starting_with("WORLD retry verb=deal"),
+        ["WORLD retry verb=deal attempt=2 reason=none_on_open_terms"]
+    );
+    assert!(
+        host.instructions_of(5)
+            .contains("none is only for a line that puts no terms")
+    );
+    assert_eq!(said.line, handed);
+    assert!(!said.inventory.is_empty(), "{:?}", said.inventory);
+    assert_eq!(host.lines_starting_with("WORLD deal_settled").len(), 1);
+    assert!(
+        host.lines_starting_with("PERSONA deal_unsettled")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_line_that_claims_an_exchange_while_terms_are_open_and_settles_nothing_is_worded_again() {
+    let offer = "Six copper for two apples, if you please.";
+    let handed = "There you are. Two apples, as agreed.";
+    let fetch = "Two apples coming. Let me fetch the good ones from the back first.";
+    let still_none = claiming(terms(None, &[], &[]));
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            line_answer(offer),
+            judged(Vec::new()),
+            terms(Some("offer"), &[("cp", 6)], &[("apple", 2)]),
+            line_answer(handed),
+            judged(Vec::new()),
+            // Asked again once, the judge still says none: the line claims what nothing records.
+            still_none.clone(),
+            still_none,
+            line_answer(fetch),
+            judged(Vec::new()),
+            terms(None, &[], &[]),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    produce_stall(&host, true);
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": offer, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    let said = done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await).said;
+    assert_eq!(host.calls(), 10);
+    assert_eq!(said.line, fetch);
+    assert!(said.inventory.is_empty(), "{:?}", said.inventory);
+    assert_eq!(
+        host.lines_starting_with("PERSONA deal_unsettled"),
+        ["PERSONA deal_unsettled id=produce_vendor reason=claims_exchange reworded=yes"]
+    );
+    assert!(
+        host.facts_of(7)["now"]["retry_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("claims_exchange")),
+        "{}",
+        host.facts_of(7)
+    );
+    assert!(host.lines_starting_with("WORLD deal_settled").is_empty());
+    // The terms stay open for a line that accepts them.
+    assert!(
+        host.running
+            .state
+            .deals()
+            .between("wren", "produce_vendor")
+            .is_some()
+    );
+}
+
+/// The seller's line with `quotes` (item, qty, total in copper) as its lots.
+fn quoting(line: &str, quotes: &[(&str, u64, u64)]) -> Value {
+    let mut answer = line_answer(line);
+    answer["quotes"] = quotes
+        .iter()
+        .map(|(item, qty, total_cp)| json!({"item": item, "qty": qty, "total_cp": total_cp}))
+        .collect();
+    answer
+}
+
+#[tokio::test]
+async fn a_plain_quote_off_the_stock_price_is_worded_again_at_the_stock_price() {
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            // As in host 37, a quote off the stock: two apples at three copper are six, said as
+            // eight.
+            quoting("Two apples come to {price:0}.", &[("apple", 2, 8)]),
+            judged(Vec::new()),
+            terms(None, &[], &[]),
+            quoting("Two apples, {price:0}.", &[("apple", 2, 6)]),
+            judged(Vec::new()),
+            terms(None, &[], &[]),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    produce_stall(&host, true);
+    let said = done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await).said;
+    assert_eq!(host.calls(), 6);
+    assert_eq!(said.line, "Two apples, 6 cp.");
+    assert!(
+        host.facts_of(3)["now"]["retry_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("you said 8 cp for 2 apple")
+                && reason.contains("stock price (now.prices) is 6 cp")),
+        "{}",
+        host.facts_of(3)
+    );
+    assert_eq!(
+        host.lines_starting_with("PERSONA quote_reworded"),
+        ["PERSONA quote_reworded id=produce_vendor"]
+    );
+    assert!(
+        host.instructions_of(0)
+            .contains("A price this character tells for their own wares is now.prices exactly")
+    );
+}
+
+#[tokio::test]
+async fn a_counter_to_open_terms_may_name_another_total_than_the_stock_price() {
+    let offer = "Six copper for two apples?";
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            line_answer(offer),
+            judged(Vec::new()),
+            terms(Some("offer"), &[("cp", 6)], &[("apple", 2)]),
+            quoting(
+                "Not for six. Two apples are {price:0} to you.",
+                &[("apple", 2, 8)],
+            ),
+            judged(Vec::new()),
+            terms(Some("counter"), &[("apple", 2)], &[("cp", 8)]),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    produce_stall(&host, true);
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": offer, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    let said = done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await).said;
+    assert_eq!(host.calls(), 6, "a counter is not worded again");
+    assert_eq!(said.line, "Not for six. Two apples are 8 cp to you.");
+    assert!(
+        host.lines_starting_with("PERSONA quote_reworded")
+            .is_empty()
+    );
+    assert_eq!(
+        host.lines_starting_with("WORLD deal_open")[1],
+        "WORLD deal_open state=counter owner=produce_vendor with=wren gives=apple*2 \
+         gets=copper-piece*8"
+    );
+}
+
+#[tokio::test]
+async fn price_slots_numbered_by_the_prose_are_filled_by_the_lots_in_order_never_shown_raw() {
+    // Host 42: two lots quoted, their slots numbered 2 and 3 by the goods the line names first.
+    let counted = "Apples and onions are a copper each, rations are {price:2} a bundle, and \
+                   waterskins are {price:3} apiece.";
+    let lots = [("rations", 1, 50), ("waterskin", 1, 20)];
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            quoting(counted, &lots),
+            // Worded again for the slots, the same numbering comes back.
+            quoting(counted, &lots),
+            judged(Vec::new()),
+            terms(None, &[], &[]),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    produce_stall(&host, true);
+    let said = done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await).said;
+    assert!(!said.line.contains('{'), "{}", said.line);
+    let rations = said.line.find("rations are ").unwrap();
+    let waterskins = said.line.find("waterskins are ").unwrap();
+    assert!(
+        said.line[rations..waterskins].contains("50 cp"),
+        "{}",
+        said.line
+    );
+    assert!(said.line[waterskins..].contains("20 cp"), "{}", said.line);
+    assert!(
+        host.lines_starting_with("PERSONA price_slots_unfilled")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_line_whose_price_slots_cannot_be_filled_is_refused_never_shown_with_a_brace() {
+    let unfillable = "Rations are {price:0}, waterskins {price:1}, and the rope {price:5}.";
+    let lots = [("rations", 1, 50), ("waterskin", 1, 20)];
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            quoting(unfillable, &lots),
+            quoting(unfillable, &lots),
+            quoting(unfillable, &lots),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    produce_stall(&host, true);
+    let reply = say(&host, "produce_vendor", json!({"asked_by": "wren"})).await;
+    assert!(
+        matches!(reply, DevReply::Rejected { .. }),
+        "a line with an unfilled slot is never shown"
+    );
+    assert_eq!(host.calls(), 3);
+    assert_eq!(
+        host.lines_starting_with("PERSONA price_slots_unfilled"),
+        [
+            "PERSONA price_slots_unfilled id=produce_vendor reworded=yes",
+            "PERSONA price_slots_unfilled id=produce_vendor reworded=no",
+        ]
+    );
+    assert!(host.lines_starting_with("PERSONA said").is_empty());
+}
+
+#[tokio::test]
+async fn a_counter_that_drops_the_price_is_asked_again_and_a_coin_handed_settles_with_change() {
+    let offer = "A silver for a waterskin and a bundle of rations?";
+    let counter = "Not for a silver. A waterskin and rations come to seven silver.";
+    let accept = "Fine, seven silver it is. Here's a gold piece.";
+    let goods = [("waterskin", 1), ("apple", 1)];
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            line_answer(offer),
+            judged(Vec::new()),
+            terms(Some("offer"), &[("sp", 1)], &goods),
+            line_answer(counter),
+            judged(Vec::new()),
+            // Host 42: the counter judged with the goods and no price at all.
+            terms(Some("counter"), &goods, &[]),
+            terms(Some("counter"), &goods, &[("sp", 7)]),
+            line_answer(accept),
+            judged(Vec::new()),
+            // Host 42: the accept named the gold piece handed, not the seven silver agreed.
+            terms(Some("accept"), &[("gp", 1)], &goods),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    produce_stall(&host, true);
+    // The seller holds a waterskin too, and the buyer holds only gold.
+    host.running.write_asset(
+        "world/inventory/produce_vendor.json",
+        &json!({"schema": 1, "owner": "produce_vendor", "kind": "shop", "items": [
+            {"id": "apple", "name": "apples", "look": "red apples", "use": "consumed",
+             "count": 10, "price_cp": 3},
+            {"id": "waterskin", "name": "waterskin", "look": "a leather skin",
+             "use": "kept", "count": 2, "price_cp": 20},
+            {"id": "copper-piece", "name": "copper", "look": "coins", "use": "consumed",
+             "count": 20, "coin": "cp"},
+            {"id": "silver-piece", "name": "silver", "look": "coins", "use": "consumed",
+             "count": 20, "coin": "sp"}
+        ]})
+        .to_string(),
+    );
+    for (who, line) in [
+        ("wren", offer),
+        ("produce_vendor", counter),
+        ("wren", accept),
+    ] {
+        let to = if who == "wren" {
+            "produce_vendor"
+        } else {
+            "wren"
+        };
+        done(say(&host, who, json!({"text": line, "asked_by": to})).await);
+    }
+    assert_eq!(
+        host.lines_starting_with("WORLD retry verb=deal"),
+        ["WORLD retry verb=deal attempt=2 reason=price_dropped"]
+    );
+    assert_eq!(
+        host.lines_starting_with("WORLD deal"),
+        [
+            "WORLD deal_open state=offer owner=wren with=produce_vendor gives=silver-piece*1 \
+             gets=waterskin*1|apple*1",
+            "WORLD deal_open state=counter owner=produce_vendor with=wren \
+             gives=waterskin*1|apple*1 gets=silver-piece*7",
+            "WORLD deal_settled owner=wren with=produce_vendor gives=silver-piece*7 \
+             gets=waterskin*1|apple*1 wares_cp=23 coins_cp=70",
+        ]
+    );
+    // Seven silver agreed, a gold piece handed: three silver back from the till.
+    assert!(
+        host.lines_starting_with("INVENTORY deal")[0].starts_with(
+            "INVENTORY deal owner=produce_vendor with=wren payer=wren cp=70 handed_cp=100 \
+             change_cp=30 coins_before=7800 coins_after=7730 "
+        ),
+        "{:?}",
+        host.lines_starting_with("INVENTORY deal")
+    );
+}
+
+/// Host 43's stall: the hero holds gold and rations, the seller rations at five silver and a till.
+fn ration_stall(host: &ScriptedHost) {
+    write_persona(&host.directory(), &vendor("wren")).unwrap();
+    write_persona(&host.directory(), &vendor("produce_vendor")).unwrap();
+    let rations = |count: u64| {
+        json!({"id": "rations", "name": "travel rations", "look": "a wrapped bundle",
+               "use": "consumed", "count": count, "price_cp": 50})
+    };
+    host.running.write_asset(
+        "world/inventory/wren.json",
+        &json!({"schema": 1, "owner": "wren", "kind": "character", "items": [
+            coin("gold-piece", 78, "gp"), rations(10)
+        ]})
+        .to_string(),
+    );
+    host.running.write_asset(
+        "world/inventory/produce_vendor.json",
+        &json!({"schema": 1, "owner": "produce_vendor", "kind": "shop", "items": [
+            rations(8), coin("copper-piece", 20, "cp"), coin("silver-piece", 20, "sp"),
+            coin("gold-piece", 10, "gp")
+        ]})
+        .to_string(),
+    );
+}
+
+#[tokio::test]
+async fn a_gold_piece_handed_for_a_five_silver_ration_buys_it_with_change_and_a_gift_moves_one_way()
+{
+    let buy = "I'll take one travel ration. Here's a gold piece.";
+    let gift = "I hand her one of my rations as an apology.";
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            line_answer(buy),
+            judged(Vec::new()),
+            // Host 43: the offer names the gold piece handed.
+            terms(Some("offer"), &[("gp", 1)], &[("rations", 1)]),
+            line_answer("Aye, one ration for your gold piece. Here's {change} back."),
+            judged(Vec::new()),
+            // Her accept names the ration and her own sum of the change, forty-five copper.
+            claiming(terms(
+                Some("accept"),
+                &[("rations", 1), ("cp", 45)],
+                &[("gp", 1)],
+            )),
+            line_answer(gift),
+            judged(Vec::new()),
+            terms(Some("gift"), &[("rations", 1)], &[]),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    ration_stall(&host);
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": buy, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    let sold = done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await).said;
+    // The change said is the books' fifty copper, never her own sum.
+    assert_eq!(
+        sold.line,
+        "Aye, one ration for your gold piece. Here's 50 cp back."
+    );
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": gift, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    assert_eq!(
+        host.lines_starting_with("WORLD deal"),
+        [
+            "WORLD deal_tendered owner=wren with=produce_vendor named_cp=100 price_cp=50",
+            "WORLD deal_open state=offer owner=wren with=produce_vendor gives=silver-piece*5 \
+             gets=rations*1",
+            "WORLD deal_settled owner=produce_vendor with=wren gives=rations*1 \
+             gets=silver-piece*5 wares_cp=50 coins_cp=50",
+            "WORLD deal_gift owner=wren with=produce_vendor gives=rations*1",
+        ]
+    );
+    assert!(
+        host.lines_starting_with("INVENTORY deal")[0].starts_with(
+            "INVENTORY deal owner=wren with=produce_vendor payer=wren cp=50 handed_cp=100 \
+             change_cp=50 coins_before=7800 coins_after=7750 "
+        ),
+        "{:?}",
+        host.lines_starting_with("INVENTORY deal")
+    );
+    let held = |owner: &str| crate::world::inventory_of(&host.running.state, owner);
+    let count = |inventory: &[crate::world::InventoryItem], id: &str| {
+        inventory
+            .iter()
+            .find(|item| item.id == id)
+            .map_or(0, |item| item.count)
+    };
+    let (hero, seller) = (held("wren"), held("produce_vendor"));
+    assert_eq!(count(&hero, "rations"), 10, "bought one, gave one");
+    assert_eq!(count(&seller, "rations"), 8, "sold one, was given one");
+    assert_eq!(
+        count(&hero, "gold-piece"),
+        77,
+        "the hero pays, never gains, a gold piece"
+    );
+    assert_eq!(count(&seller, "gold-piece"), 11);
+}
+
+#[tokio::test]
+async fn an_accept_the_books_settle_in_a_line_that_denies_it_is_worded_again_or_settles_nothing() {
+    let buy = "I'll take one travel ration. Here's a gold piece.";
+    let denies = "A gold piece is more than the five silver. I can't make change. Have you silver?";
+    let settles = "Aye, the ration's yours, and {change} back.";
+    let offer = || terms(Some("offer"), &[("gp", 1)], &[("rations", 1)]);
+    // Host 45: the judge read the denial as an accept of the open five silver, saying no
+    // exchange. Worded again with what settling does, the line accepts, and it settles.
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            line_answer(buy),
+            judged(Vec::new()),
+            offer(),
+            line_answer(denies),
+            judged(Vec::new()),
+            terms(Some("accept"), &[], &[]),
+            line_answer(settles),
+            judged(Vec::new()),
+            // The change only, as host 45's first accept named it: the ration side stands.
+            claiming(terms(Some("accept"), &[("cp", 50)], &[("gp", 1)])),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    ration_stall(&host);
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": buy, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    let said = done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await).said;
+    assert_eq!(said.line, "Aye, the ration's yours, and 50 cp back.");
+    assert_eq!(
+        host.lines_starting_with("PERSONA deal_unconfirmed"),
+        ["PERSONA deal_unconfirmed id=produce_vendor reworded=yes"]
+    );
+    assert!(
+        host.facts_of(6)["now"]["retry_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("never say change cannot be made")),
+        "{}",
+        host.facts_of(6)
+    );
+    assert_eq!(host.lines_starting_with("WORLD deal_settled").len(), 1);
+
+    // Worded again and still denying it: the words stand, and nothing settles.
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            line_answer(buy),
+            judged(Vec::new()),
+            offer(),
+            line_answer(denies),
+            judged(Vec::new()),
+            terms(Some("accept"), &[], &[]),
+            line_answer(denies),
+            judged(Vec::new()),
+            terms(Some("accept"), &[], &[]),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    ration_stall(&host);
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": buy, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    let said = done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await).said;
+    assert_eq!(said.line, denies);
+    assert!(said.inventory.is_empty(), "{:?}", said.inventory);
+    assert!(host.lines_starting_with("WORLD deal_settled").is_empty());
+    assert_eq!(
+        host.lines_starting_with("PERSONA deal_unconfirmed"),
+        [
+            "PERSONA deal_unconfirmed id=produce_vendor reworded=yes",
+            "PERSONA deal_unconfirmed id=produce_vendor reworded=no",
+        ]
+    );
+    assert!(
+        host.running
+            .state
+            .deals()
+            .between("wren", "produce_vendor")
+            .is_some(),
+        "the terms stay open as the words leave them"
+    );
+}
+
+#[tokio::test]
+async fn host46_a_quote_opens_terms_i_will_take_one_accepts_it_and_the_change_is_the_books() {
+    let ask = "Good day! How much for a travel ration?";
+    let take = "I'll take one. Here's a gold piece.";
+    let thanks = "A gold piece for one ration, then. Here's your change.";
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            line_answer(ask),
+            judged(Vec::new()),
+            terms(None, &[], &[]),
+            // Her quote of her own ware opens it at that price.
+            quoting("A travel ration is {price:0}.", &[("rations", 1, 50)]),
+            judged(Vec::new()),
+            terms(Some("offer"), &[("rations", 1)], &[("sp", 5)]),
+            // "I'll take one" accepts her open terms; the gold piece is only what is handed.
+            line_answer(take),
+            judged(Vec::new()),
+            claiming(terms(Some("accept"), &[("gp", 1)], &[("rations", 1)])),
+            // Her reply speaks of the sale just settled.
+            line_answer(thanks),
+            judged(Vec::new()),
+            claiming(terms(None, &[], &[])),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    ration_stall(&host);
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": ask, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    let quoted = done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await).said;
+    assert_eq!(quoted.line, "A travel ration is 50 cp.");
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": take, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    let reply = done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await).said;
+    assert_eq!(
+        reply.line, thanks,
+        "the sale is recorded, so the line stands"
+    );
+    assert_eq!(
+        host.lines_starting_with("WORLD deal"),
+        [
+            "WORLD deal_open state=offer owner=produce_vendor with=wren gives=rations*1 \
+             gets=silver-piece*5",
+            "WORLD deal_settled owner=wren with=produce_vendor gives=silver-piece*5 \
+             gets=rations*1 wares_cp=50 coins_cp=50",
+        ]
+    );
+    assert!(
+        host.lines_starting_with("INVENTORY deal")[0].starts_with(
+            "INVENTORY deal owner=produce_vendor with=wren payer=wren cp=50 handed_cp=100 \
+             change_cp=50 "
+        ),
+        "{:?}",
+        host.lines_starting_with("INVENTORY deal")
+    );
+    assert!(
+        host.lines_starting_with("PERSONA deal_unsettled")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn host46_as_judged_a_shop_is_not_repriced_and_an_unrecorded_change_is_worded_again() {
+    let take = "I'll take one. Here's a gold piece.";
+    let change = "A gold piece for one ration, then. Here's your change.";
+    let quote = "Five silver for the ration, if you please.";
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            line_answer(take),
+            judged(Vec::new()),
+            // Host 46: no terms open, so the hero's line was no trade.
+            claiming(terms(None, &[], &[])),
+            line_answer(change),
+            judged(Vec::new()),
+            // Her line judged an offer with the sides turned: she pays the gold for the ration.
+            // Asked again for the sides, the judge puts her ware on her side.
+            claiming(terms(Some("offer"), &[("gp", 1)], &[("rations", 1)])),
+            claiming(terms(Some("offer"), &[("rations", 1)], &[("sp", 5)])),
+            // Worded again: she puts the price, and claims nothing.
+            line_answer(quote),
+            judged(Vec::new()),
+            terms(Some("offer"), &[("rations", 1)], &[("sp", 5)]),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    ration_stall(&host);
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": take, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    let said = done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await).said;
+    assert_eq!(said.line, quote, "a change nobody recorded is never shown");
+    assert_eq!(
+        host.lines_starting_with("PERSONA deal_unsettled"),
+        [
+            // The player's own words stand as said; nothing moves for them.
+            "PERSONA deal_unsettled id=wren reason=claims_exchange reworded=no",
+            "PERSONA deal_unsettled id=produce_vendor reason=claims_exchange reworded=yes",
+        ]
+    );
+    assert!(host.lines_starting_with("WORLD deal_tendered").is_empty());
+    assert_eq!(
+        host.lines_starting_with("WORLD deal"),
+        [
+            "WORLD deal_open state=offer owner=produce_vendor with=wren gives=rations*1 \
+          gets=silver-piece*5"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn host47_a_quote_judged_with_the_keepers_sides_turned_is_put_right_and_the_purchase_settles()
+{
+    let take = "I'll take one. Here's a gold piece.";
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            quoting("A travel ration's {price:0}.", &[("rations", 1, 50)]),
+            judged(Vec::new()),
+            // Host 47: her quote judged as her giving the five silver and getting the ration,
+            // and again when asked for the sides.
+            terms(Some("offer"), &[("sp", 5)], &[("rations", 1)]),
+            terms(Some("offer"), &[("sp", 5)], &[("rations", 1)]),
+            line_answer(take),
+            judged(Vec::new()),
+            claiming(terms(Some("accept"), &[("gp", 1)], &[("rations", 1)])),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    ration_stall(&host);
+    done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await);
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": take, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    assert_eq!(
+        host.lines_starting_with("WORLD retry verb=deal"),
+        ["WORLD retry verb=deal attempt=2 reason=keeper_sides"]
+    );
+    assert_eq!(
+        host.lines_starting_with("PERSONA deal_sides_normalized"),
+        ["PERSONA deal_sides_normalized id=produce_vendor state=offer"]
+    );
+    assert_eq!(
+        host.lines_starting_with("WORLD deal"),
+        [
+            "WORLD deal_open state=offer owner=produce_vendor with=wren gives=rations*1 \
+             gets=silver-piece*5",
+            "WORLD deal_settled owner=wren with=produce_vendor gives=silver-piece*5 \
+             gets=rations*1 wares_cp=50 coins_cp=50",
+        ]
+    );
+    assert!(
+        host.lines_starting_with("INVENTORY deal")[0].starts_with(
+            "INVENTORY deal owner=produce_vendor with=wren payer=wren cp=50 handed_cp=100 \
+             change_cp=50 "
+        ),
+        "{:?}",
+        host.lines_starting_with("INVENTORY deal")
+    );
+}
+
+#[tokio::test]
+async fn a_refused_deal_answer_is_told_the_goods_each_side_may_name() {
+    // Host 48: the keeper's quote named goods it could not hand over (the hero's spear there;
+    // more rations than her stock here), and was asked again without the ids it may name.
+    let spear = terms(Some("offer"), &[("rations", 20)], &[("sp", 2)]);
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            quoting("Ten rations come to {price:0}.", &[("rations", 10, 500)]),
+            judged(Vec::new()),
+            spear,
+            terms(Some("offer"), &[("rations", 2)], &[("sp", 2)]),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    ration_stall(&host);
+    done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await);
+    let reason = host.facts_of(3)["now"]["retry_reason"].clone();
+    assert!(
+        reason.as_str().is_some_and(|reason| reason
+            .contains("gives names only goods this character holds (rations)")
+            && reason.contains("gets names only goods the other person holds (rations)")),
+        "{reason}"
+    );
+}
+
+#[tokio::test]
+async fn host49_ten_apples_at_two_silver_are_never_given_free_the_price_told_is_kept() {
+    let ask = "Hello! What's your name, and how much for ten apples?";
+    let take = "I'll take them. Here's a gold piece.";
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            line_answer(ask),
+            judged(Vec::new()),
+            terms(None, &[], &[]),
+            quoting(
+                "Mara, friend. Ten apples come to {price:0}.",
+                &[("apple", 10, 20)],
+            ),
+            judged(Vec::new()),
+            // Host 49: first the hero's spear for the apples, then the price dropped, then put
+            // right with the price told kept.
+            terms(Some("offer"), &[("apple", 10)], &[("spear", 10), ("sp", 2)]),
+            terms(Some("offer"), &[("apple", 10)], &[]),
+            terms(Some("offer"), &[("apple", 10)], &[("sp", 2)]),
+            line_answer(take),
+            judged(Vec::new()),
+            claiming(terms(Some("accept"), &[("gp", 1)], &[("apple", 10)])),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    write_persona(&host.directory(), &vendor("wren")).unwrap();
+    write_persona(&host.directory(), &vendor("produce_vendor")).unwrap();
+    host.running.write_asset(
+        "world/inventory/wren.json",
+        &json!({"schema": 1, "owner": "wren", "kind": "character", "items": [
+            coin("gold-piece", 78, "gp"),
+            {"id": "spear", "name": "spear", "look": "a spear", "use": "kept", "count": 1,
+             "price_cp": 100}
+        ]})
+        .to_string(),
+    );
+    host.running.write_asset(
+        "world/inventory/produce_vendor.json",
+        &json!({"schema": 1, "owner": "produce_vendor", "kind": "shop", "items": [
+            {"id": "apple", "name": "apples", "look": "red apples", "use": "consumed",
+             "count": 20, "price_cp": 2},
+            coin("copper-piece", 20, "cp"), coin("silver-piece", 20, "sp"),
+            coin("gold-piece", 10, "gp")
+        ]})
+        .to_string(),
+    );
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": ask, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await);
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": take, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    let retries = host.lines_starting_with("WORLD retry verb=deal");
+    assert_eq!(retries.len(), 2, "{retries:?}");
+    assert!(retries[1].ends_with("reason=one_sided"), "{retries:?}");
+    // The price told stays with the judge when it is asked again.
+    assert!(
+        host.facts_of(7)["now"]["retry_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("keep the money told (2 sp)")),
+        "{}",
+        host.facts_of(7)
+    );
+    assert_eq!(
+        host.lines_starting_with("WORLD deal"),
+        [
+            "WORLD deal_open state=offer owner=produce_vendor with=wren gives=apple*10 \
+             gets=silver-piece*2",
+            "WORLD deal_settled owner=wren with=produce_vendor gives=silver-piece*2 \
+             gets=apple*10 wares_cp=20 coins_cp=20",
+        ]
+    );
+    assert!(
+        host.lines_starting_with("INVENTORY deal")[0].starts_with(
+            "INVENTORY deal owner=produce_vendor with=wren payer=wren cp=20 handed_cp=100 \
+             change_cp=80 "
+        ),
+        "{:?}",
+        host.lines_starting_with("INVENTORY deal")
+    );
+}
+
+#[tokio::test]
+async fn host50_buying_a_ration_never_also_uses_one_of_ones_own() {
+    let take = "Then I'll take one ration. Here's a gold piece.";
+    let host = scripted_host_cast(
+        &["wren", "produce_vendor"],
+        vec![
+            line_answer(take),
+            // Host 50: the line's inventory judge read "I'll take one ration" as eating one.
+            judged(vec![entry("rations", -1, "used_up", None, &[])]),
+            claiming(terms(Some("offer"), &[("gp", 1)], &[("rations", 1)])),
+            line_answer("Here's your ration, and {change} back."),
+            judged(Vec::new()),
+            claiming(terms(Some("accept"), &[("rations", 1)], &[("gp", 1)])),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    ration_stall(&host);
+    done(
+        say(
+            &host,
+            "wren",
+            json!({"text": take, "asked_by": "produce_vendor"}),
+        )
+        .await,
+    );
+    done(say(&host, "produce_vendor", json!({"asked_by": "wren"})).await);
+    assert_eq!(
+        host.lines_starting_with("PERSONA deal_entries"),
+        ["PERSONA deal_entries id=wren deal=offer moved_by_deal=rations:used_up"]
+    );
+    let rations = crate::world::inventory_of(&host.running.state, "wren")
+        .into_iter()
+        .find(|item| item.id == "rations")
+        .map_or(0, |item| item.count);
+    assert_eq!(rations, 11, "ten held and one bought");
+    assert!(
+        host.instructions_of(3)
+            .contains("lists every ware this character sells")
+    );
 }

@@ -31,6 +31,7 @@
 //! routes and the command line speak for the same messages: a summary a person reads, and for a
 //! view the real protobuf bytes as base64, so a test can decode them and compare.
 
+use df_playground::seat::wire::hex_digits;
 use std::fmt;
 
 use base64::Engine as _;
@@ -717,10 +718,6 @@ pub struct WireReceiptReport {
     pub pending: Option<u64>,
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 /// The dev report of a response.
 pub fn receipt_report(response: &wire::SubmitMachineIntentResponse) -> WireReceiptReport {
     use wire::machine_receipt::Result as Outcome;
@@ -771,7 +768,7 @@ pub fn receipt_report(response: &wire::SubmitMachineIntentResponse) -> WireRecei
             .operation_id
             .as_ref()
             .and_then(|id| id.value.as_deref())
-            .map(hex)
+            .map(hex_digits)
             .unwrap_or_default(),
         revision: receipt
             .revision

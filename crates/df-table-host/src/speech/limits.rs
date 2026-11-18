@@ -3,6 +3,7 @@
 
 use std::time::Duration;
 
+use df_playground::limits::{CAPTURE_SAMPLE_RATE_HZ, MAXIMUM_QUESTION_CHARACTERS};
 use df_playground::voice_wire::MissingSetting;
 
 /// The variables the speech supplier's key is read from, in order.
@@ -10,12 +11,10 @@ pub const KEY_VARIABLES: [&str; 2] = [MissingSetting::SpeechKey.variable(), "ELE
 
 /// The content type of a transcription body: raw signed 16-bit little-endian mono PCM at 16 kHz.
 pub use df_playground::path::SPEECH_CONTENT_TYPE as AUDIO_CONTENT_TYPE;
-/// Bytes of audio in one millisecond of 16 kHz 16-bit mono PCM (the input contract).
-pub const AUDIO_BYTES_PER_MS: usize = 32;
-/// Shortest audio the speech-to-text supplier takes, in milliseconds (its contract).
-pub const MINIMUM_AUDIO_MS: u64 = 100;
-/// Longest audio the speech-to-text supplier takes, in milliseconds (its contract).
-pub const MAXIMUM_AUDIO_MS: u64 = 60_000;
+/// Bytes of audio in one millisecond of the capture's 16-bit mono PCM (the input contract). The
+/// shortest and longest audio the supplier takes are the page's `MINIMUM_CAPTURE_MS` and
+/// `MAXIMUM_CAPTURE_MS`.
+pub const AUDIO_BYTES_PER_MS: usize = CAPTURE_SAMPLE_RATE_HZ as usize * 2 / 1_000;
 /// Most key terms one transcription is biased with (the supplier adapter's contract).
 pub const MAXIMUM_KEY_TERMS: usize = 32;
 /// Most characters of one key term (the supplier adapter's contract).
@@ -23,8 +22,6 @@ pub const MAXIMUM_KEY_TERM_CHARACTERS: usize = 49;
 /// Most words of one key term (the supplier adapter's contract).
 pub const MAXIMUM_KEY_TERM_WORDS: usize = 5;
 
-/// Most characters one synthesis voices (the supplier adapter's contract).
-pub const MAXIMUM_TEXT_CHARACTERS: usize = 4096;
 /// Longest voice id, in bytes (the supplier adapter's contract).
 pub const MAXIMUM_VOICE_ID_BYTES: usize = 128;
 /// The variable that sets how many voice clips the host keeps, for dev work that wants more.
@@ -55,4 +52,5 @@ pub const MAXIMUM_PROVIDER_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 /// Largest payload the request owner admits for a transcription, in bytes.
 pub const MAXIMUM_ADMITTED_AUDIO_BYTES: usize = 2_000_000;
 /// Largest payload the request owner admits for a synthesis, in bytes (four bytes a character).
-pub const MAXIMUM_ADMITTED_TEXT_BYTES: usize = 4 * MAXIMUM_TEXT_CHARACTERS;
+/// The most characters one synthesis voices is the page's `MAXIMUM_QUESTION_CHARACTERS`.
+pub const MAXIMUM_ADMITTED_TEXT_BYTES: usize = 4 * MAXIMUM_QUESTION_CHARACTERS;

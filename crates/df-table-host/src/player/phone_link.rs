@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::response::Html;
-use qrcode::{Color, QrCode};
 
 use crate::render::escape;
 use crate::seat::request::{PendingLine, PendingState};
@@ -20,18 +19,16 @@ const QUIET_MODULES: usize = 4;
 /// How large the code is drawn on the PC's screen, in CSS pixels.
 const QR_DRAWN_PX: usize = 360;
 
-/// The SVG of a QR code of `text`, or why it could not be made.
+/// The SVG of a QR code of `text` (the host's one QR maker, `seat::room::qr_modules`), or why it
+/// could not be made.
 pub(super) fn qr_svg(text: &str) -> Result<String, qrcode::types::QrError> {
-    let code = QrCode::new(text.as_bytes())?;
-    let width = code.width();
-    let size = width + 2 * QUIET_MODULES;
+    let code = crate::seat::room::qr_modules(text)?;
+    let size = usize::from(code.width) + 2 * QUIET_MODULES;
     let mut dark = String::new();
-    for (index, color) in code.to_colors().into_iter().enumerate() {
-        if color == Color::Dark {
-            let (x, y) = (index % width + QUIET_MODULES, index / width + QUIET_MODULES);
-            // Writing to a `String` cannot fail.
-            let _ = write!(dark, "M{x} {y}h1v1h-1z");
-        }
+    for (column, row) in code.dark_cells() {
+        let (x, y) = (column + QUIET_MODULES, row + QUIET_MODULES);
+        // Writing to a `String` cannot fail.
+        let _ = write!(dark, "M{x} {y}h1v1h-1z");
     }
     Ok(format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {size} {size}\" \
@@ -93,7 +90,7 @@ pub(super) fn pending_body(pending: &[PendingLine]) -> String {
 /// `GET path::PHONE_LINK`. It reloads itself every few seconds, so a new request shows up.
 pub(super) async fn page(State(state): State<Arc<AppState>>) -> Html<String> {
     let pending = match state.seats().open().await {
-        Ok(mut open) => pending_body(&open.books().report().pending),
+        Ok(mut open) => pending_body(&open.books().report(state.seats().room_code()).pending),
         Err(error) => format!(
             "<p>The players books cannot be read: {}.</p>",
             escape(&error.to_string())

@@ -138,6 +138,7 @@ fn narration_clear_and_the_logo_and_the_seat_counts_are_parsed() {
 fn every_field_of_a_seat_card_has_a_key() {
     let Ok(SceneChange::SeatSet {
         name,
+        character,
         class,
         level,
         portrait,
@@ -146,13 +147,15 @@ fn every_field_of_a_seat_card_has_a_key() {
         hit_points,
         maximum_hit_points,
         conditions,
-    }) = scene(
-        "scene seat set Kael class=Fighter level=3 portrait=brakka.webp glyph=shield accent=#e0675a hp=22 max=28 conditions=Poisoned,Prone",
-    )
+    }) = scene(concat!(
+        "scene seat set Kael class=Fighter level=3 portrait=brakka.webp glyph=shield ",
+        "accent=#e0675a character=hero-6 hp=22 max=28 conditions=Poisoned,Prone"
+    ))
     else {
         panic!("a seat");
     };
     assert_eq!(name, "Kael");
+    assert_eq!(character.as_deref(), Some("hero-6"));
     assert_eq!(class, Edit::Set("Fighter".to_owned()));
     assert_eq!(level, Edit::Set(3));
     assert_eq!(portrait, Edit::Set("brakka.webp".to_owned()));
@@ -317,7 +320,7 @@ async fn each_verb_changes_the_overlay_and_is_one_audit_line_with_its_fields() {
         .iter()
         .find(|member| member.name == "Kael")
         .expect("Kael");
-    assert_eq!((kael.hit_points, kael.maximum_hit_points), (7, 40));
+    assert_eq!(kael.health(), Some((7, 40)));
     let seats = scene.seats.expect("seats");
     assert_eq!(seats.open, 3);
     let look = seats
@@ -355,10 +358,6 @@ async fn each_verb_changes_the_overlay_and_is_one_audit_line_with_its_fields() {
 async fn a_refused_change_leaves_the_overlay_as_it_was_and_says_why() {
     let running = with_the_scene().await;
     let before = drawn(&running).await;
-    let Err(error) = run(&running, "scene seat set Nobody class=Rogue").await else {
-        panic!("a hero not in the party needs hit points");
-    };
-    assert!(error.to_string().contains("hp=N"), "{error}");
     let Err(error) = run(&running, "scene narration set x scene=9/5").await else {
         panic!("a scene past the total");
     };
@@ -394,7 +393,7 @@ async fn the_shipped_placement_script_assembles_the_scene_in_order() {
         .collect();
     assert_eq!(names, ["Kael", "Lyra", "Seris", "Thoren"]);
     let kael = &scene.party[0];
-    assert_eq!(kael.hit_points, 17, "the last change of the script");
+    assert_eq!(kael.hit_points, Some(17), "the last change of the script");
     assert_eq!(scene.party[1].conditions, ["Poisoned"]);
     assert_eq!(scene.seats.expect("seats").open, 2);
     let narration = scene.narration.expect("a box");

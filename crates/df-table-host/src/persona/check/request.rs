@@ -10,13 +10,15 @@ use std::fmt;
 
 use df_playground::fixture::RollView;
 use df_rules::roll::{
-    Ability, AttackKind, DiceExpression, ModifierLabel, RollError, RollMode, Skill,
+    Ability, AttackKind, AttackStyle, DiceExpression, ModifierLabel, RollError, RollMode, Skill,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::RulesCheckError;
+use crate::creation::request::CreationRouteError;
 use crate::persona::judge_route::JudgeRouteError;
 use crate::persona::request::PersonaError;
+use crate::seat::request::SeatError;
 
 /// Why a check judgement, a line of the dungeon master or a roll was refused.
 pub type CheckRouteError = JudgeRouteError<CheckError>;
@@ -34,6 +36,8 @@ pub enum AnswerField {
     Mode,
     Grounds,
     Uses,
+    AttackMode,
+    TargetCreature,
     Reason,
 }
 
@@ -49,6 +53,8 @@ impl AnswerField {
             Self::Mode => "mode",
             Self::Grounds => "grounds",
             Self::Uses => "uses",
+            Self::AttackMode => "attack_mode",
+            Self::TargetCreature => "target_creature",
             Self::Reason => "reason",
         }
     }
@@ -121,6 +127,9 @@ impl Tone {
 #[serde(rename_all = "snake_case")]
 pub enum CheckKind {
     AbilityCheck,
+    /// An ability check made with a tool (SRD 5.2.1 p. 93, Tools): the tool's ability, with the
+    /// Proficiency Bonus added when the character is proficient with that tool.
+    ToolCheck,
     SavingThrow,
     AttackRoll,
     Initiative,
@@ -133,8 +142,9 @@ pub enum CheckKind {
 }
 
 impl CheckKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::AbilityCheck,
+        Self::ToolCheck,
         Self::SavingThrow,
         Self::AttackRoll,
         Self::Initiative,
@@ -149,6 +159,7 @@ impl CheckKind {
     pub fn key(self) -> &'static str {
         match self {
             Self::AbilityCheck => "ability_check",
+            Self::ToolCheck => "tool_check",
             Self::SavingThrow => "saving_throw",
             Self::AttackRoll => "attack_roll",
             Self::Initiative => "initiative",
@@ -289,12 +300,16 @@ pub enum ModeGround {
     UnfavorableCircumstance,
     /// The opponent does not see the character coming.
     UnawareOpponent,
-    /// What the character wears imposes it.
+    /// What the character wears imposes it: armour whose Stealth entry is Disadvantage (SRD 5.2.1
+    /// p. 92), on Dexterity (Stealth) checks only.
     ArmorPenalty,
+    /// The character is proficient with the tool of a tool check and with the skill used with it
+    /// (SRD 5.2.1 p. 93, Tools).
+    ToolAndSkill,
 }
 
 impl ModeGround {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::None,
         Self::CharacterFeature,
         Self::AllyHelp,
@@ -302,6 +317,7 @@ impl ModeGround {
         Self::UnfavorableCircumstance,
         Self::UnawareOpponent,
         Self::ArmorPenalty,
+        Self::ToolAndSkill,
     ];
 
     pub fn key(self) -> &'static str {
@@ -313,6 +329,7 @@ impl ModeGround {
             Self::UnfavorableCircumstance => "unfavorable_circumstance",
             Self::UnawareOpponent => "unaware_opponent",
             Self::ArmorPenalty => "armor_penalty",
+            Self::ToolAndSkill => "tool_and_skill",
         }
     }
 
@@ -327,7 +344,8 @@ impl ModeGround {
             Self::CharacterFeature
             | Self::AllyHelp
             | Self::FavorableCircumstance
-            | Self::UnawareOpponent => RollMode::Advantage,
+            | Self::UnawareOpponent
+            | Self::ToolAndSkill => RollMode::Advantage,
             Self::UnfavorableCircumstance | Self::ArmorPenalty => RollMode::Disadvantage,
         }
     }
@@ -440,7 +458,7 @@ pub struct CheckTest {
     pub skill: Option<Skill>,
 }
 
-/// One weapon of the sheet.
+/// One weapon of the sheet. A melee weapon with the Thrown property may also be thrown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SheetAttack {
@@ -449,6 +467,56 @@ pub struct SheetAttack {
     pub kind: AttackKind,
     pub ability: Ability,
     pub damage: DiceExpression,
+    #[serde(default)]
+    pub thrown: bool,
+    /// The Fighting Style that touches this weapon's rolls: Archery's bonus on its attack roll,
+    /// Great Weapon Fighting's floor on its damage dice.
+    #[serde(default)]
+    pub style: Option<AttackStyle>,
+}
+
+/// How an attack is made with its weapon: swung up close, thrown (a Thrown weapon: a ranged attack
+/// with the same ability as its melee attack, SRD 5.2.1 page 214) or shot from a ranged weapon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttackMode {
+    Melee,
+    Thrown,
+    Ranged,
+}
+
+impl AttackMode {
+    pub const ALL: [Self; 3] = [Self::Melee, Self::Thrown, Self::Ranged];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Melee => "melee",
+            Self::Thrown => "thrown",
+            Self::Ranged => "ranged",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.key() == key)
+    }
+
+    /// Whether `attack` can be used this way: thrown only with the Thrown property, ranged only
+    /// with a ranged weapon, melee only with a melee weapon.
+    pub fn fits(self, attack: &SheetAttack) -> bool {
+        match self {
+            Self::Melee => attack.kind == AttackKind::Melee,
+            Self::Thrown => attack.thrown,
+            Self::Ranged => attack.kind == AttackKind::Ranged,
+        }
+    }
+
+    /// The attack roll's kind: a thrown weapon makes a ranged attack.
+    pub fn attack_kind(self) -> AttackKind {
+        match self {
+            Self::Melee => AttackKind::Melee,
+            Self::Thrown | Self::Ranged => AttackKind::Ranged,
+        }
+    }
 }
 
 /// One healing the sheet has (a Second Wind, a hit die).
@@ -483,6 +551,14 @@ pub struct CheckSheet {
     pub skill_proficiencies: Vec<Skill>,
     #[serde(default)]
     pub skill_expertise: Vec<Skill>,
+    /// The tools the character is proficient with, by the catalog's keys
+    /// (`df_rules::hero::Tool::key`, such as `thieves_tools`).
+    #[serde(default)]
+    pub tool_proficiencies: Vec<String>,
+    /// The armour worn whose Stealth entry is Disadvantage (SRD 5.2.1 p. 92), by its name; none
+    /// when what is worn does not hinder Stealth.
+    #[serde(default)]
+    pub stealth_disadvantage: Option<String>,
     /// Whether the Proficiency Bonus is added to initiative (the Alert feat).
     #[serde(default)]
     pub initiative_proficient: bool,
@@ -496,6 +572,10 @@ pub struct CheckSheet {
     pub equipment: Vec<String>,
     #[serde(default)]
     pub features: Vec<SheetFeature>,
+    /// What the hero's sheet has that is not in play yet (`Sorcerer: Spellcasting is not in play
+    /// yet.`), in its words: a deed that needs one cannot be done.
+    #[serde(default)]
+    pub not_in_play: Vec<String>,
 }
 
 impl CheckSheet {
@@ -578,6 +658,15 @@ pub struct CheckRunRequest {
     /// What the runner has just said aloud (the scene line), which a call must not restate.
     #[serde(default)]
     pub told: Option<String>,
+    /// The difficulty the dungeon master set for the narrator's authored test (`judge.intent`): a
+    /// scripted check whose stakes the scenario has set. When the judge calls no roll for that
+    /// test, it is called anyway, at this band (`dm_called`).
+    #[serde(default)]
+    pub dc: Option<DcBand>,
+    /// The tool of an authored tool check (`judge.intent` of kind `tool_check`), by the catalog's
+    /// key: the tool the dungeon master's own call is made with.
+    #[serde(default)]
+    pub tool: Option<String>,
 }
 
 fn voiced_by_default() -> bool {
@@ -593,8 +682,16 @@ pub struct CheckCall {
     pub dc_band: Option<DcBand>,
     pub mode: RollMode,
     pub grounds: ModeGround,
-    /// The sheet attack or healing the roll uses.
+    /// The sheet attack or healing the roll uses, or for a tool check the tool's catalog key (its
+    /// `skill` is then the skill used with the tool, when one is).
     pub uses: Option<String>,
+    /// How an attack roll is made with its weapon; none for any other roll.
+    #[serde(default)]
+    pub attack_mode: Option<AttackMode>,
+    /// An attack roll's target number: the Armor Class of the target's SRD stat block (the rules
+    /// data, never a guess); none for any other roll.
+    #[serde(default)]
+    pub target_ac: Option<u8>,
 }
 
 /// The judge's validated answer.
@@ -668,6 +765,18 @@ pub struct RolledCheck {
     pub result_voice: LineVoice,
     pub view: RollView,
     pub times: CheckTimes,
+    /// The weapon's damage an attack that hit rolled at once, shown and read after it.
+    #[serde(default)]
+    pub damage: Option<RolledDamage>,
+}
+
+/// The damage a hit dealt: its card, the dungeon master's line and whether it was a Critical Hit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RolledDamage {
+    pub line: String,
+    pub voice: LineVoice,
+    pub view: RollView,
+    pub critical: bool,
 }
 
 /// The answer of `POST /dev/persona/check/run`.
@@ -738,6 +847,12 @@ pub enum CheckError {
     DcOffLadder {
         value: i64,
     },
+    /// The attack's mode does not fit its weapon (thrown without the Thrown property, ranged with
+    /// a melee weapon, melee with a ranged one).
+    AttackModeUnfit {
+        mode: AttackMode,
+        weapon: String,
+    },
     /// The sheet has no attack or healing of this id.
     UnknownUses {
         id: String,
@@ -759,6 +874,35 @@ pub enum CheckError {
     DoubleCheck,
     /// The answer says a test was already rolled, but none was.
     NothingChecked,
+    /// A seat's roll names an ability or a skill the rules do not have.
+    UnknownCheck {
+        key: String,
+    },
+    /// A seat's roll is about a thing the place does not offer.
+    UnknownThing {
+        id: String,
+    },
+    /// A seat's roll came before the host's check runner started.
+    ChecksNotStarted,
+    /// The seat that was to roll a called check no longer plays its hero: nobody rolls in the
+    /// player's place, so the check ends unrolled.
+    RollWithdrawn {
+        seat: u64,
+    },
+    /// The seat of a roll cannot be had.
+    Seat(SeatError),
+    /// The seat's hero has no derived sheet (no hero, a build not legal yet, no table).
+    SeatSheet(Box<CreationRouteError>),
+    /// A limited feature the roll spends has no use left (a Second Wind).
+    NoUsesLeft {
+        feature: String,
+    },
+    /// The hero's vitals cannot be read.
+    Vitals(Box<CreationRouteError>),
+    /// The seat's derived sheet does not read as a check sheet.
+    SheetUnreadable {
+        detail: String,
+    },
     /// The spoken numbers of a line are not those of the roll.
     NumbersMismatch,
     FlavorHasDigits,
@@ -806,11 +950,21 @@ impl CheckError {
             Self::UnsupportedSkill { .. } => "unsupported_skill",
             Self::DcOffLadder { .. } => "dc_off_ladder",
             Self::UnknownUses { .. } => "unknown_uses",
+            Self::AttackModeUnfit { .. } => "attack_mode_unfit",
             Self::UngroundedMode { .. } => "ungrounded_mode",
             Self::GroundNotInSheet { .. } => "ground_not_in_sheet",
             Self::ModeOnDice { .. } => "mode_on_dice",
             Self::DoubleCheck => "double_check",
             Self::NothingChecked => "nothing_checked",
+            Self::UnknownCheck { .. } => "unknown_check",
+            Self::UnknownThing { .. } => "unknown_thing",
+            Self::ChecksNotStarted => "checks_not_started",
+            Self::RollWithdrawn { .. } => "roll_withdrawn",
+            Self::Seat(_) => "seat",
+            Self::SeatSheet(_) => "seat_sheet",
+            Self::SheetUnreadable { .. } => "sheet_unreadable",
+            Self::NoUsesLeft { .. } => "no_uses_left",
+            Self::Vitals(_) => "vitals",
             Self::NumbersMismatch => "numbers_mismatch",
             Self::FlavorHasDigits => "flavor_has_digits",
             Self::EmptyFlavor => "empty_flavor",
@@ -841,9 +995,10 @@ impl fmt::Display for CheckError {
             Self::IntentIgnored => formatter.write_str(
                 "the narrator intends that test: call it, or refuse it as intent_unsuitable",
             ),
-            Self::NoIntentToRefuse => {
-                formatter.write_str("the narrator named no test, so none is unsuitable")
-            }
+            Self::NoIntentToRefuse => formatter.write_str(
+                "the narrator named no test, so none is unsuitable: call the check, or give \
+                 trivial_no_check, impossible_no_check or no_stakes",
+            ),
             Self::UnwantedAction => {
                 formatter.write_str("a narrator moment judges the situation and takes no action")
             }
@@ -893,6 +1048,9 @@ impl fmt::Display for CheckError {
             Self::UnknownUses { id } => {
                 write!(formatter, "the sheet has no attack or healing '{id}'")
             }
+            Self::AttackModeUnfit { mode, weapon } => {
+                write!(formatter, "'{weapon}' cannot make a {} attack", mode.key())
+            }
             Self::UngroundedMode { mode, grounds } => write!(
                 formatter,
                 "mode {} does not follow from grounds {}",
@@ -911,6 +1069,22 @@ impl fmt::Display for CheckError {
             ),
             Self::DoubleCheck => formatter.write_str("this test was already rolled here"),
             Self::NothingChecked => formatter.write_str("nothing was rolled here yet"),
+            Self::UnknownCheck { key } => write!(formatter, "{key:?} is no ability or skill"),
+            Self::UnknownThing { id } => write!(formatter, "{id:?} is nothing offered here"),
+            Self::ChecksNotStarted => formatter.write_str("Rolls are not open yet."),
+            Self::RollWithdrawn { seat } => {
+                write!(
+                    formatter,
+                    "seat {seat} left before rolling; nobody rolls in its place"
+                )
+            }
+            Self::Seat(error) => write!(formatter, "{error}"),
+            Self::SeatSheet(error) => write!(formatter, "{error}"),
+            Self::NoUsesLeft { feature } => write!(formatter, "{feature} has no use left"),
+            Self::Vitals(error) => write!(formatter, "{error}"),
+            Self::SheetUnreadable { detail } => {
+                write!(formatter, "the hero's sheet does not read: {detail}")
+            }
             Self::NumbersMismatch => {
                 formatter.write_str("the spoken numbers are not those of the roll")
             }

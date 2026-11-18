@@ -347,6 +347,10 @@ pub enum PerceiveCause {
     /// The answer calls someone by a handle (`person-N`) it was told of, though a handle has no
     /// meaning outside the call; say them by their look.
     HandleInText,
+    /// A pose check names a character the picture's scan has no region for.
+    NotPictured { who: String },
+    /// A pose check names no stance.
+    EmptyPose,
 }
 
 impl PerceiveCause {
@@ -373,6 +377,8 @@ impl PerceiveCause {
             Self::Vista => "vista",
             Self::NewThingForPerson { .. } => "new_thing_for_person",
             Self::HandleInText => "handle_in_text",
+            Self::NotPictured { .. } => "not_pictured",
+            Self::EmptyPose => "empty_pose",
         }
     }
 }
@@ -439,6 +445,10 @@ impl fmt::Display for PerceiveCause {
             ),
             Self::HandleInText => formatter
                 .write_str("the answer calls someone person-N; say them by how they look instead"),
+            Self::NotPictured { who } => {
+                write!(formatter, "the picture's scan names no region for {who:?}")
+            }
+            Self::EmptyPose => formatter.write_str("pose is blank"),
         }
     }
 }

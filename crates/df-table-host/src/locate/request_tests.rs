@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use super::request::{
     IdentityOutcome, LocateError, QuestionCause, ScanCause, ScanPrompt, ScanSendState,
 };
-use crate::dev_http::{BodyCause, BodyError, RouteError};
+use crate::dev_http::{BodyCause, BodyError, QueryError, RouteError};
 use crate::forge::ForgeSetupCause;
 use crate::io_cause::IoCause;
 use crate::text::TextServiceCause;
@@ -17,9 +17,9 @@ fn every_error() -> Vec<LocateError> {
             column: 2,
             detail: "missing field `picture`".to_owned(),
         }),
-        LocateError::InvalidQuery {
+        LocateError::InvalidQuery(QueryError {
             detail: "missing field `picture`".to_owned(),
-        },
+        }),
         LocateError::InvalidPictureName {
             name: "a b.png".to_owned(),
         },

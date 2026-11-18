@@ -1,0 +1,41 @@
+{
+  "title": "The Sealed Tomb of the Tide-King",
+  "hook": "The adventurers' guild of Brackenford pays six hundred gold to whoever opens the sealed tomb beyond the ruined causeway.",
+  "truth": "The tomb's door answers only to the word for the tide. Its builder hid the three parts of the answer along the old road: a verse at the roadside shrine, a token the hill village keeps, and the marks cut into the causeway's last milestone. Behind the door an old gate stands open onto a far coast.",
+  "culprit": "tomb_keeper",
+  "motive": "The tide-king's keeper sealed the gate so only those who walked the old road and read its signs could pass.",
+  "scenes": [
+    {"id": "shrine", "place": "A roadside shrine under an old yew, a bronze bell in a stone niche, offerings of salt and shells on its ledge.", "dressing": ["a bronze bell in a stone niche", "salt and shells on the ledge", "an old yew over the shrine"], "danger": "Nothing threatens; the road is quiet and the wind moves the yew.", "music": "a slow solo fiddle over a low drone, unhurried"},
+    {"id": "village", "place": "A hill village of stone cottages and turf roofs above the river, its elder's house hung with drying nets.", "dressing": ["drying nets on a cottage wall", "a turf roof", "goats on the slope"], "danger": "Nothing threatens; the villagers are wary of strangers.", "music": "a plucked lute and a soft hand drum, homely"},
+    {"id": "causeway", "place": "A ruined causeway of tilted stones across a tidal marsh, a lichened milestone at its far end.", "dressing": ["tilted causeway stones", "reeds and black water on both sides", "a lichened milestone"], "danger": "The stones shift underfoot and the water between them is deep.", "music": "low strings and a hollow wind instrument, uneasy"},
+    {"id": "tomb_door", "place": "A tomb cut into a sea cliff, its round stone door carved with waves and a pale disc, an iron grate before it.", "dressing": ["a round stone door carved with waves", "a pale stone disc above the door", "a rusted iron grate"], "danger": "The cliff path is narrow and the grate is locked.", "music": "a deep sustained choir hum and slow drums, solemn"}
+  ],
+  "characters": [
+    {"id": "tomb_keeper", "name": "The Tide-King's Keeper", "part": "schemer", "role": "The long-dead keeper of the tide-king's tomb, who hid the answer along the road.", "guidance": {"phase": "The tomb waits.", "beat": "The keeper is long gone; only the signs remain.", "hooks": [], "threads": [], "must_establish": [], "must_avoid": ["appearing in person"], "tone": "solemn", "note": "Never appears in play."}, "secrets": []}
+  ],
+  "evidence": [
+    {"id": "shrine_verse", "what": "A verse cut around the rim of the shrine's bronze bell, in an old script.", "planted_by": "tomb_keeper", "flaw": "The verse speaks of a water that climbs the stones and is pulled by the pale lamp of the night.", "up_close": "Worn letters in an old script run around the bell's rim, between engraved waves and a small full moon.", "needs": []},
+    {"id": "elder_token", "what": "A carved bone token the village elder keeps, passed down from the tomb's builders.", "planted_by": "tomb_keeper", "flaw": "The token shows the moon above two waves, one high and one low: the water rises and falls as the moon turns.", "up_close": "A palm-sized bone disc, carved on one face with a moon over two waves of different heights, polished by many hands.", "needs": []},
+    {"id": "milestone_marks", "what": "Marks cut into the last milestone of the causeway.", "planted_by": "tomb_keeper", "flaw": "The marks count two comings and two goings in a single day, the way the sea comes up the marsh and draws back.", "up_close": "Under the lichen, two arrows point toward the sea and two away from it, set around a single sun.", "needs": []}
+  ],
+  "beats": [
+    {"id": "bell_verse", "scene": "shrine", "happens": "The party stops at the shrine and finds the bell's verse.", "turns_on": "Reading the old script on the bell.", "exhibits": ["shrine_verse"]},
+    {"id": "elder_token_shown", "scene": "village", "happens": "The village elder shows the party the bone token.", "turns_on": "Winning the elder's trust.", "exhibits": ["elder_token"]},
+    {"id": "milestone_found", "scene": "causeway", "happens": "Across the causeway the party finds the carved milestone.", "turns_on": "Crossing the broken stones and clearing the lichen.", "exhibits": ["milestone_marks"]},
+    {"id": "door_riddle", "scene": "tomb_door", "happens": "The sealed door asks its riddle.", "turns_on": "Putting the three signs together into one answer.", "exhibits": []}
+  ],
+  "ways": [
+    {"from": "shrine", "to": "village", "stages": [
+      {"id": "ferry_landing", "sight": "A rope ferry waiting at a wooden landing on a broad brown river.", "worth_a_look": "A ferry bell on a post, green with age.", "touches": []},
+      {"id": "hill_path", "sight": "A path climbing between dry stone walls toward a hill village.", "worth_a_look": null, "touches": []}
+    ]},
+    {"from": "village", "to": "causeway", "stages": [
+      {"id": "marsh_edge", "sight": "The edge of a tidal marsh, reeds bending in the wind.", "worth_a_look": "Herons standing still in the shallows.", "touches": []},
+      {"id": "causeway_start", "sight": "The first tilted stones of an old causeway running out over black water.", "worth_a_look": null, "touches": []}
+    ]},
+    {"from": "causeway", "to": "tomb_door", "stages": [
+      {"id": "cliff_path", "sight": "A narrow path along a sea cliff, gulls wheeling below.", "worth_a_look": "Old steps cut into the rock, worn hollow.", "touches": []},
+      {"id": "cliff_ledge", "sight": "A ledge before a dark opening in the cliff face.", "worth_a_look": null, "touches": []}
+    ]}
+  ]
+}

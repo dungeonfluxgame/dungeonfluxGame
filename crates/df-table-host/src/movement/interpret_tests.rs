@@ -31,6 +31,7 @@ fn moves(kind: MoveKind, who: &[&str], to: &str, line: &str) -> Interpreted {
             to: to.to_string(),
             line: line.to_string(),
         },
+        back_to: None,
     }
 }
 
@@ -45,7 +46,7 @@ fn a_valid_move_answer_is_accepted_with_its_destination_trimmed() {
         "confidence": 0.9
     });
     assert_eq!(
-        parse_reading(&answer, line, &party()),
+        parse_reading(&answer, line, (&party(), &[])),
         Ok(moves(MoveKind::Run, &["elf"], "the hallway", line))
     );
 }
@@ -55,7 +56,7 @@ fn a_first_person_answer_lists_the_speaker_as_a_mover() {
     let line = "I will walk to the balcony";
     let answer = json!({"reading": "move", "kind": "walk", "who": ["elf"], "to": "the balcony"});
     assert_eq!(
-        parse_reading(&answer, line, &party()),
+        parse_reading(&answer, line, (&party(), &[])),
         Ok(moves(MoveKind::Walk, &["elf"], "the balcony", line))
     );
 }
@@ -65,7 +66,7 @@ fn an_empty_who_in_a_move_answer_moves_the_whole_party() {
     let line = "we walk to the square";
     let answer = json!({"reading": "move", "kind": "walk", "who": [], "to": "the square"});
     assert_eq!(
-        parse_reading(&answer, line, &party()),
+        parse_reading(&answer, line, (&party(), &[])),
         Ok(moves(
             MoveKind::Walk,
             &["elf", "warrior", "wizard"],
@@ -85,7 +86,7 @@ fn a_duplicate_id_in_a_move_answer_is_listed_once() {
         "to": "the square"
     });
     assert_eq!(
-        parse_reading(&answer, line, &party()),
+        parse_reading(&answer, line, (&party(), &[])),
         Ok(moves(MoveKind::Walk, &["elf"], "the square", line))
     );
 }
@@ -94,7 +95,7 @@ fn a_duplicate_id_in_a_move_answer_is_listed_once() {
 fn a_not_a_move_answer_is_accepted() {
     let answer = json!({"reading": "not_a_move", "kind": null, "who": [], "to": null});
     assert_eq!(
-        parse_reading(&answer, "how are you?", &party()),
+        parse_reading(&answer, "how are you?", (&party(), &[])),
         Ok(Interpreted::NotAMove)
     );
 }
@@ -113,7 +114,7 @@ fn a_needs_clarification_answer_is_accepted_with_what_is_unclear_and_why() {
         "unclear": "destination", "reason": "  The line stops before it names a place.  "
     });
     assert_eq!(
-        parse_reading(&answer, "we walk to", &party()),
+        parse_reading(&answer, "we walk to", (&party(), &[])),
         Ok(clarifies(
             Unclear::Destination,
             Some("The line stops before it names a place.")
@@ -128,7 +129,7 @@ fn a_clarification_without_a_named_cause_is_other_and_a_blank_reason_is_dropped(
         "unclear": null, "reason": "   "
     });
     assert_eq!(
-        parse_reading(&answer, "we walk to", &party()),
+        parse_reading(&answer, "we walk to", (&party(), &[])),
         Ok(clarifies(Unclear::Other, None))
     );
 }
@@ -142,7 +143,7 @@ fn a_clarification_with_an_unknown_cause_or_without_the_fields_is_refused() {
         json!({"reading": "needs_clarification", "kind": null, "who": [], "to": null,
                "unclear": 3, "reason": null}),
     ] {
-        let error = parse_reading(&answer, "we walk to", &party())
+        let error = parse_reading(&answer, "we walk to", (&party(), &[]))
             .expect_err("a malformed clarification must be refused");
         assert_eq!(error.key(), "malformed_answer", "answer {answer}");
     }
@@ -152,7 +153,7 @@ fn a_clarification_with_an_unknown_cause_or_without_the_fields_is_refused() {
 fn a_move_answer_with_an_empty_party_needs_clarification() {
     let answer = json!({"reading": "move", "kind": "walk", "who": [], "to": "the square"});
     assert_eq!(
-        parse_reading(&answer, "we walk to the square", &[]),
+        parse_reading(&answer, "we walk to the square", (&[], &[])),
         Ok(clarifies(Unclear::Other, None))
     );
 }
@@ -183,14 +184,14 @@ fn the_two_lines_a_live_roam_refused_read_as_moves_when_the_answer_names_the_pla
             "unclear": null, "reason": null
         });
         assert_eq!(
-            parse_reading(&refusal, line, &party),
+            parse_reading(&refusal, line, (&party, &[])),
             Ok(clarifies(
                 Unclear::Destination,
                 Some("The movement names no destination.")
             ))
         );
         assert_eq!(
-            parse_reading(&fixed, line, &party),
+            parse_reading(&fixed, line, (&party, &[])),
             Ok(moves(MoveKind::Walk, &["danny"], to, line))
         );
     }
@@ -264,7 +265,7 @@ fn refused_answers_name_their_error() {
         ),
     ];
     for (answer, key) in refused {
-        let error = parse_reading(&answer, "we walk to the square", &party())
+        let error = parse_reading(&answer, "we walk to the square", (&party(), &[]))
             .expect_err("a malformed answer must be refused");
         assert_eq!(error.key(), key, "answer {answer}");
     }
@@ -274,7 +275,7 @@ fn refused_answers_name_their_error() {
 fn an_answer_naming_a_character_outside_an_empty_party_is_refused() {
     let answer = json!({"reading": "move", "kind": "walk", "who": ["elf"], "to": "x"});
     assert_eq!(
-        parse_reading(&answer, "we walk to x", &[]).map_err(|error| error.key()),
+        parse_reading(&answer, "we walk to x", (&[], &[])).map_err(|error| error.key()),
         Err("unknown_character")
     );
 }
@@ -283,7 +284,7 @@ fn an_answer_naming_a_character_outside_an_empty_party_is_refused() {
 fn an_empty_line_is_refused_before_the_answer_is_read() {
     let answer = json!({"reading": "not_a_move", "kind": null, "who": [], "to": null});
     assert_eq!(
-        parse_reading(&answer, " ", &party()),
+        parse_reading(&answer, " ", (&party(), &[])),
         Err(InterpretError::EmptyLine)
     );
 }
@@ -313,9 +314,9 @@ fn every_error_has_a_stable_key() {
 
 #[test]
 fn schema_lists_every_movement_kind_and_the_closed_fields() {
-    let schema = jev_schema();
+    let schema = jev_schema(&[]);
     let required = schema["required"].as_array().map(Vec::len);
-    assert_eq!(required, Some(6));
+    assert_eq!(required, Some(7));
     let kinds = schema["properties"]["kind"]["enum"].as_array();
     assert!(
         kinds.is_some_and(|kinds| kinds.contains(&json!("sneak")) && kinds.contains(&Value::Null))
@@ -334,7 +335,7 @@ fn facts_carry_the_line_the_speaker_the_party_and_the_kinds() {
         None,
         Declared::Unknown,
         None,
-        &party(),
+        (&party(), &[]),
     );
     assert_eq!(facts["line"], "I walk to the square");
     assert_eq!(facts["declared"], "unknown");
@@ -356,7 +357,7 @@ fn facts_without_a_speaker_carry_none() {
         None,
         Declared::Unknown,
         None,
-        &party(),
+        (&party(), &[]),
     );
     assert_eq!(facts["speaker"], Value::Null);
 }
@@ -373,12 +374,36 @@ fn facts_carry_a_declared_move_and_the_earlier_refusal() {
         Some("a goal of going somewhere"),
         Declared::Move,
         Some(&refused),
-        &party(),
+        (&party(), &[]),
     );
     assert_eq!(facts["declared"], "move");
     assert_eq!(facts["context"], "a goal of going somewhere");
     assert_eq!(
         facts["refused_before"],
         json!({"unclear": "destination", "reason": "no place"})
+    );
+}
+
+#[test]
+fn a_move_back_names_a_visited_place_by_id_and_any_other_is_refused() {
+    let line = "let's go back to the square";
+    let visited = ["roam-03".to_owned()];
+    let answer = json!({"reading": "move", "kind": "walk", "who": ["elf"], "to": "the square",
+                        "back_to": "roam-03", "unclear": null, "reason": null});
+    let Ok(Interpreted::Move { back_to, .. }) = parse_reading(&answer, line, (&party(), &visited))
+    else {
+        panic!("a move");
+    };
+    assert_eq!(back_to.as_deref(), Some("roam-03"));
+    let unknown = json!({"reading": "move", "kind": "walk", "who": ["elf"], "to": "the mill",
+                         "back_to": "roam-09", "unclear": null, "reason": null});
+    assert_eq!(
+        parse_reading(&unknown, line, (&party(), &visited)).map_err(|error| error.key()),
+        Err("unknown_place")
+    );
+    let schema = jev_schema(&visited);
+    assert_eq!(
+        schema["properties"]["back_to"]["enum"],
+        json!(["roam-03", null])
     );
 }

@@ -820,6 +820,20 @@ pub async fn walk_through(through: Through<'_>) -> Result<Walked, WalkFailure> {
         options,
     } = through;
     let sights = design.stages.as_slice();
+    // A seated hero is drawn on every sight as their look studio's design shows them.
+    let ids = movers.iter().map(|mover| mover.id.clone()).collect();
+    let looks = crate::persona::hero_looks_from(port, ids)
+        .await
+        .map_err(|error| WalkFailure {
+            key: "looks_unreadable".to_owned(),
+            message: error.to_string(),
+        })
+        .and_then(|looks| {
+            LookSheets::from_looks(looks).map_err(|error| WalkFailure {
+                key: error.key().to_owned(),
+                message: error.to_string(),
+            })
+        })?;
     let stage_people: Vec<CharacterRequest> = placed
         .iter()
         .filter(|request| movers.iter().any(|mover| mover.id == request.name))
@@ -849,11 +863,9 @@ pub async fn walk_through(through: Through<'_>) -> Result<Walked, WalkFailure> {
     let briefs: Vec<Result<PlateBrief, WalkFailure>> = sights
         .iter()
         .map(|sight| {
-            build_stage_brief(design, sight, movers, &LookSheets::empty()).map_err(|error| {
-                WalkFailure {
-                    key: error.key().to_owned(),
-                    message: error.to_string(),
-                }
+            build_stage_brief(design, sight, movers, &looks).map_err(|error| WalkFailure {
+                key: error.key().to_owned(),
+                message: error.to_string(),
             })
         })
         .collect();
@@ -917,7 +929,7 @@ async fn make_stage(
                 avoid: &brief.avoid,
                 sheets: &[],
             };
-            make_walk_plate(port, &name, &painting, people.to_vec())
+            make_walk_plate(port, &name, &painting, people.to_vec(), None)
                 .await
                 .map_err(|(step, error)| WalkFailure {
                     key: step.key().to_owned(),
@@ -938,7 +950,7 @@ async fn make_arrival(
     sender: UnboundedSender<Made<MadePlate>>,
 ) {
     let _ = mark_walk(port, plate, WalkMoment::Started).await;
-    let made = make_walk_plate(port, plate, painting, placed.to_vec())
+    let made = make_walk_plate(port, plate, painting, placed.to_vec(), None)
         .await
         .map_err(|(step, error)| WalkFailure {
             key: step.key().to_owned(),

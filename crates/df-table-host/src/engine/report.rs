@@ -22,7 +22,7 @@ use df_table::ports::{PortError, PortName};
 use df_table::private_data::LengthClass;
 use serde::{Deserialize, Serialize};
 
-use crate::dev_http::{BodyError, DevReply, RouteError};
+use crate::dev_http::{BodyError, DevReply, QueryError, RouteError};
 use crate::observe::SinkHealth;
 
 use self::observe::NotBuiltVerb;
@@ -466,47 +466,6 @@ impl DevControl {
     }
 }
 
-/// Why a request body could not be read at all, before its JSON was looked at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UnreadableBodyCause {
-    /// The body is longer than the host's request limit.
-    TooLarge,
-    /// The connection failed or ended while the body was read.
-    Interrupted,
-}
-
-impl UnreadableBodyCause {
-    pub const ALL: [Self; 2] = [Self::TooLarge, Self::Interrupted];
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::TooLarge => "too_large",
-            Self::Interrupted => "interrupted",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|cause| cause.key() == key)
-    }
-}
-
-/// A query of an engine GET route that is missing a parameter or has one that does not read.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct QueryError {
-    /// The reader's own sentence, naming the parameter it stopped at.
-    pub detail: String,
-}
-
-impl fmt::Display for QueryError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "the query is not valid: {}", self.detail)
-    }
-}
-
-impl std::error::Error for QueryError {}
-
 /// Why a dev call was refused. Each variant says what the caller does next.
 ///
 /// A `detail` beside a closed cause is the source error's own sentence (an error of another crate
@@ -528,12 +487,8 @@ pub enum EngineError {
         cause: StartCause,
         detail: String,
     },
-    /// The request body is not the JSON the route reads.
+    /// The request body is not the JSON the route reads, broke off, or is over the host's limit.
     InvalidBody(BodyError),
-    /// The request body could not be read at all: it is over the host's limit, or it broke off.
-    UnreadableBody {
-        cause: UnreadableBodyCause,
-    },
     /// The query of a GET is missing a parameter or has one that does not read.
     InvalidQuery(QueryError),
     /// An operation id is zero; ids start at 1.
@@ -653,7 +608,6 @@ impl EngineError {
             Self::OwnerPanicked => "owner_panicked",
             Self::NotStarted { .. } => "not_started",
             Self::InvalidBody(_) => "invalid_body",
-            Self::UnreadableBody { .. } => "unreadable_body",
             Self::InvalidQuery(_) => "invalid_query",
             Self::ZeroOperation => "zero_operation",
             Self::ZeroStep => "zero_step",
@@ -703,12 +657,6 @@ impl fmt::Display for EngineError {
                 )
             }
             Self::InvalidBody(error) => write!(formatter, "{error}"),
-            Self::UnreadableBody {
-                cause: UnreadableBodyCause::TooLarge,
-            } => formatter.write_str("the request body is over the host's limit"),
-            Self::UnreadableBody {
-                cause: UnreadableBodyCause::Interrupted,
-            } => formatter.write_str("the request body broke off before it was read"),
             Self::InvalidQuery(error) => write!(formatter, "{error}"),
             Self::ZeroOperation => formatter.write_str("an operation id is not zero"),
             Self::ZeroStep => formatter.write_str("a step serves at least one input"),
@@ -866,9 +814,7 @@ impl RouteError for EngineError {
                 ..
             } => StatusCode::SERVICE_UNAVAILABLE,
             Self::TooFast { .. } => StatusCode::TOO_MANY_REQUESTS,
-            Self::UnreadableBody {
-                cause: UnreadableBodyCause::TooLarge,
-            } => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::InvalidBody(error) => error.status(),
             Self::NoAnswer
             | Self::SettingSpecInvalid { .. }
             | Self::NoMachineRunning
@@ -882,11 +828,7 @@ impl RouteError for EngineError {
                 ..
             } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::NotSupportedYet { .. } => StatusCode::NOT_IMPLEMENTED,
-            Self::InvalidBody(_)
-            | Self::UnreadableBody {
-                cause: UnreadableBodyCause::Interrupted,
-            }
-            | Self::InvalidQuery(_)
+            Self::InvalidQuery(_)
             | Self::ZeroOperation
             | Self::ZeroStep
             | Self::InvalidName { .. }

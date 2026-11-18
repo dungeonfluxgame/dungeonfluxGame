@@ -703,3 +703,77 @@ fn scene_timing_reaches_the_scene_builder() {
         Ok(Command::SceneBuilder(_))
     ));
 }
+
+#[test]
+fn the_explore_verbs_reach_their_own_parsers_through_the_top_level_router() {
+    use crate::movement::cli::MoveCommand;
+    use crate::persona::PersonaCommand;
+    use crate::persona::intent::IntentCommand;
+    use crate::persona::story_narrate::Moment;
+    use crate::world::WorldCommand;
+    let parsed = |line: &str| parse(&words(line)).unwrap_or_else(|error| panic!("{line}: {error}"));
+    let Command::Move(MoveCommand::Approach { character, options }) = parsed(
+        "move approach hero-11 target=behind \"toward=the road behind\" distance=on_the_horizon \
+         step=0 from=roam-00-hero-11 plate=explore-01-a01-s00",
+    ) else {
+        panic!("move approach is the movement verb, not an element's move");
+    };
+    assert_eq!((character.as_str(), options.ask.step), ("hero-11", 0));
+    let Command::World(WorldCommand::Arrive(request)) =
+        parsed("world arrive roam-00-hero-11 the road before the gate | an open gate")
+    else {
+        panic!("world arrive");
+    };
+    assert_eq!(request.place.id, "roam-00-hero-11");
+    assert!(matches!(
+        parsed("persona intent scene hero-11"),
+        Command::Persona(PersonaCommand::Intent(IntentCommand::Scene(_)))
+    ));
+    let Command::Persona(PersonaCommand::Intent(IntentCommand::Judge(request))) =
+        parsed("persona intent \"way=town|into this town\" hero-11 I walk into town")
+    else {
+        panic!("persona intent");
+    };
+    assert_eq!(
+        (request.line.as_str(), request.ways.len()),
+        ("I walk into town", 1)
+    );
+    for (line, moment) in [
+        (
+            "persona story narrate hero=hero-11 \"deed=I look back\" \"sees=a signboard\" \
+             roam-00 look",
+            Moment::Look,
+        ),
+        (
+            "persona story narrate hero=hero-11 \"deed=I sit\" roam-00 act",
+            Moment::Act,
+        ),
+    ] {
+        let Command::Persona(PersonaCommand::StoryNarrate {
+            moment: got, told, ..
+        }) = parsed(line)
+        else {
+            panic!("{line}");
+        };
+        assert_eq!(got, moment);
+        assert_eq!(told.hero.as_deref(), Some("hero-11"));
+        assert_eq!(told.seen.len(), usize::from(moment == Moment::Look));
+    }
+    // The perception a look searches the picture with.
+    assert!(matches!(
+        parsed("persona perceive hero-11 mode=study \"recent=hero-11: the sign\" \"scene=a gate\""),
+        Command::Persona(PersonaCommand::Perceive(_))
+    ));
+    // The search of a plate for a named thing.
+    let Command::MediaLocate(crate::locate::cli::MediaLocate::Find { picture, noun }) =
+        parsed("media locate find roam-00-hero-11.png hanging signboard")
+    else {
+        panic!("media locate find");
+    };
+    assert_eq!(
+        (picture.as_str(), noun.as_str()),
+        ("roam-00-hero-11.png", "hanging signboard")
+    );
+    // An element's move still reads as one.
+    assert!(matches!(parsed("move door 1 2"), Command::Effects(_)));
+}

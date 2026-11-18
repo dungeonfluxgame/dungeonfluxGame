@@ -358,3 +358,24 @@ async fn generate_cast_writes_the_characters_whose_answers_read_and_reports_the_
         failed[0].character
     );
 }
+
+#[tokio::test]
+async fn an_unplaced_character_is_written_with_no_scene_and_a_placed_one_must_be_in_it() {
+    let host = scripted_host(vec![persona_answer("Walks the roads.", "Owes a debt.")]).await;
+    let refused = generate(&host, json!({"character": "hero-6"})).await;
+    assert!(
+        matches!(refused, DevReply::Rejected { .. }),
+        "not in the shown scene"
+    );
+    let written = done(generate(&host, json!({"character": "hero-6", "unplaced": true})).await);
+    assert!(
+        matches!(written, Generation::Generated { .. }),
+        "{written:?}"
+    );
+    assert_eq!(host.calls(), 1);
+    assert!(
+        read_persona(&host.directory(), &persona_id("hero-6").unwrap())
+            .unwrap()
+            .is_some()
+    );
+}

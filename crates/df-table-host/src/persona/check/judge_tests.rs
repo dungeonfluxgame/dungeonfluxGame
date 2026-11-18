@@ -9,8 +9,8 @@ use super::judge::{
     JUDGE_INSTRUCTION, check_request, judge_check, judge_facts, judge_schema, parse_verdict,
 };
 use super::request::{
-    AnswerField, CheckCall, CheckError, CheckKind, CheckReason, CheckRouteError, CheckTest,
-    CheckVerdict, DcBand, Initiator, ModeGround, Tone, mode_from_key, mode_key,
+    AnswerField, AttackMode, CheckCall, CheckError, CheckKind, CheckReason, CheckRouteError,
+    CheckTest, CheckVerdict, DcBand, Initiator, ModeGround, Tone, mode_from_key, mode_key,
 };
 
 fn player() -> super::request::CheckJudgeRequest {
@@ -51,6 +51,8 @@ fn an_athletics_check_stands_with_its_ability_skill_band_and_reason() {
                 mode: RollMode::Normal,
                 grounds: ModeGround::None,
                 uses: None,
+                attack_mode: None,
+                target_ac: None,
             }),
         }
     );
@@ -273,7 +275,8 @@ fn each_kind_asks_for_the_fields_it_needs_and_no_others() {
 fn a_weapon_or_healing_must_be_one_the_sheet_has() {
     let attack = with(
         athletics_answer(),
-        json!({"kind": "attack_roll", "skill": null, "ability": null, "uses": "longsword"}),
+        json!({"kind": "attack_roll", "skill": null, "ability": null, "uses": "longsword",
+               "attack_mode": "melee", "dc_band": null, "target_creature": "guard"}),
     );
     let call = called(&attack);
     assert_eq!(
@@ -284,7 +287,7 @@ fn a_weapon_or_healing_must_be_one_the_sheet_has() {
     assert_eq!(call.uses.as_deref(), Some("longsword"));
     let ranged = with(
         attack.clone(),
-        json!({"uses": "longbow", "ability": "dexterity"}),
+        json!({"uses": "longbow", "ability": "dexterity", "attack_mode": "ranged"}),
     );
     assert_eq!(called(&ranged).ability, Some(Ability::Dexterity));
     let wrong_ability = with(attack.clone(), json!({"ability": "dexterity"}));
@@ -390,6 +393,7 @@ fn a_mode_needs_a_ground_that_gives_it_and_the_sheet_holds_what_the_ground_needs
     let mut bare = player();
     bare.sheet.features.clear();
     bare.sheet.equipment.clear();
+    bare.sheet.stealth_disadvantage = None;
     assert_eq!(
         parse_verdict(&advantaged, &bare),
         Err(CheckError::GroundNotInSheet {
@@ -513,7 +517,14 @@ fn the_closed_keys_match_their_serde_names_and_read_back() {
 
 #[test]
 fn the_schema_lists_exactly_the_closed_sets() {
-    let schema = judge_schema();
+    let mut request = narrator();
+    request.checked = vec![CheckTest {
+        kind: CheckKind::Initiative,
+        ability: Some(Ability::Dexterity),
+        skill: None,
+    }];
+    request.intent = request.checked.first().cloned();
+    let schema = judge_schema(&request);
     let listed = |field: &str| -> Vec<Value> {
         schema["properties"][field]["enum"]
             .as_array()
@@ -543,7 +554,12 @@ fn the_schema_lists_exactly_the_closed_sets() {
     assert_eq!(listed("skill").len(), Skill::ALL.len() + 1);
     assert_eq!(listed("ability").len(), Ability::ALL.len() + 1);
     assert_eq!(schema["additionalProperties"], json!(false));
-    assert_eq!(schema["required"].as_array().map(Vec::len), Some(10));
+    assert_eq!(listed("attack_mode").len(), AttackMode::ALL.len() + 1);
+    assert_eq!(
+        listed("target_creature").len(),
+        df_rules::SRD_521_CREATURES.len() + 2
+    );
+    assert_eq!(schema["required"].as_array().map(Vec::len), Some(12));
 }
 
 #[test]
@@ -767,7 +783,7 @@ fn the_intended_test_is_called_with_the_judges_own_band_mode_and_grounds() {
     let answer = narrators(with(
         athletics_answer(),
         json!({"skill": "acrobatics", "ability": "dexterity", "dc_band": 20,
-               "mode": "disadvantage", "grounds": "armor_penalty"}),
+               "mode": "disadvantage", "grounds": "unfavorable_circumstance"}),
     ));
     let call = parse_verdict(&answer, &request)
         .expect("stands")
@@ -856,5 +872,334 @@ async fn a_judge_that_ignores_the_intent_is_asked_again_and_the_intent_reaches_i
     assert_eq!(
         table.lines_starting_with("PERSONA check_judge_retried"),
         ["PERSONA check_judge_retried why=intent_ignored"]
+    );
+}
+
+#[test]
+fn a_thrown_attack_needs_a_thrown_weapon_and_is_a_ranged_attack_with_its_melee_ability() {
+    use df_rules::roll::{AttackKind, D20Test, DiceExpression, DieSize, RollRequest};
+
+    use super::request::SheetAttack;
+    use super::rolling::roll_request;
+
+    let mut request = player();
+    request.sheet.attacks.push(SheetAttack {
+        id: "javelin".to_owned(),
+        name: "Javelin".to_owned(),
+        kind: AttackKind::Melee,
+        ability: Ability::Strength,
+        damage: DiceExpression {
+            count: 1,
+            die: DieSize::D6,
+            modifier: 3,
+        },
+        thrown: true,
+        style: None,
+    });
+    let thrown = with(
+        athletics_answer(),
+        json!({"kind": "attack_roll", "skill": null, "ability": null, "uses": "javelin",
+               "attack_mode": "thrown", "dc_band": null, "target_creature": "bandit"}),
+    );
+    let call = parse_verdict(&thrown, &request)
+        .expect("a javelin may be thrown")
+        .call
+        .expect("a roll is called");
+    assert_eq!(call.attack_mode, Some(AttackMode::Thrown));
+    let RollRequest::D20(roll) = roll_request(&call, &request.sheet, None).unwrap() else {
+        panic!("an attack is a d20 test");
+    };
+    assert_eq!(
+        roll.test,
+        D20Test::Attack {
+            ability: Ability::Strength,
+            kind: AttackKind::Ranged,
+            critical_from: request.sheet.critical_from,
+        }
+    );
+    let thrown_sword = with(thrown.clone(), json!({"uses": "longsword"}));
+    assert_eq!(
+        parse_verdict(&thrown_sword, &request),
+        Err(CheckError::AttackModeUnfit {
+            mode: AttackMode::Thrown,
+            weapon: "longsword".to_owned()
+        })
+    );
+    let swung_bow = with(
+        thrown.clone(),
+        json!({"uses": "longbow", "ability": "dexterity", "attack_mode": "melee"}),
+    );
+    assert!(matches!(
+        parse_verdict(&swung_bow, &request),
+        Err(CheckError::AttackModeUnfit { .. })
+    ));
+    let no_mode = with(thrown, json!({"attack_mode": null}));
+    assert_eq!(
+        parse_verdict(&no_mode, &request),
+        Err(CheckError::MissingField {
+            field: AnswerField::AttackMode
+        })
+    );
+}
+
+fn thieves_tools_answer() -> Value {
+    with(
+        athletics_answer(),
+        json!({
+            "kind": "tool_check", "ability": "dexterity", "skill": null,
+            "uses": "thieves_tools"
+        }),
+    )
+}
+
+/// A player moment for a rogue's sheet: thieves' tools and Sleight of Hand as given.
+fn rogue(tools: bool, sleight_of_hand: bool) -> super::request::CheckJudgeRequest {
+    let mut request = player();
+    if tools {
+        request.sheet.tool_proficiencies = vec!["thieves_tools".to_owned()];
+    }
+    if sleight_of_hand {
+        request.sheet.skill_proficiencies.push(Skill::SleightOfHand);
+    }
+    request.sheet.stealth_disadvantage = None;
+    request
+}
+
+#[test]
+fn a_tool_check_stands_with_a_tool_of_the_catalog_and_its_ability() {
+    let call = called(&thieves_tools_answer());
+    assert_eq!(call.kind, CheckKind::ToolCheck);
+    assert_eq!(call.ability, Some(Ability::Dexterity));
+    assert_eq!(call.skill, None);
+    assert_eq!(call.uses.as_deref(), Some("thieves_tools"));
+    assert_eq!(
+        super::view::tool_title(&call).as_deref(),
+        Some("Thieves' Tools (Dexterity)")
+    );
+}
+
+#[test]
+fn a_tool_check_names_a_catalog_tool_and_a_skill_of_its_own_ability() {
+    let unknown = with(thieves_tools_answer(), json!({"uses": "lockpick_of_doom"}));
+    assert!(matches!(refused(&unknown), CheckError::UnknownUses { .. }));
+    let other_ability = with(thieves_tools_answer(), json!({"skill": "arcana"}));
+    assert!(matches!(
+        refused(&other_ability),
+        CheckError::AbilityMismatch { .. }
+    ));
+    let no_tool = with(thieves_tools_answer(), json!({"uses": null}));
+    assert_eq!(
+        refused(&no_tool),
+        CheckError::MissingField {
+            field: AnswerField::Uses
+        }
+    );
+    let skilled = with(thieves_tools_answer(), json!({"skill": "sleight_of_hand"}));
+    assert_eq!(called(&skilled).skill, Some(Skill::SleightOfHand));
+}
+
+#[test]
+fn a_tool_check_has_advantage_only_with_both_the_tool_and_the_skill() {
+    let skilled = with(thieves_tools_answer(), json!({"skill": "sleight_of_hand"}));
+    let mode = |request: &super::request::CheckJudgeRequest| {
+        let call = parse_verdict(&skilled, request)
+            .expect("stands")
+            .call
+            .expect("a roll");
+        (call.mode, call.grounds)
+    };
+    assert_eq!(
+        mode(&rogue(true, true)),
+        (RollMode::Advantage, ModeGround::ToolAndSkill)
+    );
+    assert_eq!(
+        mode(&rogue(true, false)),
+        (RollMode::Normal, ModeGround::None)
+    );
+    assert_eq!(
+        mode(&rogue(false, true)),
+        (RollMode::Normal, ModeGround::None)
+    );
+    // The judge may not claim the ground where the sheet does not give it.
+    let claimed = with(
+        skilled.clone(),
+        json!({"mode": "advantage", "grounds": "tool_and_skill"}),
+    );
+    assert_eq!(
+        parse_verdict(&claimed, &rogue(true, false)),
+        Err(CheckError::GroundNotInSheet {
+            grounds: ModeGround::ToolAndSkill
+        })
+    );
+    // Disadvantage from the situation and Advantage from the sheet cancel (SRD 5.2.1 p. 8).
+    let hindered = with(
+        skilled,
+        json!({"mode": "disadvantage", "grounds": "unfavorable_circumstance"}),
+    );
+    let call = parse_verdict(&hindered, &rogue(true, true))
+        .expect("stands")
+        .call
+        .expect("a roll");
+    assert_eq!(
+        (call.mode, call.grounds),
+        (RollMode::Normal, ModeGround::None)
+    );
+}
+
+#[test]
+fn armour_that_hinders_stealth_gives_disadvantage_on_stealth_alone() {
+    let stealth = with(
+        athletics_answer(),
+        json!({"kind": "ability_check", "skill": "stealth", "ability": "dexterity"}),
+    );
+    // The warrior's chain mail hinders Stealth (SRD 5.2.1 p. 92): code adds the Disadvantage.
+    let call = called(&stealth);
+    assert_eq!(
+        (call.mode, call.grounds),
+        (RollMode::Disadvantage, ModeGround::ArmorPenalty)
+    );
+    // It is no ground for any other check.
+    let armored_climb = with(
+        athletics_answer(),
+        json!({"mode": "disadvantage", "grounds": "armor_penalty"}),
+    );
+    assert_eq!(
+        refused(&armored_climb),
+        CheckError::GroundNotInSheet {
+            grounds: ModeGround::ArmorPenalty
+        }
+    );
+    // Without such armour, Stealth is rolled as the judge set it.
+    let unarmored = rogue(false, false);
+    let call = parse_verdict(&stealth, &unarmored)
+        .expect("stands")
+        .call
+        .expect("a roll");
+    assert_eq!(call.mode, RollMode::Normal);
+    // A favourable circumstance and the armour cancel.
+    let favored = with(
+        stealth,
+        json!({"mode": "advantage", "grounds": "favorable_circumstance"}),
+    );
+    assert_eq!(called(&favored).mode, RollMode::Normal);
+}
+
+#[test]
+fn a_tool_check_adds_the_proficiency_bonus_only_with_the_tool_and_never_expertise() {
+    use df_rules::roll::{Proficiency, RollRequest};
+    let call = called(&thieves_tools_answer());
+    let mut sheet = player().sheet;
+    let proficiency =
+        |sheet: &super::request::CheckSheet| match super::rolling::roll_request(&call, sheet, None)
+        {
+            Ok(RollRequest::D20(request)) => request.proficiency,
+            other => panic!("a tool check is a d20 test: {other:?}"),
+        };
+    assert_eq!(proficiency(&sheet), Proficiency::None);
+    sheet.tool_proficiencies = vec!["thieves_tools".to_owned()];
+    sheet.skill_expertise = vec![Skill::SleightOfHand];
+    assert_eq!(
+        proficiency(&sheet),
+        Proficiency::Proficient {
+            bonus: sheet.proficiency_bonus
+        }
+    );
+}
+
+#[test]
+fn a_reason_that_cannot_stand_is_never_offered() {
+    // Host 40: a player moment has no narrator test to find unsuitable and nothing rolled here
+    // yet, so neither reason is offered to be answered again and again.
+    let schema = judge_schema(&player());
+    let reasons = schema["properties"]["reason"]["enum"]
+        .as_array()
+        .expect("reason lists its keys")
+        .clone();
+    assert!(
+        !reasons.contains(&json!("intent_unsuitable")),
+        "{reasons:?}"
+    );
+    assert!(!reasons.contains(&json!("already_checked")), "{reasons:?}");
+    assert!(reasons.contains(&json!("no_stakes")), "{reasons:?}");
+    assert!(
+        reasons.contains(&json!("uncertain_with_consequence")),
+        "{reasons:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_judge_that_keeps_answering_what_cannot_stand_gives_up_and_says_why() {
+    // Host 40: 56 askings over 11 minutes. Past its attempts the check does not resolve: the
+    // caller tells the player and offers the line again.
+    let unsuitable = with(
+        trivial_answer(),
+        json!({"reason": "intent_unsuitable", "initiator": "player"}),
+    );
+    let table = table(vec![unsuitable; 6]).await;
+    let error = judge_check(table.app(), &table.text, &player())
+        .await
+        .expect_err("no answer stands");
+    assert!(
+        matches!(
+            error,
+            CheckRouteError::AnswerRefused {
+                cause: CheckError::NoIntentToRefuse,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(table.calls.load(std::sync::atomic::Ordering::SeqCst), 4);
+    let gave_up = table.lines_starting_with("PERSONA check_judge_gave_up");
+    assert!(
+        gave_up[0].starts_with(
+            "PERSONA check_judge_gave_up character=gauntlet_warrior why=no_intent_to_refuse \
+             attempts=4"
+        ),
+        "{gave_up:?}"
+    );
+    let told = table.facts_of(1)["previous_refusal"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(told.contains("give trivial_no_check"), "{told}");
+}
+
+#[test]
+fn an_attack_on_someone_takes_their_armor_class_from_their_stat_block() {
+    // Host 42: "I punch Mara in the arm" never resolved: the judge gave no dc_band. The target's
+    // Armor Class is the rules data's (a commoner's is 10); the Unarmed Strike is sheet_tests'.
+    let punch = with(
+        athletics_answer(),
+        json!({"kind": "attack_roll", "skill": null, "ability": null,
+               "uses": "longsword", "attack_mode": "melee", "dc_band": null,
+               "target_creature": "commoner"}),
+    );
+    let call = called(&punch);
+    assert_eq!(call.target_ac, Some(10));
+    assert_eq!(call.dc_band, None);
+    let guard = with(punch.clone(), json!({"target_creature": "guard"}));
+    assert_eq!(called(&guard).target_ac, Some(16));
+    // No stat block named, a band guessed instead, or a stat block on a roll that is no attack.
+    assert_eq!(
+        refused(&with(punch.clone(), json!({"target_creature": null}))),
+        CheckError::MissingField {
+            field: AnswerField::TargetCreature
+        }
+    );
+    assert_eq!(
+        refused(&with(punch, json!({"dc_band": 10}))),
+        CheckError::UnexpectedField {
+            field: AnswerField::DcBand
+        }
+    );
+    assert_eq!(
+        refused(&with(
+            athletics_answer(),
+            json!({"target_creature": "commoner"})
+        )),
+        CheckError::UnexpectedField {
+            field: AnswerField::TargetCreature
+        }
     );
 }

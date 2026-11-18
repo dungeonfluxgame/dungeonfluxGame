@@ -39,6 +39,22 @@ fn handle_tokens(text: &str) -> impl Iterator<Item = (&str, &str)> {
     })
 }
 
+/// The ids whose names the character of `state` knows: those it learned (`known_names`), and the
+/// whole `party` when it is one of the party, who know each other's names from the start. The one
+/// rule for who knows whom by name: the prompts' handles and the seat's views both follow it.
+pub(crate) fn known_names(state: &PersonaState, party: &[String]) -> Vec<String> {
+    let mut known = state.known_names.clone();
+    if party.contains(&state.id) {
+        let fellows: Vec<String> = party
+            .iter()
+            .filter(|id| !known.contains(id))
+            .cloned()
+            .collect();
+        known.extend(fellows);
+    }
+    known
+}
+
 /// The ids a character may meet in one prompt and what it calls each.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Handles {
@@ -52,10 +68,16 @@ pub(super) struct Handles {
 }
 
 impl Handles {
-    /// What the character of `state` calls each of `ids` (duplicates once, in order) and everyone
-    /// in its own standings and attention. Every prompt of one scene passes the scene's cast
-    /// first, in its order, so a handle means the same person in a line and in its backfill.
-    pub(super) fn new<'a>(state: &'a PersonaState, ids: impl IntoIterator<Item = &'a str>) -> Self {
+    /// What the character of `state`, one of `party` or not ([`known_names`]), calls each of `ids`
+    /// (duplicates once, in order) and everyone in its own standings and attention. Every prompt
+    /// of one scene passes the scene's cast first, in its order, so a handle means the same person
+    /// in a line and in its backfill.
+    pub(super) fn new<'a>(
+        state: &'a PersonaState,
+        party: &[String],
+        ids: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let known = known_names(state, party);
         let from_state = state
             .relationships
             .iter()
@@ -74,7 +96,7 @@ impl Handles {
             if id == state.id || shown.iter().any(|(seen, _)| seen == id) {
                 continue;
             }
-            let called = if state.known_names.iter().any(|known| known == id) {
+            let called = if known.iter().any(|named| named == id) {
                 id.to_owned()
             } else {
                 strangers += 1;
@@ -84,7 +106,7 @@ impl Handles {
         }
         Self {
             own: state.id.clone(),
-            known: state.known_names.clone(),
+            known,
             shown,
         }
     }

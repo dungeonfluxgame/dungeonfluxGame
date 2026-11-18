@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use df_model::checkpoint::{Basis, ContentDigest, ExecutionMode, JobId};
+use df_playground::limits::{MAXIMUM_CAPTURE_MS, MAXIMUM_QUESTION_CHARACTERS};
 use df_provider_api::{
     ProviderFailureClass, RequestBasis, RequestBinding, RequestIdentity, RequestLimits,
     RequestModality, RequestOwnerState, RequestUsage, SttEventKind, SttSemantics, TtsEventKind,
@@ -39,9 +40,9 @@ use df_types::{
 };
 
 use super::limits::{
-    KEY_VARIABLES, MAXIMUM_ADMITTED_AUDIO_BYTES, MAXIMUM_ADMITTED_TEXT_BYTES, MAXIMUM_AUDIO_MS,
-    MAXIMUM_PROVIDER_REQUEST_BYTES, MAXIMUM_PROVIDER_RESPONSE_BYTES, MAXIMUM_TEXT_CHARACTERS,
-    SPEECH_DEADLINE, VOICE_LIST_DEADLINE,
+    KEY_VARIABLES, MAXIMUM_ADMITTED_AUDIO_BYTES, MAXIMUM_ADMITTED_TEXT_BYTES,
+    MAXIMUM_PROVIDER_REQUEST_BYTES, MAXIMUM_PROVIDER_RESPONSE_BYTES, SPEECH_DEADLINE,
+    VOICE_LIST_DEADLINE,
 };
 use super::request::{MissingSetting, SpeechError, SpeechProviderCause};
 use crate::environment;
@@ -375,7 +376,7 @@ async fn speak(
             MAXIMUM_ADMITTED_TEXT_BYTES,
             0,
             Duration::ZERO,
-            Usage::new(units(MAXIMUM_TEXT_CHARACTERS), UsageUnit::Character),
+            Usage::new(units(MAXIMUM_QUESTION_CHARACTERS), UsageUnit::Character),
         )
         .map_err(unbuildable)?,
         owner(&binding),
@@ -425,8 +426,8 @@ async fn listen(
         RequestLimits::new(
             MAXIMUM_ADMITTED_AUDIO_BYTES,
             0,
-            Duration::from_millis(MAXIMUM_AUDIO_MS),
-            Usage::new(u128::from(MAXIMUM_AUDIO_MS), UsageUnit::AudioMillisecond),
+            Duration::from_millis(MAXIMUM_CAPTURE_MS),
+            Usage::new(u128::from(MAXIMUM_CAPTURE_MS), UsageUnit::AudioMillisecond),
         )
         .map_err(unbuildable)?,
         owner(&binding),

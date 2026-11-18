@@ -136,12 +136,12 @@ async fn showing_or_removing_a_fixture_that_is_not_there_says_so() {
     let removed = run(&running, "fixture remove ghost")
         .await
         .expect_err("refused");
-    // The playground's refusals carry no cause yet; the sentence names the file.
+    // The sentence names the file.
     assert!(
         matches!(
             &removed,
             DevError::Rejected {
-                error: ReplyError::Canvas { cause: None, .. },
+                error: ReplyError::Playground(PlaygroundChangeError::InvalidChange { .. }),
                 message,
             } if message.contains("ghost.json")
         ),
@@ -160,12 +160,12 @@ async fn a_fixture_file_that_does_not_read_is_refused_with_its_position() {
         path.to_string_lossy().into_owned(),
     ];
     let error = run_dev(running.port, &words).await.expect_err("refused");
-    // The playground's refusals carry no cause yet; the sentence names the file and the line.
+    // The sentence names the file and the line.
     assert!(
         matches!(
             &error,
             DevError::Rejected {
-                error: ReplyError::Canvas { cause: None, .. },
+                error: ReplyError::Playground(PlaygroundChangeError::InvalidChange { .. }),
                 message,
             } if message.contains("bad.json, line")
         ),

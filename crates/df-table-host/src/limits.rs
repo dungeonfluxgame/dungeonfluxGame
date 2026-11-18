@@ -31,6 +31,15 @@ pub const MAXIMUM_EVENTS_PER_ANSWER: usize = 10_000;
 /// Largest request body accepted on the developer API, in bytes. The media add route reads its
 /// own body (see `media_ingest`).
 pub const MAXIMUM_REQUEST_BYTES: usize = 256 * MEBIBYTE;
+/// Largest request body a phone may send on the player listener, in bytes: a phone sends a name,
+/// a line, a look's words or its page's report, never a file, so a megabyte is far above any of
+/// them while a stranger on the network cannot make the host read hundreds.
+pub const MAXIMUM_PLAYER_REQUEST_BYTES: usize = MEBIBYTE;
+/// How long a signed media link a phone is given holds: the page's own
+/// `df_playground::limits::MEDIA_LINK_LIFETIME_S`, which also decides when the page takes a newer
+/// link, so the two cannot drift.
+pub const MEDIA_LINK_LIFETIME: std::time::Duration =
+    std::time::Duration::from_secs(df_playground::limits::MEDIA_LINK_LIFETIME_S);
 /// Most notices or problems one answer carries; more are summarized as "and N more".
 pub const MAXIMUM_LISTED_PROBLEMS: usize = 10_000;
 /// Largest answer the command line reads, in bytes.
@@ -112,6 +121,17 @@ pub const PHONE_QUIET_AFTER: Duration = Duration::from_secs(25);
 /// How often the player listener's watch looks for phones gone quiet and pages gone, so their lines
 /// are written while nothing else asks.
 pub const CLIENT_WATCH_INTERVAL: Duration = Duration::from_secs(5);
+/// How often the host reads the playground's files for their revision, so the pages, which learn of
+/// a new theme, fixture or package from their frames, follow an edit within this. One read serves
+/// every page.
+pub const FILES_WATCH_INTERVAL: Duration = Duration::from_secs(2);
+/// Most requests the player listener answers at once: a table of phones keeps a few each in
+/// flight (the frame's long wait, its seat's view and pages, a picture or two), so this is far
+/// above a table while a flood from the network cannot hold the host's workers.
+pub const MAXIMUM_PLAYER_REQUESTS: usize = 64;
+/// How long a window of the player listener's `PLAYER traffic` line covers: what phones cost the
+/// network shows once a minute, not once a request.
+pub const PLAYER_TRAFFIC_WINDOW: Duration = Duration::from_secs(60);
 /// How long open connections get to finish after an interrupt.
 pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 /// Deadline for connecting, sending and reading one answer on the command line. It covers the
@@ -143,3 +163,16 @@ pub const MAXIMUM_PENDING_APPROVALS: usize = 64;
 pub const MAXIMUM_FRIEND_PROFILES: usize = 10_000;
 /// Most heroes the dev host's hero library keeps. Deliberately large.
 pub const MAXIMUM_HEROES: usize = 100_000;
+/// Most lines a seat's inbox keeps for a runner that has not taken them; the oldest are forgotten
+/// first. Deliberately large.
+pub const MAXIMUM_INBOX_LINES: usize = 1_000;
+/// Most lines a seat's answers are kept for by their draft id, so a retry is answered as before;
+/// the oldest are forgotten first.
+pub const MAXIMUM_SAID_IDS: usize = 1_000;
+/// Most places designed in play the world keeps to go back to; the oldest are forgotten first.
+/// Deliberately large.
+pub const MAXIMUM_KEPT_PLACES: usize = 1_000;
+/// Most lines the table heard that the phones' story keeps; the oldest are forgotten first.
+pub const MAXIMUM_STORY_LINES: usize = 10_000;
+/// The longest a runner may wait for a seat's next line in one call.
+pub const LONGEST_INBOX_WAIT: Duration = Duration::from_secs(60 * 60);

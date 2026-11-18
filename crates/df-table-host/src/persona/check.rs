@@ -11,6 +11,8 @@
 //!   or mood do not fit the roll.
 //! - `view`: the conversion from a resolved roll to the display's `RollView`.
 //! - `flow`: one check start to finish with its times; `routes` and `cli` expose it.
+//! - `seat_roll`: a seat's own roll of a check of its hero sheet (`PLAY_SEAT_ROLL`), on both
+//!   listeners.
 //!
 //! Routes: `POST /dev/persona/check/judge` and `POST /dev/persona/check/run`; verbs:
 //! `persona check judge` and `persona check run`. The judge never decides how a roll comes out,
@@ -25,15 +27,21 @@ mod judge;
 mod limits;
 mod lines;
 mod numbers;
+mod pending;
 mod request;
 mod rolling;
 mod routes;
+mod seat_roll;
 mod sheet;
 mod view;
+mod vitals;
 
 pub use self::cli::CheckCommand;
+pub(crate) use self::pending::{PendingRollError, answer_pending_roll, pending_roll};
 pub use self::request::CheckRouteError;
+pub(crate) use self::routes::CheckRoutes;
 pub(super) use self::routes::router_over;
+pub(crate) use self::seat_roll::seat_router;
 
 #[cfg(test)]
 mod cli_tests;
@@ -47,6 +55,10 @@ mod judge_tests;
 mod lines_tests;
 #[cfg(test)]
 mod numbers_tests;
+#[cfg(test)]
+mod pending_tests;
+#[cfg(test)]
+mod seat_roll_tests;
 #[cfg(test)]
 mod sheet_tests;
 #[cfg(test)]

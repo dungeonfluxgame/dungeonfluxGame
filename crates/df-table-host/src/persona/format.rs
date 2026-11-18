@@ -191,16 +191,25 @@ fn spoken_lines(spoken: &Spoken, after_line: &str) -> Vec<String> {
             said.names_learned.join(", ")
         ));
     }
+    // A change to another owner's inventory (the ground of the place, where a thrown or dropped
+    // thing lies) names that owner, so it is never read as the speaker's own.
     lines.extend(said.inventory.iter().map(|change| {
+        let held_by = if change.owner == spoken.character {
+            String::new()
+        } else {
+            format!(" [owner {}]", change.owner)
+        };
         format!(
-            "  inventory: {} {} -> {} ({})",
+            "  inventory: {} {} -> {} ({}){held_by}",
             change.item, change.before, change.after, change.why
         )
     }));
     if said.repeat_retried {
         lines.push(format!(
             "  worded again: {}{}",
-            said.retry_reason.as_deref().unwrap_or("the first line was refused"),
+            said.retry_reason
+                .as_deref()
+                .unwrap_or("the first line was refused"),
             if said.repeats_recent {
                 "; the second still repeats recent"
             } else {

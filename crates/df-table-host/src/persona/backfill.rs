@@ -209,8 +209,10 @@ async fn backfill(
     // The scene's cast first, in its order, as the line's prompt has it: a handle means the same
     // person in a line and in the backfill of its gaps.
     let cast = scene.names();
+    let party = crate::seat::routes::party_personas(app).await;
     let handles = Handles::new(
         &state,
+        &party,
         cast.iter()
             .map(String::as_str)
             .chain(met.iter().map(|persona| persona.id().as_str())),
@@ -606,6 +608,8 @@ pub(super) async fn consider(
         intent: None,
         strike: false,
         declare: false,
+        given: None,
+        expect: None,
     };
     if request.coverage {
         let filled = fill_gaps(app, route, scene, persona, request, at_ms).await;

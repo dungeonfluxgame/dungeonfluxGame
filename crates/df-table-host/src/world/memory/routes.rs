@@ -27,7 +27,7 @@ use super::request::{
 use super::store::memory_directory;
 use super::{MemoryDraft, Put};
 use crate::blocking::run_blocking;
-use crate::dev_http::{parse_body, reply};
+use crate::dev_http::{parse_body, read_query, reply};
 use crate::media_library::{media_directory, store_bytes};
 use crate::state::AppState;
 
@@ -102,9 +102,7 @@ async fn listing(
     query: Result<Query<ListQuery>, QueryRejection>,
 ) -> Response {
     let result = async {
-        let Query(query) = query.map_err(|rejection| MemoryError::InvalidQuery {
-            detail: rejection.body_text(),
-        })?;
+        let query = read_query(query).map_err(MemoryError::InvalidQuery)?;
         let directory = memory_directory(&app);
         run_blocking(move || list(&directory, &query), MemoryError::Stopped).await
     }
@@ -117,9 +115,7 @@ async fn one(
     query: Result<Query<GetQuery>, QueryRejection>,
 ) -> Response {
     let result = async {
-        let Query(query) = query.map_err(|rejection| MemoryError::InvalidQuery {
-            detail: rejection.body_text(),
-        })?;
+        let query = read_query(query).map_err(MemoryError::InvalidQuery)?;
         let directory = memory_directory(&app);
         run_blocking(move || get_memory(&directory, &query), MemoryError::Stopped).await
     }
@@ -236,9 +232,7 @@ async fn looked_at(
     query: Result<Query<InspectQuery>, QueryRejection>,
 ) -> Response {
     let result = async {
-        let Query(query) = query.map_err(|rejection| MemoryError::InvalidQuery {
-            detail: rejection.body_text(),
-        })?;
+        let query = read_query(query).map_err(MemoryError::InvalidQuery)?;
         let media = media_directory(app.playground().files());
         run_blocking(move || inspect(&media, &query), MemoryError::Stopped).await
     }
@@ -250,12 +244,9 @@ async fn changes(
     State(app): State<Arc<AppState>>,
     query: Result<Query<HistoryQuery>, QueryRejection>,
 ) -> Response {
-    let result = match query {
-        Ok(Query(query)) => history(app.log(), &query),
-        Err(rejection) => Err(MemoryError::InvalidQuery {
-            detail: rejection.body_text(),
-        }),
-    };
+    let result = read_query(query)
+        .map_err(MemoryError::InvalidQuery)
+        .and_then(|query| history(app.log(), &query));
     answer(&app, "history", result)
 }
 

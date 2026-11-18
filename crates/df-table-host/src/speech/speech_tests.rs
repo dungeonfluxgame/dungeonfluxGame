@@ -246,7 +246,7 @@ async fn a_transcription_refuses_unknown_query_keys_bad_terms_and_an_unset_servi
             .await;
         assert_eq!(
             refused::<Transcript>(reply_of(&answer)),
-            SpeechError::InvalidQuery { cause },
+            SpeechError::InvalidTerms { cause },
             "{query}"
         );
     }
@@ -747,7 +747,10 @@ fn body_error() -> BodyError {
 fn every_error() -> Vec<SpeechError> {
     vec![
         SpeechError::InvalidBody(body_error()),
-        SpeechError::InvalidQuery {
+        SpeechError::InvalidQuery(crate::dev_http::QueryError {
+            detail: "x".to_owned(),
+        }),
+        SpeechError::InvalidTerms {
             cause: QueryCause::UnknownKey,
         },
         SpeechError::NotConfigured {
@@ -882,7 +885,7 @@ fn a_voice_and_a_clip_cause_each_have_their_own_sentence() {
         .chain(ClipCause::ALL.iter().map(ToString::to_string))
         .chain(QueryCause::ALL.iter().map(ToString::to_string))
         .collect();
-    assert_eq!(sentences.len(), 3 + 3 + 7);
+    assert_eq!(sentences.len(), 3 + 3 + 6);
 }
 
 #[test]

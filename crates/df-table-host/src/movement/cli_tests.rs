@@ -340,6 +340,8 @@ fn design_request() -> DesignRequest {
         context: Some(SITUATION.to_owned()),
         model: None,
         walk: None,
+        residents: Vec::new(),
+        approach: None,
     }
 }
 
@@ -749,6 +751,7 @@ async fn been_to(host: &Scripted, id: &str, feature: &str) {
             things: Vec::new(),
         },
         feature: Some(feature.to_owned()),
+        shops: Vec::new(),
     };
     let reply: crate::world::request::WorldReply<crate::world::request::PlaceSet> =
         post_json(host.running.port, "/dev/world/arrive", &request)
@@ -889,4 +892,241 @@ async fn a_service_that_gives_no_answer_ends_the_askings_with_its_own_error() {
     assert_eq!(error.key(), "text_service");
     assert_eq!(lines_starting_with(&host, "MOVE retry").len(), 2);
     assert!(host.calls() >= 3, "{}", host.calls());
+}
+
+#[tokio::test]
+async fn a_move_back_to_a_kept_place_goes_back_to_it_with_no_design_or_plate() {
+    let reading = json!({
+        "reading": "move", "kind": "walk", "who": ["danny"], "to": "the square",
+        "back_to": "roam-03", "unclear": null, "reason": null
+    });
+    let host = scripted(vec![reading]).await;
+    let world = host.running.port;
+    for (id, name) in [("roam-03", "a square"), ("roam-04", "a mill")] {
+        let arrive = json!({"place": {"id": id, "name": name,
+            "things": [{"id": "well", "name": "the old well", "look": "mossy stones"}]}});
+        let set: crate::world::request::WorldReply<crate::world::request::PlaceSet> =
+            post_json(world, crate::world::routes::path::WORLD_ARRIVE, &arrive)
+                .await
+                .unwrap();
+        assert!(matches!(set, DevReply::Done { .. }), "{set:?}");
+    }
+    let said = Said {
+        speaker: "danny",
+        situation: SITUATION,
+    };
+    let report = walk(
+        host.port,
+        "Let's go back to the square.",
+        None,
+        &danny(),
+        Some(said),
+        &MoveOptions::default(),
+    )
+    .await
+    .expect("the move goes back");
+    assert_eq!(host.calls(), 1, "only Jev's reading is asked for: {report}");
+    assert!(report.contains("back_to=roam-03"), "{report}");
+    assert!(
+        report.contains("back at place=roam-03 (a square)"),
+        "{report}"
+    );
+    let log: Vec<String> = host
+        .running
+        .state
+        .log()
+        .after_sequence(0, usize::MAX)
+        .into_iter()
+        .map(|line| line.text)
+        .collect();
+    assert!(
+        log.iter()
+            .any(|line| line == "MOVE act back_to=roam-03 design=skipped"),
+        "{log:?}"
+    );
+    assert!(!log.iter().any(|line| line.starts_with("MOVE designed")));
+}
+
+/// The refusal `persona say` gives a speaker the shown picture's scan did not name.
+fn not_in_picture(character: &str) -> crate::dev::DevError {
+    crate::dev::DevError::Rejected {
+        error: crate::dev::ReplyError::Persona(crate::persona::request::PersonaError::Shown {
+            cause: crate::shown_scene::ShownSceneError::UnknownCharacter {
+                character: character.to_owned(),
+                picture: "journey-00.png".to_owned(),
+                names: vec!["hero-9".to_owned()],
+            },
+        }),
+        message: "no character is named".to_owned(),
+    }
+}
+
+#[test]
+fn a_party_hero_the_picture_did_not_name_moves_unanchored_with_the_line_as_written() {
+    let options = act_options("party=hero-9,hero-10 text=Ask_the_way").expect("reads");
+    assert_eq!(
+        options.party,
+        vec!["hero-9".to_owned(), "hero-10".to_owned()]
+    );
+    let (line, report) =
+        super::cli::unanchored(&not_in_picture("hero-10"), "hero-10", &options).expect("goes on");
+    assert_eq!(line, "Ask_the_way");
+    assert!(report.starts_with("unanchored: hero-10 "), "{report}");
+    // Someone else missing, a speaker outside the party, a line not given as written and any
+    // other refusal stay the move's failure.
+    assert!(super::cli::unanchored(&not_in_picture("hero-9"), "hero-10", &options).is_none());
+    let outsider = act_options("party=hero-9 text=Ask").expect("reads");
+    assert!(super::cli::unanchored(&not_in_picture("hero-10"), "hero-10", &outsider).is_none());
+    let worded = act_options("party=hero-10").expect("reads");
+    assert!(super::cli::unanchored(&not_in_picture("hero-10"), "hero-10", &worded).is_none());
+    let no_layout = crate::dev::DevError::Rejected {
+        error: crate::dev::ReplyError::Persona(crate::persona::request::PersonaError::Shown {
+            cause: crate::shown_scene::ShownSceneError::NoLayout {
+                picture: "journey-00.png".to_owned(),
+            },
+        }),
+        message: "no layout".to_owned(),
+    };
+    assert!(super::cli::unanchored(&no_layout, "hero-10", &options).is_none());
+}
+
+#[test]
+fn the_party_joins_the_present_by_their_stored_personas_and_an_unknown_one_fails() {
+    let hero = |id: &str| PersonaSummary {
+        id: id.to_owned(),
+        display_name: id.to_owned(),
+        job: "adventurer".to_owned(),
+    };
+    let stored = vec![hero("hero-9"), hero("hero-10")];
+    // The scene shows hero-9 and the last place's baker; hero-10 was missed by its scan.
+    let present = super::cli::with_party(
+        &[hero("hero-9"), hero("baker")],
+        &["hero-9".to_owned(), "hero-10".to_owned()],
+        &stored,
+    )
+    .expect("both are stored");
+    let ids: Vec<&str> = present.iter().map(|summary| summary.id.as_str()).collect();
+    // Exactly the party moves: the baker stays behind.
+    assert_eq!(ids, vec!["hero-9", "hero-10"]);
+    let missing = super::cli::with_party(&[], &["hero-11".to_owned()], &stored);
+    assert!(matches!(
+        missing,
+        Err(super::cli::MoveError::Failed { ref key, .. }) if key == "unknown_party_member"
+    ));
+}
+
+#[tokio::test]
+async fn a_design_without_the_resident_the_scenario_puts_there_is_asked_again() {
+    let mut with_master = market_design();
+    with_master["residents"] = json!([{
+        "id": "guild_master", "display_name": "Orla", "job": "guild master",
+        "look": "broad grey-bearded man in a leather apron", "depth": "middle", "side": "right",
+        "doing": "leans on the counter", "wares": [], "coin": null
+    }]);
+    let host = scripted(vec![market_design(), with_master]).await;
+    let request = DesignRequest {
+        residents: vec![super::routes::ExpectedResident {
+            id: "guild_master".to_owned(),
+            who: "the guild master behind the counter".to_owned(),
+        }],
+        ..design_request()
+    };
+    let reply: DesignReply = post_json(host.port, path::MOVE_DESIGN, &request)
+        .await
+        .expect("the design route answers");
+    let DevReply::Done { value } = reply else {
+        panic!("the second answer, with the guild master, stands");
+    };
+    assert_eq!(value.residents[0].id, "guild_master");
+    assert_eq!(host.calls(), 2);
+    let context = host.facts_of(0)["context"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        context.contains("the guild master behind the counter (resident id guild_master)"),
+        "{context}"
+    );
+    assert_eq!(
+        host.facts_of(1)["refused_before"][0]["error"],
+        "malformed_design"
+    );
+}
+
+#[test]
+fn a_resident_option_names_an_id_and_who_they_are() {
+    let options = act_options("resident=smith|the_smith_at_her_forge").expect("reads");
+    assert_eq!(
+        options.residents,
+        vec![super::routes::ExpectedResident {
+            id: "smith".to_owned(),
+            who: "the_smith_at_her_forge".to_owned(),
+        }]
+    );
+    assert!(act_options("resident=Smith!|someone").is_err());
+    assert!(act_options("resident=smith").is_err());
+}
+
+#[tokio::test]
+async fn a_move_the_caller_read_goes_where_it_read_with_no_second_reading() {
+    // "keep walking a bit further, then head back into town": the intent judge read the step as
+    // the way into town; the move does not read the line again (no back_to the start place).
+    let host = scripted(Vec::new()).await;
+    let said = Said {
+        speaker: "danny",
+        situation: SITUATION,
+    };
+    let options = MoveOptions {
+        to: Some("into town".to_owned()),
+        ..MoveOptions::default()
+    };
+    let report = walk(
+        host.port,
+        "keep walking a bit further, then head back into town",
+        Some(TransitionStage::Interpreting),
+        &danny(),
+        Some(said),
+        &options,
+    )
+    .await
+    .expect("the move is carried through");
+    assert_eq!(host.calls(), 0, "no reading is asked for: {report}");
+    assert!(
+        report.contains("reading: move kind=walk who=danny to=into town"),
+        "{report}"
+    );
+    assert!(
+        report.contains("back_to=-"),
+        "no place gone back to: {report}"
+    );
+    assert!(
+        !report.contains("danny says:"),
+        "the caller said it: {report}"
+    );
+    assert_eq!(
+        act_options("to=into").unwrap().to.as_deref(),
+        Some("into"),
+        "to= is an option of move act"
+    );
+}
+
+#[tokio::test]
+async fn a_resident_id_already_taken_is_numbered_and_a_party_distance_left_out() {
+    // Host 45: the market's seller came back as an id the party had, five times, and the move
+    // was lost; a distance naming the hero was refused too.
+    let taken = design_breaking(|design| {
+        design["residents"] = json!([{
+            "id": "danny", "display_name": "Mara", "job": "fruit seller", "look": "stout",
+            "depth": "middle", "side": "right", "doing": "arranges pears", "wares": [],
+            "coin": null
+        }]);
+        design["distances"] = json!([{"id": "danny", "distance": "within_reach"}]);
+    });
+    let host = scripted(vec![taken]).await;
+    let DevReply::Done { value } = design(&host).await else {
+        panic!("the answer stands at once");
+    };
+    assert_eq!(host.calls(), 1, "no asking is spent on a taken id");
+    assert_eq!(value.residents[0].id, "danny_2");
+    assert_eq!(value.residents[0].display_name, "Mara");
 }

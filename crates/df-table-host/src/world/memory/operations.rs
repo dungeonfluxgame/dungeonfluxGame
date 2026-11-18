@@ -79,9 +79,9 @@ pub(super) fn list(directory: &Path, query: &ListQuery) -> Result<MemoryPage, Me
     filter.check()?;
     let limit = query.limit.unwrap_or(DEFAULT_PAGE);
     if limit == 0 || limit > MAXIMUM_PAGE {
-        return Err(MemoryError::InvalidQuery {
+        return Err(MemoryError::InvalidQuery(crate::dev_http::QueryError {
             detail: format!("limit must be from 1 to {MAXIMUM_PAGE}"),
-        });
+        }));
     }
     let book = read_book(directory, &query.owner)?;
     let (found, next) = page(&book, &filter, limit, query.after.as_deref())?;
@@ -115,6 +115,29 @@ pub(super) fn put(paths: &Paths, draft: MemoryDraft) -> Result<Put, MemoryError>
             Some(book) => book,
             None => MemoryBook::new(&draft.owner)?,
         };
+        let put = put_into(&mut book, draft)?;
+        Ok((book, put))
+    })
+}
+
+/// The memory `make` writes for the id the next `seq` of `owner` gives (`derived_id` of `kind`),
+/// put as `put` puts one, numbered in the same write so two never share an id.
+pub(super) fn put_next(
+    paths: &Paths,
+    owner: &str,
+    kind: &str,
+    make: impl FnOnce(String) -> MemoryDraft,
+) -> Result<Put, MemoryError> {
+    check_owner(owner)?;
+    check_kind(kind)?;
+    transact(&paths.memory, owner, |stored| {
+        let mut book = match stored {
+            Some(book) => book,
+            None => MemoryBook::new(owner)?,
+        };
+        let draft = make(derived_id(kind, book.next_seq));
+        check_draft(&draft)?;
+        check_in_library(&paths.media, &draft.pictures)?;
         let put = put_into(&mut book, draft)?;
         Ok((book, put))
     })

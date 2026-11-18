@@ -58,3 +58,8 @@ pub(super) const FLOURISHES_TOLD_WHOLE: usize = 16;
 /// make (a semicolon) is never an ask. A second refusal is not asked a third time, since each ask
 /// is about 5 s of the line's budget.
 pub(super) const ASKS_PER_LINE: u32 = 2;
+
+/// How often a check called for a seated hero, waiting for the player's roll with no deadline,
+/// logs that it still waits (`CHECK roll_waited`) and looks whether the seat still plays the hero.
+/// It is no timeout: the host never rolls in a player's place.
+pub(super) const ROLL_WATCH_MS: u64 = 15_000;

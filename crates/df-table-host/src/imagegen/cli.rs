@@ -1,7 +1,7 @@
 //! `media generate` on the command line: its grammar, and running it against a host (send the
 //! request, read the typed answer, print it). It never prints and never starts a server.
 //!
-//! `media generate <prompt...> as=NAME [purpose=plate|background|portrait] [aspect=W:H]
+//! `media generate <prompt...> as=NAME [purpose=plate|background|portrait|figure] [aspect=W:H]
 //! [wait=true] [base=<picture>] [refs=<picture>,<picture>...] [look=house|none]
 //! [priority=normal|emergency]`. `priority=emergency` puts the picture first in a backend's own
 //! queue (Forge's waiting line); `refs=` names
@@ -41,7 +41,7 @@ use crate::dev_http::DevReply;
 use crate::movement::brief::BriefStyle;
 
 pub const MEDIA_GENERATE_USAGE: &str = concat!(
-    "media generate <prompt...> as=NAME [purpose=plate|background|portrait] [aspect=W:H] ",
+    "media generate <prompt...> as=NAME [purpose=plate|background|portrait|figure] [aspect=W:H] ",
     "[wait=true] [base=<picture to edit, such as bar.png>] ",
     "[refs=<reference pictures, such as ref-warrior.png,ref-mara_adventurer.png>] ",
     "[look=house|none] [priority=normal|emergency] | ",
@@ -97,8 +97,13 @@ fn option_key(word: &str) -> Option<(&str, &str)> {
 }
 
 fn purpose(text: &str) -> Result<Purpose, CommandError> {
-    Purpose::from_key(text)
-        .ok_or_else(|| bad_choice("purpose", text, "plate, background or portrait".to_owned()))
+    Purpose::from_key(text).ok_or_else(|| {
+        bad_choice(
+            "purpose",
+            text,
+            "plate, background, portrait or figure".to_owned(),
+        )
+    })
 }
 
 fn priority(text: &str) -> Result<Priority, CommandError> {

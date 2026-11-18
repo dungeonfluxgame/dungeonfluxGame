@@ -1,0 +1,175 @@
+# Town to tomb (planning/town-to-tomb.md, part D): two seats' heroes (a Tiefling Rogue and a Human
+# Wizard in the owner's run) arrive in a river town, take the richest quest at the adventurers'
+# guild, buy weapons and supplies, travel five stops to an old tomb, open its door with a riddle
+# put together from three clues found on the way, and pass through an old gate to another
+# continent. Played from the phones: every line, pick, purchase and cast is a seat's; a step for a
+# class (`class=rogue`, `class=wizard`) goes to the seat whose hero is of it, and is skipped with a
+# `[skip]` line when nobody plays that class. Run by
+# development/market-thread.sh as a party journey (see play_journey there); check it with
+#   bash development/market-thread.sh development/market-threads/town-to-tomb.beats --plan
+# Image directions stay photographic (the moves' plates use the house BriefStyle) and never name
+# anyone. Every plate is a move's, drawn after the reference sheets of every hero in the scene.
+@journey town_to_tomb
+@journey_story development/market-threads/town-to-tomb.story.json
+@journey_hero_hint {name} is a {species} {class} who has come to Brackenford with a companion to find paid work as an adventurer.
+@journey_start_plate Unretouched photo, live-action medieval TV drama set, 35mm, morning daylight. Two travellers walk side by side through the stone arch of a river town's gate into a busy cobbled street of timber-framed houses, carts and stalls, seen whole from a few paces ahead. No writing anywhere.
+@journey_board_seconds 40
+# Each ask waits 10 minutes, a shop 15, before the seat is told and the first card is taken.
+@journey_ask_seconds 600
+@journey_shop_seconds 900
+@refs max=5
+@roam_dwell 8
+@roam_scene_kind scene
+@walk_hold 6
+@frames gate=100
+@frames every=60
+@frames insert_hold=20
+
+# What each kind of move is, told to the design with the stop's destination.
+@way town You are in the river town of Brackenford, a market town of timber-framed houses on a broad brown river. Go where the stop leads, within the town.
+@way road You have left the town behind. Follow the old road toward the tomb, a stage at a time, to the place the stop names.
+@way coast You have come through the old gate into a land you have never seen. Go where the stop leads, along this coast.
+@walk town 2 town=seeds
+@walk road 1 town=leaves
+@walk coast 1 town=seeds
+
+# The quests on the guild's board. The richest leads to the tomb; its clues are the story's
+# evidence, each gathered at a stop (@clue).
+@quest sealed_tomb | The sealed tomb of the tide-king | the guild master | 600 | 50 | an old tomb in the sea cliffs beyond the ruined causeway | shrine_verse,elder_token,milestone_marks
+@quest mill_wolves | Wolves at Harrow Mill | the guild master | 150 | 15 | Harrow Mill, a day upriver |
+@quest salt_escort | Guard the salt wagons | the guild master | 80 | 10 | the salt road to the coast towns |
+# Who is met at each stop: a resident of its design with that id, made a persona the first time
+# and kept, located in the plate like the heroes, on the phones' Talk to. A @talk step's line goes
+# to them unless the words are put to someone else (Jev's addressee judge).
+@npc town baker | a stout baker in a floury apron at a bread stall by the square
+@npc guild guild_master | the guild master behind the counter, a broad grey-bearded man in a leather apron
+@npc smithy smith | the smith at the counter, a strong woman with soot on her forearms and a leather apron, who keeps the shop
+@npc toll_bridge toll_keeper | the toll keeper leaning out of his booth by the barrier pole, a thin man in a faded blue coat
+@npc ferry ferryman | the old ferryman sitting on a coil of rope, weathered and white-whiskered
+@npc village elder | the village elder outside her cottage, an old woman in a grey shawl leaning on a stick
+@npc desert_coast harbour_woman | a woman of the harbour town in an undyed linen robe and an indigo head wrap, mending a net
+# What each of them knows, as anyone of their place does: public facts only, never a secret and
+# never what the clues mean or the riddle's answer (`@npc_knows <id> | <fact>`, told to them
+# whenever they answer).
+@npc_knows baker | The adventurers' guild of Brackenford keeps its hall on the far side of the market square, a long timber hall with a carved shield over the door, two streets from your stall.
+@npc_knows baker | Adventurers go there for paid work: the guild master pins the jobs on a board inside.
+@npc_knows baker | The weaponsmith and outfitter is just off the square, past the well, where the hammering is.
+@npc_knows guild_master | Three jobs are on the board: the sealed tomb in the sea cliffs beyond the ruined causeway (six hundred gold, fifty each paid ahead), the wolves at Harrow Mill (a hundred and fifty), and guarding the salt wagons on the coast road (eighty).
+@npc_knows guild_master | The way to the tomb: out of town over the toll bridge, past the roadside shrine, across the river by the old rope ferry, up to the hill village, then over the ruined causeway to the cliffs.
+@npc_knows guild_master | Nobody has opened the tomb's round door; folk say it answers only to a word, and that the old road keeps the signs of it.
+@npc_knows guild_master | Travellers should buy what they need at the weaponsmith and outfitter off the square before leaving.
+@npc_knows smith | You keep the weaponsmith and outfitter's shop: blades, bows, packs, rope, lanterns and road gear, at fair prices, and you will bargain a little with honest buyers.
+@npc_knows smith | The road to the cliffs is long and damp: rope, a lantern and good boots serve better there than a second blade.
+@npc_knows toll_keeper | The toll on the bridge is two silver a head, by order of the town; guild business is not exempt unless you choose to let it pass.
+@npc_knows toll_keeper | Past the bridge the road runs to the roadside shrine, then down to the river and the old rope ferry.
+@npc_knows ferryman | You run the rope ferry across the river; a crossing is one copper a head and you take no one in a storm.
+@npc_knows ferryman | Across the river a path climbs to the hill village; past it the marsh and the ruined causeway lead to the sea cliffs and the old tomb.
+@npc_knows ferryman | Few go to the tomb; the hill village's elder keeps the oldest stories of it.
+@npc_knows elder | Your family has kept a carved bone token from the days the tomb was built, passed from elder to elder, and you will show it to travellers you trust.
+@npc_knows elder | Past the village the marsh begins; the old causeway crosses it, and its last milestone stands at the foot of the cliffs.
+@npc_knows harbour_woman | This is a harbour town on the Sunward Coast; strangers never come out of the old white gate, which the town thought long dead.
+@npc_knows harbour_woman | The harbour master and the market are down by the boats, and the town speaks its own tongue, slowly, to foreigners.
+@clue shrine shrine_verse
+@clue village elder_token
+@clue causeway milestone_marks
+
+# A @check is the dungeon master calling the test it names (`<kind>:<ability>[:<skill>] dc=<band>
+# [tool=<catalog tool>] | prompt | the stakes`): the judge words and resolves it, and if it still
+# finds no roll needed the test is rolled anyway at that band (a tool check with its `tool=`). `dc=` is on the SRD's ladder (5, 10, 15, 20, 25, 30). A
+# card whose thing a following `@pay <thing> | <to> | <copper each> | <what for>` names is that
+# payment, through the inventory, instead of the test. A `gate` check bars the way until it
+# succeeds or a paying card is tapped; a `@fare <who> | <prompt>` step bars it until paid.
+#
+# Every card of a @stop ask is a movement to a place (where the party goes), never a talk or an
+# action there: what is said at a place is the next @talk or @ask step's.
+
+# 1. The town.
+@stop town | town | party | Where in Brackenford do you go first? | the market square of Brackenford, busy with stalls and townsfolk
+@card The market square | We head into the market square to get our bearings.
+@card The baker's stall | We follow the smell of fresh bread across the square to the baker's stall.
+@dm Brackenford smells of river mud, smoke and fresh bread. Somewhere ahead, a bell rings the hour.
+@talk party | Who do you speak to, and what do you ask? | Strangers with travelling gear have stopped at your stall.
+@card Ask about work | Excuse me, where would two adventurers find honest paid work in this town?
+
+# 2. The adventurers' guild: the guild master and the board.
+@stop guild | town | party | Where do you go now? | the adventurers' guild hall: a long timber hall with a counter, a quest board of pinned notices, and the guild master behind the counter, a broad grey-bearded man in a leather apron
+@card The guild hall | We go to the adventurers' guild hall.
+@talk party | What do you say to the guild master? | You are about to show them the quest board on the wall behind you.
+@card Ask for work | We are looking for work. What do you have on the board?
+@quest_board guild-quest-board | sealed_tomb,mill_wolves,salt_escort | Unretouched photo, close-up of a weathered wooden notice board on a timber wall, three parchment notices pinned to it with iron tacks, each a real sheet of rough paper, curled and stained, with no legible writing, a small object pinned beside each: a rusted iron key, a tuft of grey wolf fur, a pinch of coarse salt in a twist of cloth. Candlelight, worn wood grain, real paper texture.
+@dm The guild master taps the notice of the tomb. Six hundred gold, he says, and fifty each in hand before you go.
+
+# 3. The weaponsmith and outfitter.
+@stop smithy | town | party | Where do you go to get ready for the road? | a weaponsmith and outfitter's shop off the market square: blades and bows on the walls, packs, rope and lanterns on shelves, a smith at the counter
+@card The weaponsmith | We go to the weaponsmith and outfitter before we leave.
+@dm The shop rings with hammer blows from the forge behind it. The smith wipes her hands and waits.
+@shop each | Buy what you need on the Shop page, or haggle by talking. Tap Done when you are ready.
+@card Done | I'm done here.
+
+# 4. The toll bridge, leaving town.
+@stop toll_bridge | road | party | The road out of town crosses the river. How do you go on? | a stone toll bridge over the broad river at the edge of town, a toll keeper in a booth with a barrier pole across the road
+@card To the bridge | We take the road out of town toward the bridge.
+@dm A barrier pole bars the bridge. The toll keeper leans out of the booth and names his price: two silver a head.
+@check party ability_check:charisma:persuasion dc=10 gate | The toll keeper wants his toll. Talk your way across, or pay? | The toll keeper bars the bridge until he is paid or talked round; failing means paying the toll.
+@card Talk him round | We're on guild business for the tomb. Surely the guild's work crosses free?
+@card Pay the toll | Fair enough. Here's two silver each. | pay_toll
+@pay pay_toll | toll_keeper | 20 | the bridge toll of two silver each
+
+# 5. The roadside shrine: clue 1, the bell's verse.
+@stop shrine | road | party | Where does the road take you next? | a roadside shrine under an old yew, a bronze bell in a stone niche, salt and shells left on its ledge
+@card On to the shrine | We follow the road on toward the old shrine.
+@dm Under the yew, a small shrine. Its bronze bell has letters around the rim, worn almost smooth.
+@cast class=wizard | The letters are in an old script. You could cast Comprehend Languages from your Hero page, or say what you do.
+@check class=wizard ability_check:intelligence:history dc=10 | What do you make of the shrine and its bell? | Knowing the old coastal kings could tell what the bell's verse is about; failing leaves it a mystery for now.
+@card Study the bell | I study the bell's rim and recall what I know of the old coastal kings.
+@ask party | What do you look at here?
+@card Read the rim | I wipe the rim of the bell clean and read it closely.
+
+# 6. The ferry: an NPC to talk to, and a jammed chain.
+@stop ferry | road | party | The road ends at the river. How do you cross? | a rope ferry at a wooden landing on the broad river, its old ferryman sitting on a coil of rope
+@card Take the ferry | We go down to the ferry landing.
+@talk party | What do you say to the ferryman? | Two travellers want to cross; you know the old road past the causeway.
+@card Ask about the tomb | Have you ever carried anyone who went to the old tomb past the causeway?
+@fare party | The ferryman holds out a weathered hand: one copper a head to cross.
+@card Pay the fare | Here's a copper each for the crossing. | pay_fare
+@pay pay_fare | ferryman | 1 | the ferry fare of one copper each
+@check class=rogue ability_check:dexterity:sleight_of_hand dc=10 | The ferry's chain pin is jammed fast. What do you do? | The jammed pin holds the ferry's chain; failing means the ferryman sees the meddling and the crossing waits.
+@card Work the pin | I work the jammed pin loose with quick fingers before the ferryman notices.
+
+# 7. The hill village: clue 2, the elder's token.
+@stop village | road | party | Across the river, a path climbs. Where do you go? | a hill village of stone cottages with turf roofs above the river, its elder outside a cottage hung with drying nets
+@card Up to the village | We climb the path to the hill village.
+@talk party | What do you say to the village elder? | Strangers bound for the old tomb have come up the hill path.
+@card Ask about the tomb | Elder, we are bound for the tomb in the sea cliffs. What do your people remember of it?
+@check class=wizard ability_check:intelligence:investigation dc=15 | The elder's cottage is full of old charts and keepsakes. What do you look into? | The elder's charts may show the old way to the tomb; failing misses what they hold.
+@card Look into the charts | I look over the old charts and keepsakes for anything about the tomb.
+@ask party | What do you look at here?
+@card The bone token | I ask to see the carved bone token and look at it closely.
+
+# 8. The ruined causeway: a crossing, a quiet approach and clue 3, the milestone.
+@stop causeway | road | party | The marsh lies between you and the cliffs. How do you go on? | a ruined causeway of tilted stones across a tidal marsh, black water between the stones, a lichened milestone at its far end
+@card Cross the causeway | We start across the old causeway.
+@check party ability_check:strength:athletics dc=10 | The stones tilt and the gaps are wide. How do you cross? | A slip between the stones means a soaking in deep black water and a hard climb out.
+@card Leap the gaps | I jump from stone to stone, keeping my balance.
+@check class=rogue ability_check:dexterity:stealth dc=15 | Crows roost on the far stones; they would scream at anyone they see. How do you get past? | The crows would rise screaming and warn anything waiting at the cliffs.
+@card Slip past | I keep low and slip past the roosting crows without a sound.
+@ask party | What do you look at here?
+@card The milestone | I scrape the lichen off the milestone and look at what is cut into it.
+
+# 9. The tomb: a locked grate, then the riddle.
+@stop tomb_door | road | party | The cliff path leads on toward the tomb. Where do you go? | a tomb cut into a sea cliff, a round stone door carved with waves and a pale disc, a rusted iron grate locked across it
+@card To the tomb | We follow the cliff path to the tomb.
+@check class=rogue tool_check:dexterity:sleight_of_hand dc=15 tool=thieves_tools | A rusted lock holds the iron grate shut. What do you do? | The grate's rusted lock needs thieves' tools to pick; failing jams it for now.
+@card Pick the lock | I take out my thieves' tools and work the rusted lock.
+@check class=wizard ability_check:intelligence:arcana dc=15 | The pale disc above the door hums faintly. What do you make of it? | The disc's magic may be a ward on the door; failing leaves its purpose unknown.
+@card Study the disc | I study the pale disc and the carvings around it for the magic in them.
+@riddle tide_door | The door speaks in a voice of grinding stone. I keep no hours yet I keep time. I climb the stones and never tire. A pale lamp pulls me through the night. Twice a day I come, twice a day I go. Name me, and pass. | the_tide | the tide of the sea, rising and falling twice a day as the moon pulls it | shrine_verse,elder_token,milestone_marks | stalled
+@dm The round door rolls aside. Behind it, a gate of white stone stands in the dark, and through it blows warm wind and the smell of a different sea.
+
+# 10. Through the gate: another continent.
+@teleport sunward_coast | a gate of white stone on a sun-bleached shore | The Sunward Coast | a sun-bleached desert coast of pale limestone and dunes under a hard noon sun, flat-roofed houses of whitewashed mud brick with blue doors, palm-frond awnings, people in loose undyed linen robes and indigo head wraps, a turquoise sea
+@stop desert_coast | coast | party | You step through onto a strange shore. Where do you go? | a harbour town of whitewashed mud-brick houses on a sun-bleached shore, fishing boats with lateen sails drawn up on the sand, townsfolk in linen robes and indigo head wraps
+@card Toward the town | We walk toward the white town on the shore.
+@talk party | People stare at you. What do you say? | Two strangers in foreign dress have just walked out of the old white gate.
+@card Greet them | Peace to you. We have come a very long way. Where are we?
+@dm The sea here is warm and the sun is high. Wherever the gate has brought you, your road goes on from here.

@@ -54,6 +54,8 @@ pub(super) fn sheet() -> CheckSheet {
             Skill::Survival,
         ],
         skill_expertise: Vec::new(),
+        tool_proficiencies: Vec::new(),
+        stealth_disadvantage: Some("Chain Mail".to_owned()),
         initiative_proficient: true,
         critical_from: 19,
         attacks: vec![
@@ -67,6 +69,8 @@ pub(super) fn sheet() -> CheckSheet {
                     die: DieSize::D8,
                     modifier: 3,
                 },
+                thrown: false,
+                style: None,
             },
             SheetAttack {
                 id: "longbow".to_owned(),
@@ -78,6 +82,8 @@ pub(super) fn sheet() -> CheckSheet {
                     die: DieSize::D8,
                     modifier: 1,
                 },
+                thrown: false,
+                style: None,
             },
         ],
         healing: vec![SheetHealing {
@@ -94,6 +100,7 @@ pub(super) fn sheet() -> CheckSheet {
             name: "champion_remarkable_athlete".to_owned(),
             text: "Advantage on Initiative rolls and on Strength (Athletics) checks.".to_owned(),
         }],
+        not_in_play: Vec::new(),
     }
 }
 

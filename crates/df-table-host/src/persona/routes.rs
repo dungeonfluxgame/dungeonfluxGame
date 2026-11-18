@@ -40,7 +40,7 @@ use super::request::{
     Answered, AskRequest, Audience, BackfillRecord, BackfillRequest, Backfilled, BackfillsQuery,
     CastRow, CoverageRequest, Covered, EditRequest, Edited, GenerateCastRequest, GenerateRequest,
     Generation, GuideRequest, Guided, PersonaError, PersonaRemoved, PersonaStored, RemoveRequest,
-    SaidLine, SayRequest, ShowQuery, Spoken, VoiceRequest, summary_of,
+    SaidLine, SayExpect, SayRequest, ShowQuery, Spoken, VoiceRequest, summary_of,
 };
 use super::storage::{
     PERSONA_WRITES, check_reserved, forget_given_guidance, list_personas, persona_directory,
@@ -48,7 +48,7 @@ use super::storage::{
 };
 use crate::adapters::RecordedDice;
 use crate::blocking::{run_blocking, run_owned};
-use crate::dev_http::{parse_body, reply};
+use crate::dev_http::{parse_body, read_query, reply};
 use crate::observe::WallClock;
 use crate::speech::{Speech, SpeechFeature, Voiced, sound_change};
 use crate::state::AppState;
@@ -88,6 +88,9 @@ pub mod path {
     pub const PERSONA_GUIDE: &str = "/dev/persona/guide";
     /// Voices and shows a line of the dungeon master, the narrator (POST a `NarrateLine`).
     pub const PERSONA_NARRATE: &str = "/dev/persona/narrate";
+    /// The looks of the seated heroes among the characters asked for, by id (POST a
+    /// `LooksRequest`): what a plate's brief takes as their look.
+    pub const PERSONA_LOOKS: &str = "/dev/persona/looks";
 }
 
 /// The voice the dungeon master speaks in (`speech voice narrator <voice>`).
@@ -172,12 +175,9 @@ async fn show(
 ) -> Response {
     let app = &routes.app;
     let known = known_id(&id);
-    let checked = match query {
-        Ok(Query(query)) => persona_id(&id).map(|id| (id, query.audience)),
-        Err(rejection) => Err(PersonaError::InvalidQuery {
-            detail: rejection.body_text(),
-        }),
-    };
+    let checked = read_query(query)
+        .map_err(PersonaError::InvalidQuery)
+        .and_then(|query| persona_id(&id).map(|id| (id, query.audience)));
     let (id, audience) = match checked {
         Ok(checked) => checked,
         Err(error) => return answer::<Persona>(app, "show", known, Err(error)),
@@ -346,19 +346,31 @@ async fn generate(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Res
     let owned = Arc::clone(&routes);
     let result = run_owned(
         async move {
-            let scene = ShownScene::read(&owned.app).await?;
-            scene.check(&request.character)?;
+            // A character not in the shown scene is written with no scene read.
+            let scene = if request.unplaced {
+                None
+            } else {
+                let scene = ShownScene::read(&owned.app).await?;
+                scene.check(&request.character)?;
+                Some(scene)
+            };
             let writing = Writing {
                 hint: request.hint.as_deref(),
                 guidance: request.guidance.as_ref(),
                 model: request.model.as_deref(),
                 overwrite: request.overwrite,
+                names_taken: &request.names_taken,
+                as_painted: request.as_painted.as_deref(),
             };
             // A failure of the generation itself is recorded where it happened.
-            Ok(
-                generate_character(&owned.app, &owned.text, &scene, &request.character, writing)
-                    .await,
+            Ok(generate_character(
+                &owned.app,
+                &owned.text,
+                scene.as_ref(),
+                &request.character,
+                writing,
             )
+            .await)
         },
         PersonaError::Stopped,
     )
@@ -385,6 +397,8 @@ async fn generate_scene_cast(State(routes): State<Arc<PersonaRoutes>>, bytes: By
                 guidance: request.guidance.as_ref(),
                 model: request.model.as_deref(),
                 overwrite: request.overwrite,
+                names_taken: &[],
+                as_painted: None,
             };
             Ok(generate_cast(&owned.app, &owned.text, &scene, writing).await)
         },
@@ -467,6 +481,7 @@ async fn cue_line(
     }
     let applied = crate::playground::apply_scene_changes(&routes.app, changes).await?;
     shot.applied(&routes.app, applied.revision);
+    routes.app.seats().hear(Some(&character), &said.line);
     Ok(Spoken {
         character,
         said,
@@ -505,6 +520,7 @@ pub(super) async fn narrate_line(
         changes.push(sound_change(clip));
     }
     let applied = crate::playground::apply_scene_changes(&routes.app, changes).await?;
+    routes.app.seats().hear(None, &text);
     let rest = rest_of_narration(&text);
     let app = Arc::downgrade(&routes.app);
     routes.app.narration_rest().keep(tokio::spawn(async move {
@@ -568,7 +584,11 @@ async fn say(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
             let (scene, route, own) =
                 asked_of(&owned, &request.character, request.model.as_deref()).await?;
             let others = others_of(&scene, &request.character);
-            cue_thinking(&owned.app, &request.character).await?;
+            // A line said already is only judged for what it moves: no cue, no voice.
+            let said_already = request.expect == Some(SayExpect::SaidInventory);
+            if !said_already {
+                cue_thinking(&owned.app, &request.character).await?;
+            }
             let occasion = Occasion {
                 situation: &request.situation,
                 question: None,
@@ -579,14 +599,26 @@ async fn say(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
                 intent: request.intent.as_deref(),
                 strike: request.strike,
                 declare: false,
+                given: request.text.as_deref(),
+                expect: request.expect,
             };
             let said = match say_line(&owned.app, &route, &scene, &own, occasion).await {
                 Ok(said) => said,
                 Err(error) => {
-                    clear_thinking(&owned.app, &request.character).await;
+                    if !said_already {
+                        clear_thinking(&owned.app, &request.character).await;
+                    }
                     return Err(error);
                 }
             };
+            if said_already {
+                return Ok(Ok(Spoken {
+                    character: request.character.clone(),
+                    said,
+                    revision: 0,
+                    voice: None,
+                }));
+            }
             // The cue goes through the scene path, which records its own refusals.
             let spoken = cue_line(
                 &owned,
@@ -790,16 +822,14 @@ async fn backfills(
     query: Result<Query<BackfillsQuery>, QueryRejection>,
 ) -> Response {
     let app = &routes.app;
-    let query = query.map(|Query(query)| query);
+    let query = read_query(query);
     let known = query
         .as_ref()
         .ok()
         .and_then(|query| known_id(&query.id))
         .map(str::to_owned);
     let read = async {
-        let query = query.map_err(|rejection| PersonaError::InvalidQuery {
-            detail: rejection.body_text(),
-        })?;
+        let query = query.map_err(PersonaError::InvalidQuery)?;
         let id = persona_id(&query.id)?;
         let directory = persona_directory(app);
         run_blocking(
@@ -830,11 +860,20 @@ pub fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>, speech: Speech) -
         .route(path::PERSONA_SAY, post(say))
         .route(PERSONA_DECLARE, post(declare_action))
         .route(path::PERSONA_NARRATE, post(narrate))
+        .route(path::PERSONA_LOOKS, post(super::hero_look::looks))
         .route(path::PERSONA_ASK, post(ask))
         .route(path::PERSONA_COVERAGE, post(coverage))
         .route(path::PERSONA_BACKFILL, post(backfill))
         .route(path::PERSONA_BACKFILLS, get(backfills))
         .route(path::PERSONA_GUIDE, post(guide))
+        .route(
+            super::intent::PERSONA_INTENT,
+            post(super::intent::post_intent),
+        )
+        .route(
+            super::intent::PERSONA_INTENT_SCENE,
+            post(super::intent::post_scene),
+        )
         .with_state(Arc::clone(&routes))
         .merge(super::check::router_over(
             routes,

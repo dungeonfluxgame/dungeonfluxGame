@@ -1,5 +1,6 @@
 //! What the host's own routes read and answer: the query of `/events.json`, the reply of
-//! `GET /dev/host/status`, and why a host route refuses (`HostError`).
+//! `GET /dev/host/status`, the change `/dev/effect` and `/dev/reload` made (`wire::Changed`), and
+//! why a host route refuses (`HostError`).
 //!
 //! The events query is typed at the edge: an area is checked once, here, and a reader never sends
 //! free text into a filter. The status is a reading of counters the host already keeps; nothing
@@ -8,9 +9,10 @@
 use std::fmt;
 
 use axum::http::StatusCode;
+use df_table::event::RejectionCause;
 use serde::{Deserialize, Serialize};
 
-use crate::dev_http::{DevReply, RouteError};
+use crate::dev_http::{BodyError, DevReply, QueryError, RouteError};
 use crate::observe::SinkHealth;
 
 /// The answer of a host route: the value, or its refusal.
@@ -115,15 +117,28 @@ impl QueriedRoute {
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum HostError {
     /// The query is not one the route reads: an unknown parameter, or a value of the wrong type.
-    /// `detail` is the reader's sentence, which names the parameter.
-    InvalidQuery { detail: String },
+    InvalidQuery(QueryError),
+    /// The body of `/dev/effect` is not an effect: not its JSON, broken off, or too large.
+    InvalidBody(BodyError),
+    /// The effect was refused before or as the canvas applied it: `cause` is the canvas's closed
+    /// cause, and `detail` the sentence naming the element or value.
+    InvalidEffect {
+        cause: RejectionCause,
+        detail: String,
+    },
+    /// `/dev/reload` found problems in the kind files, one sentence each, so the loaded kinds are
+    /// unchanged.
+    InvalidKinds { problems: Vec<String> },
 }
 
 impl HostError {
     /// The closed word of the refusal, for the audit line.
     pub fn key(&self) -> &'static str {
         match self {
-            Self::InvalidQuery { .. } => "invalid_query",
+            Self::InvalidQuery(_) => "invalid_query",
+            Self::InvalidBody(_) => "invalid_body",
+            Self::InvalidEffect { .. } => "invalid_effect",
+            Self::InvalidKinds { .. } => "invalid_kinds",
         }
     }
 }
@@ -131,7 +146,12 @@ impl HostError {
 impl fmt::Display for HostError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidQuery { detail } => write!(formatter, "the query is not valid: {detail}"),
+            Self::InvalidQuery(error) => write!(formatter, "{error}"),
+            Self::InvalidBody(error) => write!(formatter, "{error}"),
+            Self::InvalidEffect { detail, .. } => formatter.write_str(detail),
+            Self::InvalidKinds { .. } => {
+                formatter.write_str("the kind files have problems; the loaded kinds are unchanged")
+            }
         }
     }
 }
@@ -141,8 +161,23 @@ impl std::error::Error for HostError {}
 impl RouteError for HostError {
     fn status(&self) -> StatusCode {
         match self {
-            Self::InvalidQuery { .. } => StatusCode::BAD_REQUEST,
+            Self::InvalidBody(error) => error.status(),
+            Self::InvalidQuery(_) | Self::InvalidEffect { .. } | Self::InvalidKinds { .. } => {
+                StatusCode::BAD_REQUEST
+            }
         }
+    }
+}
+
+impl From<BodyError> for HostError {
+    fn from(error: BodyError) -> Self {
+        Self::InvalidBody(error)
+    }
+}
+
+impl From<QueryError> for HostError {
+    fn from(error: QueryError) -> Self {
+        Self::InvalidQuery(error)
     }
 }
 

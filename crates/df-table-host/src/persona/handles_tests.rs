@@ -21,6 +21,7 @@ fn state(known: &[&str]) -> PersonaState {
 fn a_stranger_is_a_handle_and_a_known_name_its_id() {
     let handles = Handles::new(
         &state(&["warrior"]),
+        &[],
         ["mara_adventurer", "warrior", "jory_adventurer"],
     );
     assert_eq!(handles.shown("mara_adventurer"), "person-1");
@@ -39,6 +40,18 @@ fn a_stranger_is_a_handle_and_a_known_name_its_id() {
 }
 
 #[test]
+fn a_party_member_knows_the_others_of_the_party_by_name_and_no_one_else_does() {
+    let party = ["weapon_seller".to_owned(), "mara_adventurer".to_owned()];
+    let fellow = Handles::new(&state(&[]), &party, ["mara_adventurer", "jory_adventurer"]);
+    assert_eq!(fellow.shown("mara_adventurer"), "mara_adventurer");
+    assert_eq!(fellow.shown("jory_adventurer"), "person-1");
+    let mut outsider = state(&[]);
+    outsider.id = "innkeeper".to_owned();
+    let stranger = Handles::new(&outsider, &party, ["mara_adventurer"]);
+    assert_eq!(stranger.shown("mara_adventurer"), "person-1");
+}
+
+#[test]
 fn recent_labels_briefs_and_the_state_carry_no_strangers_id() {
     let mut met = state(&[]);
     met.relationships = vec![Relationship {
@@ -54,7 +67,7 @@ fn recent_labels_briefs_and_the_state_carry_no_strangers_id() {
             gist: "asked about the fuller".to_owned(),
         }],
     };
-    let handles = Handles::new(&met, ["mara_adventurer"]);
+    let handles = Handles::new(&met, &[], ["mara_adventurer"]);
     assert_eq!(
         handles.recent_line("mara_adventurer: How was the fuller cut?"),
         "person-1: How was the fuller cut?"
@@ -66,7 +79,7 @@ fn recent_labels_briefs_and_the_state_carry_no_strangers_id() {
 
 #[test]
 fn an_answers_handles_read_back_to_ids() {
-    let handles = Handles::new(&state(&[]), ["mara_adventurer"]);
+    let handles = Handles::new(&state(&[]), &[], ["mara_adventurer"]);
     let appraisal = Appraisal {
         emotions: Vec::new(),
         toward: Some("person-1".to_owned()),
@@ -89,7 +102,7 @@ fn an_answers_handles_read_back_to_ids() {
 
 #[test]
 fn the_character_itself_known_names_and_unknown_labels_are_shown_as_the_rule_says() {
-    let handles = Handles::new(&state(&["warrior"]), ["mara_adventurer"]);
+    let handles = Handles::new(&state(&["warrior"]), &[], ["mara_adventurer"]);
     assert_eq!(handles.shown("weapon_seller"), "weapon_seller", "itself");
     assert_eq!(
         handles.shown("warrior"),
@@ -117,9 +130,9 @@ fn a_stall_keeper_in_the_world_facts_is_shown_as_the_character_knows_them() {
     let facts = serde_json::json!({"stalls": [{"keeper": "weapon_seller", "items": []}]});
     let mut stranger = state(&[]);
     stranger.id = "mara_adventurer".to_owned();
-    let seen = Handles::new(&stranger, ["weapon_seller"]).world_facts(facts.clone());
+    let seen = Handles::new(&stranger, &[], ["weapon_seller"]).world_facts(facts.clone());
     assert_eq!(seen["stalls"][0]["keeper"], "person-1");
-    let own = Handles::new(&state(&[]), ["mara_adventurer"]).world_facts(facts);
+    let own = Handles::new(&state(&[]), &[], ["mara_adventurer"]).world_facts(facts);
     assert_eq!(
         own["stalls"][0]["keeper"], "weapon_seller",
         "the keeper's own stall"

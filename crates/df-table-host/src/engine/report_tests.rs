@@ -8,12 +8,12 @@ use df_table::outcome::DeclineCode;
 use df_table::owner_queue::NotDeclinedCause;
 use df_table::ports::PortName;
 
-use crate::dev_http::{BodyCause, BodyError, RouteError};
+use crate::dev_http::{BodyCause, BodyError, QueryError, RouteError};
 
 use super::commit::CommitError;
 use super::report::{
-    CommitDisposition, DevControl, EngineError, ForceCause, QueryError, RefusalCause,
-    UnreadableBodyCause, ViewCause, WireIntentCause,
+    CommitDisposition, DevControl, EngineError, ForceCause, RefusalCause, ViewCause,
+    WireIntentCause,
 };
 use super::setup::StartCause;
 
@@ -47,10 +47,6 @@ fn every_closed_key_of_the_engine_routes_is_its_serde_name_and_reads_back() {
         assert_eq!(cause.key(), serde_name(&cause));
         assert_eq!(StartCause::from_key(cause.key()), Some(cause));
     }
-    for cause in UnreadableBodyCause::ALL {
-        assert_eq!(cause.key(), serde_name(&cause));
-        assert_eq!(UnreadableBodyCause::from_key(cause.key()), Some(cause));
-    }
 }
 
 /// One of every variant, so a variant added without a key or a status is caught.
@@ -73,12 +69,6 @@ fn every_error() -> Vec<EngineError> {
         EngineError::InvalidQuery(QueryError {
             detail: "missing field `seat`".to_owned(),
         }),
-        EngineError::UnreadableBody {
-            cause: UnreadableBodyCause::TooLarge,
-        },
-        EngineError::UnreadableBody {
-            cause: UnreadableBodyCause::Interrupted,
-        },
         EngineError::MachineNotOnTable {
             machine: "dialogue".to_owned(),
         },
@@ -293,21 +283,23 @@ fn a_refusal_status_names_whose_fault_it_is() {
 
 #[test]
 fn a_body_over_the_limit_is_413_one_that_broke_off_400_and_a_report_name_the_callers_mistake() {
-    let too_large = EngineError::UnreadableBody {
-        cause: UnreadableBodyCause::TooLarge,
+    let body = |cause| {
+        EngineError::InvalidBody(BodyError {
+            cause,
+            line: 0,
+            column: 0,
+            detail: "length limit exceeded".to_owned(),
+        })
     };
-    let broke_off = EngineError::UnreadableBody {
-        cause: UnreadableBodyCause::Interrupted,
-    };
+    let too_large = body(BodyCause::TooLarge);
+    let broke_off = body(BodyCause::Truncated);
 
     assert_eq!(too_large.status(), StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(broke_off.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(too_large.key(), "unreadable_body");
+    assert_eq!(too_large.key(), "invalid_body");
     let written = serde_json::to_value(&too_large).expect("serializes");
-    assert_eq!(
-        written,
-        serde_json::json!({"error": "unreadable_body", "cause": "too_large"})
-    );
+    assert_eq!(written["error"], "invalid_body");
+    assert_eq!(written["cause"], "too_large");
     for mistake in [
         EngineError::UnknownReport {
             report: "x".to_owned(),

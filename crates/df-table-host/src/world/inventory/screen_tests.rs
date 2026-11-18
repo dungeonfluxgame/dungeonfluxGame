@@ -29,6 +29,8 @@ fn item(id: &str, count: u64, usage: ItemUse) -> InventoryItem {
         look: format!("the {id} as it looks"),
         usage,
         count,
+        price_cp: None,
+        coin: None,
     }
 }
 

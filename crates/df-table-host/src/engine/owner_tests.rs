@@ -401,6 +401,7 @@ async fn force_puts_the_table_in_a_machine_state_through_the_machines_own_entry_
             machine: "explore".to_owned(),
             state: "presenting".to_owned(),
             payload: None,
+            clear_scene: false,
         })
         .await;
     let Err(EngineError::ForceRefused {
@@ -415,7 +416,8 @@ async fn force_puts_the_table_in_a_machine_state_through_the_machines_own_entry_
             .force(ForceRequest {
                 machine: "nobody".to_owned(),
                 state: "x".to_owned(),
-                payload: None
+                payload: None,
+                clear_scene: false
             })
             .await,
         Err(EngineError::UnknownMachine { .. })
@@ -425,7 +427,8 @@ async fn force_puts_the_table_in_a_machine_state_through_the_machines_own_entry_
             .force(ForceRequest {
                 machine: "lobby".to_owned(),
                 state: "elsewhere".to_owned(),
-                payload: None
+                payload: None,
+                clear_scene: false
             })
             .await,
         Err(EngineError::UnknownState { .. })
@@ -435,7 +438,8 @@ async fn force_puts_the_table_in_a_machine_state_through_the_machines_own_entry_
             .force(ForceRequest {
                 machine: "lobby".to_owned(),
                 state: "started".to_owned(),
-                payload: None
+                payload: None,
+                clear_scene: false
             })
             .await,
         Err(EngineError::ForcedStateMismatch { .. })
@@ -445,7 +449,8 @@ async fn force_puts_the_table_in_a_machine_state_through_the_machines_own_entry_
             .force(ForceRequest {
                 machine: "lobby".to_owned(),
                 state: "started".to_owned(),
-                payload: Some(serde_json::json!({"phase": "nope"}))
+                payload: Some(serde_json::json!({"phase": "nope"})),
+                clear_scene: false
             })
             .await,
         Err(EngineError::PayloadUnreadable { .. })
@@ -458,6 +463,7 @@ async fn force_puts_the_table_in_a_machine_state_through_the_machines_own_entry_
             machine: "lobby".to_owned(),
             state: "started".to_owned(),
             payload: Some(serde_json::json!({"phase": "started", "scene": 1})),
+            clear_scene: false,
         })
         .await
         .expect("forced");
@@ -508,6 +514,7 @@ async fn a_hand_off_the_table_refuses_is_recorded_and_the_machine_stays_where_it
             machine: "lobby".to_owned(),
             state: "started".to_owned(),
             payload: Some(serde_json::json!({"phase": "started", "scene": 1})),
+            clear_scene: false,
         })
         .await
         .expect("forced");
@@ -663,6 +670,7 @@ async fn a_forced_name_with_a_newline_cannot_forge_a_log_line() {
                 machine: machine.to_owned(),
                 state: "started".to_owned(),
                 payload: None,
+                clear_scene: false,
             })
             .await;
         assert!(refused.is_err(), "{machine:?} is not a machine");

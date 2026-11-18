@@ -5,7 +5,7 @@ use std::num::{NonZeroU16, NonZeroU128};
 
 use df_rules::roll::{
     D20Request, D20Test, DiceExpression, DiceRequest, DieRole, DieSize, ModifierLabel, Proficiency,
-    RollError, RollMode, RollRequest, Target, TargetLabel,
+    RollError, RollMode, RollRequest, RollStyle, Target, TargetLabel,
 };
 use df_table::identity::OperationId;
 use df_table::ports::{ActionId, Draw, DrawRequest};
@@ -66,8 +66,14 @@ fn the_dice_a_roll_needs_are_the_port_requests_of_its_plan() {
 
 #[test]
 fn a_roll_with_dice_still_missing_asks_for_exactly_those_and_writes_no_result() {
-    let step =
-        resolve_roll(&action(), operation(), &advantage_check(), &[die(20, 7)]).expect("an answer");
+    let step = resolve_roll(
+        &action(),
+        operation(),
+        &advantage_check(),
+        RollStyle::default(),
+        &[die(20, 7)],
+    )
+    .expect("an answer");
 
     let RollStep::NeedsDraws(missing) = step else {
         panic!("not a request for dice");
@@ -83,17 +89,25 @@ fn draws_that_are_not_the_dice_of_the_plan_are_unfit() {
     let request = percentile();
 
     assert_eq!(
-        step(&request, &[die(100, 50)]),
+        step(&request, RollStyle::default(), &[die(100, 50)]),
         Err(RulesRefusal::DrawsUnfit),
         "a d100 is not a pair of d10"
     );
     assert_eq!(
-        step(&request, &[die(10, 1), die(10, 2), die(10, 3)]),
+        step(
+            &request,
+            RollStyle::default(),
+            &[die(10, 1), die(10, 2), die(10, 3)]
+        ),
         Err(RulesRefusal::DrawsUnfit),
         "more dice than the plan"
     );
     assert_eq!(
-        step(&advantage_check(), &[die(20, 7), die(12, 7)]),
+        step(
+            &advantage_check(),
+            RollStyle::default(),
+            &[die(20, 7), die(12, 7)]
+        ),
         Err(RulesRefusal::DrawsUnfit),
         "the second die is a d12"
     );
@@ -103,9 +117,14 @@ fn draws_that_are_not_the_dice_of_the_plan_are_unfit() {
 fn a_complete_roll_resolves_and_its_line_carries_every_die_the_modifiers_and_the_outcome() {
     let draws = [die(20, 7), die(20, 11)];
 
-    let RollStep::Rolled(result) =
-        resolve_roll(&action(), operation(), &advantage_check(), &draws).expect("resolves")
-    else {
+    let RollStep::Rolled(result) = resolve_roll(
+        &action(),
+        operation(),
+        &advantage_check(),
+        RollStyle::default(),
+        &draws,
+    )
+    .expect("resolves") else {
         panic!("not resolved");
     };
 
@@ -127,6 +146,7 @@ fn a_percentile_roll_line_marks_the_tens_and_the_ones() {
         &action(),
         operation(),
         &percentile(),
+        RollStyle::default(),
         &[die(10, 10), die(10, 10)],
     )
     .expect("resolves") else {

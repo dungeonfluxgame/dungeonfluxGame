@@ -114,7 +114,8 @@ pub struct InputRequest {
 }
 
 /// Moves the table to `machine` in `state`. `payload` is the machine's saved state, for a state
-/// the machine does not start in.
+/// the machine does not start in. With `clear_scene`, a table machine (the lobby) also takes the
+/// focus back: the focus scene's active machine stops first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ForceRequest {
@@ -122,6 +123,8 @@ pub struct ForceRequest {
     pub state: String,
     #[serde(default)]
     pub payload: Option<serde_json::Value>,
+    #[serde(default)]
+    pub clear_scene: bool,
 }
 
 /// Who a projection is for.

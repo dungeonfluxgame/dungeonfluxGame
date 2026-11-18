@@ -7,10 +7,11 @@ use std::fmt;
 
 use axum::http::StatusCode;
 use df_playground::kit::ledger::Ledger;
+use df_playground::pages::wire::PagesErrorKind;
 use serde::{Deserialize, Serialize};
 
 use super::{Inventory, InventoryApplied, InventoryChange, InventoryItem, ItemUse, OwnerKind};
-use crate::dev_http::{BodyError, DevReply, RouteError};
+use crate::dev_http::{BodyError, DevReply, QueryError, RouteError};
 use crate::io_cause::IoCause;
 
 /// The answer of an inventory route: its value, or why it was refused.
@@ -47,8 +48,30 @@ pub struct AddRequest {
     pub look: Option<String>,
     #[serde(default, rename = "use")]
     pub usage: Option<ItemUse>,
+    /// A new item's price in copper pieces.
+    #[serde(default)]
+    pub price_cp: Option<u64>,
     #[serde(default)]
     pub why: String,
+}
+
+/// `POST /dev/world/inventory/price`: `owner`'s `item` is priced at `price_cp` when it has no
+/// price yet; a price it has is left alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PriceRequest {
+    pub owner: String,
+    pub item: String,
+    pub price_cp: u64,
+    #[serde(default)]
+    pub why: String,
+}
+
+/// What a price request came to: the item's price now, and whether this request set it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Priced {
+    pub price_cp: u64,
+    pub set: bool,
 }
 
 /// `POST /dev/world/inventory/remove` and `POST /dev/world/inventory/consume`: `count` of `item`
@@ -82,6 +105,26 @@ pub struct TransferRequest {
     pub count: u64,
     #[serde(default)]
     pub why: String,
+}
+
+/// `POST /dev/world/inventory/pay`: `amount_cp` copper's worth of `from`'s coins to `to`, with
+/// exact change from `to`'s coins, both sides changed or neither.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PayRequest {
+    pub from: String,
+    pub to: String,
+    pub amount_cp: u64,
+    #[serde(default)]
+    pub why: String,
+}
+
+/// `POST /dev/world/inventory/till`: `owner` keeps a till that can make change (a keeper or a
+/// fare-taker the scenario will pay).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TillRequest {
+    pub owner: String,
 }
 
 /// The query of `GET /dev/world/inventory/history`: the changes of one owner (all owners when
@@ -145,9 +188,7 @@ pub struct History {
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum InventoryError {
     InvalidBody(BodyError),
-    InvalidQuery {
-        detail: String,
-    },
+    InvalidQuery(QueryError),
     /// An owner id is not an id.
     InvalidOwner {
         owner: String,
@@ -237,13 +278,67 @@ pub enum InventoryError {
         cause: IoCause,
     },
     Stopped,
+    /// A transfer would add a coin to an item of the receiver's that is another coin, or no coin.
+    CoinMismatch {
+        owner: String,
+        item: String,
+    },
+    /// The SRD equipment catalog does not list `item`, so it has no weight to arrange it by.
+    NotInCatalog {
+        item: String,
+    },
+    /// The owner is not a shop: nothing can be bought from them by a tap.
+    NotAShop {
+        owner: String,
+    },
+    /// The shop does not sell `item` by a tap: it does not stock it, or the SRD catalog does not
+    /// list it (an item off the catalog is bought by talking).
+    NotForSale {
+        shop: String,
+        item: String,
+    },
+    /// `count` of `item` is not a whole copper price: it is sold `per` at a time (20 sling bullets
+    /// for 4 CP).
+    UnevenBundle {
+        item: String,
+        count: u64,
+        per: u32,
+    },
+    /// The buyer's coins come to less than the price.
+    InsufficientCoin {
+        owner: String,
+        cost_cp: u64,
+        purse_cp: u64,
+    },
+    /// The shop's coins cannot make the change owed exactly.
+    NoChange {
+        shop: String,
+        change_cp: u64,
+    },
+    /// The buyer's containers that could hold `item` have no room for it.
+    ContainerFull {
+        owner: String,
+        container: String,
+        item: String,
+    },
+    /// What the owner would carry passes their carrying capacity (SRD p.178).
+    OverCapacity {
+        owner: String,
+        milli_pounds: u64,
+        capacity_milli_pounds: u64,
+    },
+    /// The owner has no carrying capacity to check against: no hero sheet with a Strength score
+    /// and an admitted size.
+    NoCarryingCapacity {
+        owner: String,
+    },
 }
 
 impl InventoryError {
     pub fn key(&self) -> &'static str {
         match self {
             Self::InvalidBody(_) => "invalid_body",
-            Self::InvalidQuery { .. } => "invalid_query",
+            Self::InvalidQuery(_) => "invalid_query",
             Self::InvalidOwner { .. } => "invalid_owner",
             Self::InvalidItem { .. } => "invalid_item",
             Self::InvalidSchema { .. } => "invalid_schema",
@@ -265,6 +360,36 @@ impl InventoryError {
             Self::StoreInvalid { .. } => "store_invalid",
             Self::StoreUnwritable { .. } => "store_unwritable",
             Self::Stopped => "stopped",
+            Self::CoinMismatch { .. } => "coin_mismatch",
+            Self::NotInCatalog { .. } => "not_in_catalog",
+            Self::NotAShop { .. } => "not_a_shop",
+            Self::NotForSale { .. } => "not_for_sale",
+            Self::UnevenBundle { .. } => "uneven_bundle",
+            Self::InsufficientCoin { .. } => "insufficient_coin",
+            Self::NoChange { .. } => "no_change",
+            Self::ContainerFull { .. } => "container_full",
+            Self::OverCapacity { .. } => "over_capacity",
+            Self::NoCarryingCapacity { .. } => "no_carrying_capacity",
+        }
+    }
+
+    /// The refusal as the phone reads it, one of the shared `PagesErrorKind`s: a purchase's or a
+    /// payment's own kind, any other refusal `inventory`.
+    pub fn pages_kind(&self) -> PagesErrorKind {
+        match self {
+            Self::OverCapacity { .. } => PagesErrorKind::OverCapacity,
+            Self::ContainerFull { .. } => PagesErrorKind::ContainerFull,
+            Self::InsufficientCoin { .. } => PagesErrorKind::InsufficientCoin,
+            // The shop has fewer than asked.
+            Self::Insufficient { .. } => PagesErrorKind::NotInStock,
+            Self::NotForSale { .. } => PagesErrorKind::NotForSale,
+            Self::NotAShop { .. } => PagesErrorKind::NotAShop,
+            Self::NoChange { .. } => PagesErrorKind::NoChange,
+            Self::UnevenBundle { .. } => PagesErrorKind::UnevenBundle,
+            Self::NoCarryingCapacity { .. } => PagesErrorKind::NoCarryingCapacity,
+            Self::ZeroCount { .. } => PagesErrorKind::ZeroCount,
+            Self::CoinMismatch { .. } => PagesErrorKind::CoinMismatch,
+            _ => PagesErrorKind::Inventory,
         }
     }
 }
@@ -279,7 +404,7 @@ impl fmt::Display for InventoryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidBody(error) => write!(formatter, "{error}"),
-            Self::InvalidQuery { detail } => write!(formatter, "the query is not valid: {detail}"),
+            Self::InvalidQuery(error) => write!(formatter, "{error}"),
             Self::InvalidOwner { owner } => write!(
                 formatter,
                 "{owner:?} is not an owner id (lowercase letters, digits, '_' or '-')"
@@ -360,6 +485,51 @@ impl fmt::Display for InventoryError {
                 write!(formatter, "an inventory file could not be written: {cause}")
             }
             Self::Stopped => formatter.write_str("the host stopped before the work finished"),
+            Self::CoinMismatch { owner, item } => {
+                write!(
+                    formatter,
+                    "{owner}'s {item} is another coin than the one given"
+                )
+            }
+            Self::NotInCatalog { item } => {
+                write!(formatter, "{item} is not in the SRD equipment catalog")
+            }
+            Self::NotAShop { owner } => write!(formatter, "{owner} keeps no shop"),
+            Self::NotForSale { shop, item } => write!(formatter, "{shop} does not sell {item}"),
+            Self::UnevenBundle { item, count, per } => write!(
+                formatter,
+                "{count} {item} is no whole price: it is sold {per} at a time"
+            ),
+            Self::InsufficientCoin {
+                owner,
+                cost_cp,
+                purse_cp,
+            } => write!(
+                formatter,
+                "{owner} has {purse_cp} cp in coins, and the price is {cost_cp} cp"
+            ),
+            Self::NoChange { shop, change_cp } => {
+                write!(formatter, "{shop} cannot make {change_cp} cp of change")
+            }
+            Self::ContainerFull {
+                owner,
+                container,
+                item,
+            } => write!(formatter, "{owner}'s {container} has no room for {item}"),
+            Self::OverCapacity {
+                owner,
+                milli_pounds,
+                capacity_milli_pounds,
+            } => write!(
+                formatter,
+                "{owner} would carry {}, over their carrying capacity of {}",
+                df_rules::srd_equipment_prices::Weight::from_milli_pounds(*milli_pounds),
+                df_rules::srd_equipment_prices::Weight::from_milli_pounds(*capacity_milli_pounds)
+            ),
+            Self::NoCarryingCapacity { owner } => write!(
+                formatter,
+                "{owner} has no Strength and size to weigh a load against"
+            ),
         }
     }
 }
@@ -370,7 +540,7 @@ impl RouteError for InventoryError {
     fn status(&self) -> StatusCode {
         match self {
             Self::InvalidBody(_)
-            | Self::InvalidQuery { .. }
+            | Self::InvalidQuery(_)
             | Self::InvalidOwner { .. }
             | Self::InvalidItem { .. }
             | Self::InvalidSchema { .. }
@@ -384,9 +554,19 @@ impl RouteError for InventoryError {
             | Self::SameOwner { .. } => StatusCode::BAD_REQUEST,
             Self::ScreenRefused { .. } => StatusCode::CONFLICT,
             Self::UnknownOwner { .. } | Self::UnknownItem { .. } => StatusCode::NOT_FOUND,
-            Self::KeptItem { .. } | Self::Insufficient { .. } | Self::Overflow { .. } => {
-                StatusCode::UNPROCESSABLE_ENTITY
+            Self::NotAShop { .. } | Self::NotForSale { .. } | Self::NotInCatalog { .. } => {
+                StatusCode::NOT_FOUND
             }
+            Self::KeptItem { .. }
+            | Self::Insufficient { .. }
+            | Self::Overflow { .. }
+            | Self::CoinMismatch { .. }
+            | Self::UnevenBundle { .. }
+            | Self::InsufficientCoin { .. }
+            | Self::NoChange { .. }
+            | Self::ContainerFull { .. }
+            | Self::OverCapacity { .. }
+            | Self::NoCarryingCapacity { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::StoreUnreadable { .. }
             | Self::StoreInvalid { .. }
             | Self::StoreUnwritable { .. }

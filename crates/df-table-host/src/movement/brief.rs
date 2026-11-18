@@ -5,9 +5,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use super::types::{
-    Depth, Placement, PlateBrief, Pose, ReferenceCard, RouteSight, SceneDesign, Side,
-};
+use super::types::{Gait, Placement, PlateBrief, ReferenceCard, RouteSight, SceneDesign};
 use crate::imagegen::limits::MAXIMUM_SENT_TEXT_CHARS;
 
 /// A character who may be placed in the picture: the persona id, the display name (for the
@@ -42,6 +40,11 @@ impl LookSheets {
             serde_json::from_str(text).map_err(|error| BriefError::BadLooks {
                 reason: error.to_string(),
             })?;
+        Self::from_looks(looks)
+    }
+
+    /// The sheets of `looks`, a look in words by persona id; refused when a look is empty.
+    pub fn from_looks(looks: BTreeMap<String, String>) -> Result<Self, BriefError> {
         if let Some((id, _)) = looks.iter().find(|(_, look)| look.trim().is_empty()) {
             return Err(BriefError::BadLooks {
                 reason: format!("the look of '{id}' is empty"),
@@ -177,7 +180,7 @@ pub fn build_stage_brief(
         stage.sight.trim().trim_end_matches('.')
     ));
     for (_, look) in &people {
-        prompt.push_str(&format!("A person ({look}) {}. ", pose_words(stage.pose)));
+        prompt.push_str(&format!("A person ({look}) {}. ", gait_words(stage.pose)));
     }
     prompt.push_str(&cast_words(people.len()));
     prompt.push_str(&style.writing);
@@ -213,10 +216,10 @@ fn cast_words(count: usize) -> String {
     }
 }
 
-fn pose_words(pose: Pose) -> &'static str {
+fn gait_words(pose: Gait) -> &'static str {
     match pose {
-        Pose::Walking => "is walking on through it, mid-stride, small in the wide view",
-        Pose::Pausing => "has stopped there to take it in, small in the wide view",
+        Gait::Walking => "is walking on through it, mid-stride, small in the wide view",
+        Gait::Pausing => "has stopped there to take it in, small in the wide view",
     }
 }
 
@@ -375,24 +378,8 @@ fn placement_sentence(entry: &PlacedCharacter<'_>) -> String {
     format!(
         "A person ({}) stands in the {} {}, {}{carrying}.",
         entry.look,
-        depth_words(placement.depth),
-        side_words(placement.side),
+        placement.depth.key(),
+        placement.side.key(),
         placement.doing.trim().trim_end_matches('.'),
     )
-}
-
-fn depth_words(depth: Depth) -> &'static str {
-    match depth {
-        Depth::Foreground => "foreground",
-        Depth::Middle => "middle",
-        Depth::Background => "background",
-    }
-}
-
-fn side_words(side: Side) -> &'static str {
-    match side {
-        Side::Left => "left",
-        Side::Centre => "centre",
-        Side::Right => "right",
-    }
 }

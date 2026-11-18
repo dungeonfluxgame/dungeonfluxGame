@@ -66,45 +66,37 @@ fn caption(words: &[String]) -> Result<Command, CommandError> {
 }
 
 fn party(words: &[String]) -> Result<Command, CommandError> {
-    const MEMBER_KEYS: [&str; 4] = ["hp", "max", "color", "conditions"];
+    const MEMBER_KEYS: [&str; 5] = ["character", "hp", "max", "color", "conditions"];
     match words {
         [verb] if verb == "clear" => Ok(Command::Scene(SceneChange::PartyClear {})),
         [verb, name] if verb == "remove" => Ok(Command::Scene(SceneChange::PartyRemove {
             name: name.clone(),
         })),
         [verb, name, pairs @ ..] if verb == "add" => {
+            // A hero's card names its character and takes its numbers from the hero's sheet; a
+            // card given no hit points shows none.
             let mut member = PartyMember {
                 name: name.clone(),
-                hit_points: 0,
-                maximum_hit_points: 0,
+                character: None,
+                hit_points: None,
+                maximum_hit_points: None,
+                armor_class: None,
+                portrait: None,
                 conditions: Vec::new(),
                 color: None,
             };
-            let mut has_hit_points = false;
-            let mut has_maximum = false;
             for (key, value) in keyed(
                 pairs,
-                "hp=N, max=N, color=#rrggbb, conditions=a,b",
+                "character=ID, hp=N, max=N, color=#rrggbb, conditions=a,b",
                 &MEMBER_KEYS,
             )? {
                 match key {
-                    "hp" => {
-                        member.hit_points = count("hp", value)?;
-                        has_hit_points = true;
-                    }
-                    "max" => {
-                        member.maximum_hit_points = count("max", value)?;
-                        has_maximum = true;
-                    }
+                    "character" => member.character = Some(value.to_owned()),
+                    "hp" => member.hit_points = Some(count("hp", value)?),
+                    "max" => member.maximum_hit_points = Some(count("max", value)?),
                     "color" => member.color = Some(value.to_owned()),
                     _ => member.conditions = split_list(value),
                 }
-            }
-            if !has_hit_points {
-                return Err(CommandError::Usage(PARTY_USAGE));
-            }
-            if !has_maximum {
-                member.maximum_hit_points = member.hit_points;
             }
             Ok(Command::Scene(SceneChange::PartyAdd { member }))
         }

@@ -30,10 +30,9 @@ use df_types::saturating_millis;
 
 use super::cast::{ask_cast, cast_facts};
 use super::clips::{Clip, clips, store_clip};
-use super::limits::{
-    MAXIMUM_AUDIO_MS, MAXIMUM_KEY_TERM_CHARACTERS, MAXIMUM_KEY_TERM_WORDS, MAXIMUM_KEY_TERMS,
-    MAXIMUM_TEXT_CHARACTERS, MINIMUM_AUDIO_MS,
-};
+use df_playground::limits::{MAXIMUM_CAPTURE_MS, MAXIMUM_QUESTION_CHARACTERS, MINIMUM_CAPTURE_MS};
+
+use super::limits::{MAXIMUM_KEY_TERM_CHARACTERS, MAXIMUM_KEY_TERM_WORDS, MAXIMUM_KEY_TERMS};
 use super::provider::{
     PortStatus, SpeechPort, SynthesisCall, TranscriptionCall, VoiceListing, port_from_environment,
 };
@@ -220,9 +219,15 @@ impl Speech {
         kept
     }
 
+    /// Whether a speech supplier is set up to write speech down.
+    pub fn stt_available(&self) -> bool {
+        self.port.status().configured
+    }
+
     /// Transcribes `pcm` (16 kHz mono signed 16-bit little-endian), biased toward `terms`, or
     /// toward the shown scene's names when none are given. The recording and the transcript live
-    /// only in this call.
+    /// only in this call. Refused `disabled` while the playground's STT switch is off: it is the
+    /// one gate of every paid transcription (a seat's own voice switch is checked in front of it).
     pub async fn transcribe(
         &self,
         pcm: Vec<u8>,
@@ -231,10 +236,10 @@ impl Speech {
         self.require_on(SpeechFeature::Stt)?;
         let audio_ms = check_audio(&pcm)?;
         if let Some(cause) = terms.iter().find_map(|term| key_term_problem(term)) {
-            return Err(SpeechError::InvalidQuery { cause });
+            return Err(SpeechError::InvalidTerms { cause });
         }
         if terms.len() > MAXIMUM_KEY_TERMS {
-            return Err(SpeechError::InvalidQuery {
+            return Err(SpeechError::InvalidTerms {
                 cause: QueryCause::TooManyTerms,
             });
         }
@@ -526,20 +531,20 @@ pub(super) fn check_audio(pcm: &[u8]) -> Result<u64, SpeechError> {
         return Err(SpeechError::AudioMisaligned);
     }
     let audio_ms = u64::try_from(pcm.len() / super::limits::AUDIO_BYTES_PER_MS).unwrap_or(u64::MAX);
-    if audio_ms < MINIMUM_AUDIO_MS {
+    if audio_ms < MINIMUM_CAPTURE_MS {
         return Err(SpeechError::AudioTooShort {
             audio_ms,
-            minimum_ms: MINIMUM_AUDIO_MS,
+            minimum_ms: MINIMUM_CAPTURE_MS,
         });
     }
     // Compared in bytes, so audio even a sample over the limit is refused here and not by the
     // supplier's exact-length check.
-    let maximum_bytes =
-        usize::try_from(MAXIMUM_AUDIO_MS).unwrap_or(usize::MAX) * super::limits::AUDIO_BYTES_PER_MS;
+    let maximum_bytes = usize::try_from(MAXIMUM_CAPTURE_MS).unwrap_or(usize::MAX)
+        * super::limits::AUDIO_BYTES_PER_MS;
     if pcm.len() > maximum_bytes {
         return Err(SpeechError::AudioTooLong {
             audio_ms,
-            maximum_ms: MAXIMUM_AUDIO_MS,
+            maximum_ms: MAXIMUM_CAPTURE_MS,
         });
     }
     Ok(audio_ms)
@@ -551,10 +556,10 @@ pub(super) fn check_text(text: &str) -> Result<(), SpeechError> {
         return Err(SpeechError::TextBlank);
     }
     let characters = text.chars().count();
-    if characters > MAXIMUM_TEXT_CHARACTERS {
+    if characters > MAXIMUM_QUESTION_CHARACTERS {
         return Err(SpeechError::TextTooLong {
             characters: u64::try_from(characters).unwrap_or(u64::MAX),
-            maximum: u64::try_from(MAXIMUM_TEXT_CHARACTERS).unwrap_or(u64::MAX),
+            maximum: u64::try_from(MAXIMUM_QUESTION_CHARACTERS).unwrap_or(u64::MAX),
         });
     }
     Ok(())

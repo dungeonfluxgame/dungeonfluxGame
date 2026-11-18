@@ -1,8 +1,10 @@
 use df_table::event::RejectionCause;
 use serde_json::json;
 
+use crate::dev_http::DevReply;
 use crate::limits::MAXIMUM_LISTED_PROBLEMS;
-use crate::wire::{EffectRequest, MediaAdd, Reply, ValueForm, capped};
+use crate::server::request::{HostError, HostReply};
+use crate::wire::{Changed, EffectRequest, MediaAdd, ValueForm, capped};
 
 #[test]
 fn a_request_without_a_value_form_reads_its_values_as_json() {
@@ -65,24 +67,25 @@ fn a_clear_request_with_an_extra_key_is_refused_like_every_other_request() {
 }
 
 #[test]
-fn a_reply_is_a_tagged_object_and_reads_back_the_same() {
-    let done = Reply::Done {
-        revision: 4,
-        notices: vec!["note".into()],
+fn a_change_reply_is_the_dev_envelope_and_reads_back_the_same() {
+    let done: HostReply<Changed> = DevReply::Done {
+        value: Changed {
+            revision: 4,
+            notices: vec!["note".into()],
+        },
     };
     assert_eq!(
         serde_json::to_value(&done).expect("writes"),
-        json!({"outcome": "done", "revision": 4, "notices": ["note"]})
+        json!({"outcome": "done", "value": {"revision": 4, "notices": ["note"]}})
     );
-    let rejected = Reply::Rejected {
-        cause: Some(RejectionCause::DuplicateElement),
-        message: "no".into(),
-        problems: Vec::new(),
-    };
+    let rejected: HostReply<Changed> = DevReply::rejected(HostError::InvalidEffect {
+        cause: RejectionCause::DuplicateElement,
+        detail: "no".into(),
+    });
     let text = serde_json::to_string(&rejected).expect("writes");
-    assert!(text.contains(r#""cause":"duplicate_element""#));
+    assert!(text.contains(r#""error":{"error":"invalid_effect","cause":"duplicate_element""#));
     assert_eq!(
-        serde_json::from_str::<Reply>(&text).expect("reads"),
+        serde_json::from_str::<HostReply<Changed>>(&text).expect("reads"),
         rejected
     );
 }

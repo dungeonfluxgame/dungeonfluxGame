@@ -5,7 +5,7 @@ use super::brief::{
     build_stage_brief, scene_words,
 };
 use crate::imagegen::limits::MAXIMUM_SENT_TEXT_CHARS;
-use crate::movement::types::{Depth, Placement, Pose, RouteSight, SceneDesign, Side};
+use crate::movement::types::{Depth, Gait, Placement, RouteSight, SceneDesign, Side};
 
 fn character(id: &str, display_name: &str, job: &str, portrait: Option<&str>) -> BriefCharacter {
     BriefCharacter {
@@ -42,6 +42,7 @@ fn balcony() -> SceneDesign {
         left_behind: vec!["cora".to_owned(), "dev".to_owned()],
         stages: vec![],
         town_look: None,
+        distances: vec![],
     }
 }
 
@@ -248,7 +249,7 @@ fn fountain() -> RouteSight {
     RouteSight {
         id: "fountain_square".to_owned(),
         sight: "a stone fountain in a small square.".to_owned(),
-        pose: Pose::Walking,
+        pose: Gait::Walking,
     }
 }
 
@@ -306,7 +307,7 @@ fn a_sight_on_the_way_is_a_wide_view_of_the_mover_in_the_towns_look() {
 fn a_pausing_mover_has_stopped_to_take_the_sight_in() {
     let (design, cast) = roamer();
     let sight = RouteSight {
-        pose: Pose::Pausing,
+        pose: Gait::Pausing,
         ..fountain()
     };
 

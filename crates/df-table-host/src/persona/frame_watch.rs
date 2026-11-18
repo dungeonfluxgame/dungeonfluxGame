@@ -140,6 +140,9 @@ const INSERT_AVOID: [&str; 2] = ["a plain empty band along an edge", "a person's
 
 /// The watch input that shows a found clue up close: `@focus <what the close look shows>`.
 const FOCUS_PREFIX: &str = "@focus ";
+/// The watch input of a line whose speaker chose the item looked at closely:
+/// `@look <item id> | <speaker id> | <line>`.
+const LOOK_PREFIX: &str = "@look ";
 
 /// How much shorter than the room a room plate leaves it the frame judge's picture of the scene is
 /// asked to be: a frame settings file's own words can be longer than the built-in ones the room is
@@ -221,8 +224,13 @@ impl FrameOptions {
 /// One line of `persona watch`'s standard input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum WatchInput<'a> {
-    /// `<speaker id> | <line>`: a line said.
-    Line { speaker: &'a str, line: &'a str },
+    /// `<speaker id> | <line>`: a line said; `@look <item id> | <speaker id> | <line>` when the
+    /// speaker chose the item to look at closely (a player's tapped card).
+    Line {
+        speaker: &'a str,
+        line: &'a str,
+        chosen: Option<&'a str>,
+    },
     /// `@focus [<item> | ]<text>`: what a close look at a found clue shows, and the id of the
     /// story's reference sheet of it (`persona story item`) when it has one.
     Focus {
@@ -284,6 +292,23 @@ impl<'a> WatchInput<'a> {
                 _ => Self::Unreadable,
             };
         }
+        if let Some(look) = entry.strip_prefix(LOOK_PREFIX) {
+            return match look.split_once(" | ").and_then(|(item, rest)| {
+                rest.split_once(" | ")
+                    .map(|(speaker, line)| (item.trim(), speaker.trim(), line.trim()))
+            }) {
+                Some((item, speaker, line))
+                    if !item.is_empty() && !speaker.is_empty() && !line.is_empty() =>
+                {
+                    Self::Line {
+                        speaker,
+                        line,
+                        chosen: Some(item),
+                    }
+                }
+                _ => Self::Unreadable,
+            };
+        }
         if let Some(look) = entry.strip_prefix(FOCUS_PREFIX) {
             let (item, text) = match look.split_once(" | ") {
                 Some((item, text)) => (Some(item.trim()), text.trim()),
@@ -298,6 +323,7 @@ impl<'a> WatchInput<'a> {
             Some((speaker, line)) => Self::Line {
                 speaker: speaker.trim(),
                 line: line.trim(),
+                chosen: None,
             },
             None => Self::Unreadable,
         }
@@ -415,7 +441,11 @@ pub(super) async fn watch_lines(port: u16, options: FrameOptions) -> Result<Stri
                 transcript.push(format!("  focus: {text}"));
                 watch.focus(port, turn, (item, text), &mut transcript).await;
             }
-            WatchInput::Line { speaker: id, line } => {
+            WatchInput::Line {
+                speaker: id,
+                line,
+                chosen,
+            } => {
                 let Some(speaker) = speakers.iter().find(|speaker| speaker.id == id) else {
                     transcript.push(format!("  {id} is not in the scene, skipped"));
                     continue;
@@ -423,7 +453,7 @@ pub(super) async fn watch_lines(port: u16, options: FrameOptions) -> Result<Stri
                 turn += 1;
                 transcript.push(format!("[{turn:02}] {}: {line}", speaker.display_name));
                 if let Some(request) = watch
-                    .line_request(port, speaker, line, &mut transcript)
+                    .line_request(port, speaker, (line, chosen), &mut transcript)
                     .await
                 {
                     watch.ask_later(port, turn, request, None);
@@ -682,8 +712,8 @@ pub(super) async fn judge_frame(
     port: u16,
     picture: String,
     lines: Vec<String>,
-    gate_percent: Option<u8>,
-    model: Option<String>,
+    (gate_percent, model): (Option<u8>, Option<String>),
+    count: Option<super::frame::PieceCount>,
 ) -> Result<String, DevError> {
     let listed: crate::cast::request::CastReply<CastList> = get_json(port, cast_path::CAST).await?;
     let cast = reply_value(listed)?;
@@ -697,6 +727,8 @@ pub(super) async fn judge_frame(
         last_shot: None,
         peak_percent: 0,
         last_inspected: None,
+        chosen_item: None,
+        count,
         ask: FrameAsk::Line {},
         picture_target_characters: None,
     };
@@ -724,6 +756,9 @@ pub(super) async fn judge_frame(
     }
     text.push(format!("  shot: {} ({})", judged.shot, judged.shot_look));
     text.push(format!("  next picture: {}", judged.next_picture));
+    if let Some(pieces) = judged.pieces_shown {
+        text.push(format!("pieces_shown={pieces}"));
+    }
     Ok(text.join("\n"))
 }
 
@@ -1077,7 +1112,7 @@ impl FrameWatch {
         &mut self,
         port: u16,
         speaker: &Speaker,
-        line: &str,
+        (line, chosen): (&str, Option<&str>),
         transcript: &mut Vec<String>,
     ) -> Option<FrameRequest> {
         self.since
@@ -1088,7 +1123,11 @@ impl FrameWatch {
         if !self.line_judge_wanted() {
             return None;
         }
-        Some(self.request(port, FrameAsk::Line {}, transcript).await)
+        let request = self.request(port, FrameAsk::Line {}, transcript).await;
+        Some(FrameRequest {
+            chosen_item: chosen.map(str::to_owned),
+            ..request
+        })
     }
 
     /// Whether a line's judge may be asked: the most frames are not made yet, a room or an insert
@@ -1191,8 +1230,19 @@ impl FrameWatch {
             })
             .collect();
         let names: Vec<String> = in_use.iter().map(|(_, item)| item.name.clone()).collect();
+        // A seated hero is drawn by their look studio's design, anyone else by their job.
+        let look = match super::hero_look::hero_looks_from(port, vec![speaker.id.clone()]).await {
+            Ok(mut looks) => looks.remove(&speaker.id),
+            Err(error) => {
+                transcript.push(format!(
+                    "  the look of {} is not read, so they are drawn by their job: {error}",
+                    speaker.id
+                ));
+                None
+            }
+        };
         let scene = declared_scene(
-            &speaker.job,
+            look.as_deref().unwrap_or(&speaker.job),
             &declared.action,
             &names,
             self.characters.len(),
@@ -1206,6 +1256,8 @@ impl FrameWatch {
             last_shot: self.last_shot.clone(),
             peak_percent: 0,
             last_inspected: None,
+            chosen_item: None,
+            count: None,
             ask: FrameAsk::Declare {
                 scene: scene.clone(),
             },
@@ -1746,6 +1798,8 @@ impl FrameWatch {
             last_shot: self.last_shot.clone(),
             peak_percent: self.peak_percent,
             last_inspected: self.last_inspected.clone(),
+            chosen_item: None,
+            count: None,
             ask,
             picture_target_characters,
         }

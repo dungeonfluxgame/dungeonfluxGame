@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use df_playground::controls::ControlsChange;
-use df_playground::fixture::StageElement;
+use df_playground::fixture::ElementView;
 use serde_json::json;
 
 use crate::client::{get, post_json};
@@ -18,6 +18,7 @@ use crate::limits::{
     ECHO_LINE_OVERHEAD_BYTES, FIGURE_GLIDE_MS, MAXIMUM_BATCH_CHANGES, TURN_SETTLE,
 };
 use crate::playground::{ControlsChangeError, PlaygroundFiles, PlaygroundState};
+use crate::server::request::HostError;
 use crate::sink::LineEcho;
 use crate::test_support::{Running, STARTER_FILES, start};
 use crate::wire::EventsReply;
@@ -461,10 +462,10 @@ async fn a_pivot_given_during_the_glide_of_the_turn_back_is_refused_and_after_it
         matches!(
             &error,
             DevError::Rejected {
-                error: ReplyError::Canvas {
-                    cause: Some(df_table::event::RejectionCause::InvalidTransform),
+                error: ReplyError::Host(HostError::InvalidEffect {
+                    cause: df_table::event::RejectionCause::InvalidTransform,
                     ..
-                },
+                }),
                 // The cause does not tell a glide from a turned element yet; the sentence does.
                 message,
             } if message.contains("try again in")
@@ -510,7 +511,7 @@ fn the_settle_time_covers_the_glide_the_theme_declares() {
 
 // 1649, 1680: a turn then a travel at the wire, and the ranges the crates share.
 
-async fn frame_elements(running: &Running) -> Vec<StageElement> {
+async fn frame_elements(running: &Running) -> Vec<ElementView> {
     let body = get(running.port, "/playground/frame")
         .await
         .expect("answers")

@@ -205,7 +205,7 @@ fn paths(prefix: &str, value: &Value, found: &mut BTreeSet<String>) {
 
 /// What the playground can draw that the projection does not fill yet, and who builds it. A field
 /// leaves this list when the projection (or, for the host's own moves, the host) fills it.
-const NOT_PROJECTED_YET: [(&str, &str); 24] = [
+const NOT_PROJECTED_YET: [(&str, &str); 32] = [
     // The art and camera of a scene come from the scene builder and the Director (O.14, SB, G1).
     ("tv.backdrop", "scene builder (SB): the plate"),
     ("tv.card", "Director (G1): handouts and portraits"),
@@ -217,6 +217,16 @@ const NOT_PROJECTED_YET: [(&str, &str); 24] = [
     ("tv.elements[].pivot", "Director (G1)"),
     ("tv.elements[].pivot.x_percent", "Director (G1)"),
     ("tv.elements[].pivot.y_percent", "Director (G1)"),
+    // A live canvas element's problem and travel come from the host's canvas, never a projection.
+    ("tv.elements[].problem", "dev canvas (df-table-host view)"),
+    (
+        "tv.elements[].travelling",
+        "dev canvas (df-table-host view)",
+    ),
+    // A hero card's character and Armor Class come from the hero's sheet (creation P2).
+    ("tv.party[].character", "hero sheets (creation P2)"),
+    ("tv.party[].armor_class", "hero sheets (creation P2)"),
+    ("tv.party[].portrait", "hero packs (look studio P3)"),
     // The phone's richer pages come with the machines that have goals, groups and handouts.
     ("phone.goal", "journal projection (K.4)"),
     ("phone.image", "scene builder (SB): handouts"),
@@ -225,8 +235,20 @@ const NOT_PROJECTED_YET: [(&str, &str); 24] = [
     // playground's UI track; the table's projection does not carry it.
     ("tv.brand", "playground UI track: landing brand"),
     (
+        "tv.party_hidden",
+        "world routes: the party strip faded out a while after a new place, a scene change",
+    ),
+    (
         "tv.clues",
         "persona story: the clue board, pushed as a scene change",
+    ),
+    (
+        "tv.shown_clue",
+        "seat routes: a clue shown to the table, pushed as a scene change (`ShowClue`)",
+    ),
+    (
+        "tv.title_card",
+        "world region: the chapter title card of a crossing, a scene change (`TitleCard`)",
     ),
     (
         "tv.story",

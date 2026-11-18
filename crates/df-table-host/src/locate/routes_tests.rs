@@ -73,11 +73,11 @@ async fn show_is_a_get_whose_answer_is_the_envelope_with_a_typed_error() {
     );
     assert!(matches!(
         rejected(show("?picture=plate.png&extra=1").await),
-        LocateError::InvalidQuery { .. }
+        LocateError::InvalidQuery(_)
     ));
     assert!(matches!(
         rejected(show("").await),
-        LocateError::InvalidQuery { .. }
+        LocateError::InvalidQuery(_)
     ));
     let response = dev_client::get(port, &format!("{}?picture=x.png", path::LOCATE_SHOW))
         .await
@@ -497,5 +497,54 @@ fn a_stored_scan_line_carries_the_time_of_each_phase_of_the_scan() {
             "prompt=person regions=1 left_out=0 kept_labels=1 old_layout=read size=100x50 ",
             "duration_ms=2500 prepare_ms=40 submit_ms=300 resume_ms=2100"
         )
+    );
+}
+
+#[tokio::test]
+async fn a_search_for_a_named_thing_refuses_empty_words_and_never_stores_a_layout() {
+    let running = start(&STARTER_FILES).await;
+    std::fs::create_dir_all(running.playground_path("assets/media")).unwrap();
+    std::fs::write(
+        running.playground_path("assets/media/plate.png"),
+        png_picture(),
+    )
+    .unwrap();
+    // Words that cannot be looked for are refused before anything is sent.
+    let response = super::routes::find_answer(
+        &running.state,
+        br#"{"picture":"plate.png","noun":"   "}"#,
+        super::scan::ScanSupplier::Unknown,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let reply: LocateReply<super::request::FoundRegions> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(rejected(reply), LocateError::InvalidNoun);
+    // A search that reaches the segmentation step and fails leaves the picture's (people's) layout
+    // as it was: none.
+    let response = super::routes::find_answer(
+        &running.state,
+        br#"{"picture":"plate.png","noun":"hanging signboard"}"#,
+        super::scan::ScanSupplier::Unknown,
+    )
+    .await;
+    assert!(!response.status().is_success());
+    assert!(
+        !running
+            .playground_path("assets/media/plate.png.layout.json")
+            .exists()
+    );
+    let lines = locate_lines(&running);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("LOCATE refused verb=find")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.contains("signboard")),
+        "the player's words stay out of the log: {lines:?}"
     );
 }

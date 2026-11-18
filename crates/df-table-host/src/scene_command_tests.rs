@@ -77,8 +77,11 @@ fn a_party_member_is_added_with_hit_points_and_optional_details() {
         Ok(SceneChange::PartyAdd {
             member: PartyMember {
                 name: "Anselm".into(),
-                hit_points: 12,
-                maximum_hit_points: 14,
+                character: None,
+                hit_points: Some(12),
+                maximum_hit_points: Some(14),
+                armor_class: None,
+                portrait: None,
                 conditions: vec!["Prone".into(), "Frightened".into()],
                 color: Some("#d9a441".into()),
             }
@@ -87,11 +90,17 @@ fn a_party_member_is_added_with_hit_points_and_optional_details() {
     let Ok(SceneChange::PartyAdd { member }) = scene("scene party add Zed hp=6") else {
         panic!("expected a member");
     };
-    assert_eq!(member.maximum_hit_points, 6, "max defaults to hp");
-    assert!(matches!(
-        scene("scene party add Zed"),
-        Err(CommandError::Usage(_))
-    ));
+    assert_eq!(member.health(), Some((6, 6)), "max defaults to hp");
+    let Ok(SceneChange::PartyAdd { member }) = scene("scene party add Mira character=hero-6")
+    else {
+        panic!("expected a member");
+    };
+    assert_eq!(member.character.as_deref(), Some("hero-6"));
+    assert_eq!(
+        member.health(),
+        None,
+        "a hero's card shows no sample hit points"
+    );
 }
 
 #[test]
@@ -357,6 +366,9 @@ async fn a_script_can_stage_a_whole_scene() {
     let said = run_dev(running.port, &words).await.expect("runs");
     assert!(said.ends_with("ran 3 commands, all ok"), "{said}");
     let scene = shown(&running).await.scene;
-    assert_eq!(scene.party.set_value().expect("party")[0].hit_points, 2);
+    assert_eq!(
+        scene.party.set_value().expect("party")[0].hit_points,
+        Some(2)
+    );
     assert_eq!(scene.suggested.set_value().expect("suggested").len(), 2);
 }

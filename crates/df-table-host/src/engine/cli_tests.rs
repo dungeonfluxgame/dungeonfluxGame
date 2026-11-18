@@ -177,7 +177,8 @@ fn force_takes_a_machine_a_state_and_optionally_the_saved_state_as_fields() {
         EngineCommand::Force(ForceRequest {
             machine: "lobby".to_owned(),
             state: "gathering".to_owned(),
-            payload: None
+            payload: None,
+            clear_scene: false
         })
     );
     let EngineCommand::Force(request) = engine("force lobby started phase=started scene=1") else {

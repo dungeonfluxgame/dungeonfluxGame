@@ -1,11 +1,11 @@
 //! Tests of `design`.
 
 use crate::movement::design::{
-    DesignError, ShownItemCause, WalkNeeds, check_feature, check_shown_items, check_walk,
-    design_facts, design_schema, parse_design,
+    DesignError, MoverInventories, ShownItemCause, WalkNeeds, check_coins, check_feature,
+    check_shown_items, check_walk, design_facts, design_schema, parse_design, settle_coins,
 };
 use crate::movement::types::{
-    Depth, MoveIntent, MoveKind, PartyMember, Placement, Pose, Resident, RouteSight, SceneDesign,
+    Depth, Gait, MoveIntent, MoveKind, PartyMember, Placement, Resident, RouteSight, SceneDesign,
     ShownItem, Side, TownRole, WalkAsk,
 };
 use crate::world::{InventoryItem, Town, Visited};
@@ -48,7 +48,9 @@ fn vendor(id: &str) -> Value {
         "look": "stout woman in her fifties, grey braid, green apron",
         "depth": "middle",
         "side": "right",
-        "doing": "arranges pears"
+        "doing": "arranges pears",
+        "wares": [],
+        "coin": null
     })
 }
 
@@ -91,6 +93,8 @@ fn a_valid_design_with_a_resident_places_everyone_and_computes_left_behind() {
                 display_name: "Mara".to_owned(),
                 job: "fruit stand vendor".to_owned(),
                 look: "stout woman in her fifties, grey braid, green apron".to_owned(),
+                wares: Vec::new(),
+                coin: None,
             }],
             placements: vec![
                 Placement {
@@ -115,6 +119,7 @@ fn a_valid_design_with_a_resident_places_everyone_and_computes_left_behind() {
             left_behind: vec!["rogue".to_owned()],
             stages: vec![],
             town_look: None,
+            distances: vec![],
         }
     );
 }
@@ -202,6 +207,8 @@ fn easel() -> InventoryItem {
         look: "pale ash legs, brass wing nuts".to_owned(),
         usage: crate::world::ItemUse::Kept,
         count: 1,
+        price_cp: None,
+        coin: None,
     }
 }
 
@@ -251,20 +258,15 @@ fn an_unknown_mover_in_the_move_is_refused() {
 }
 
 #[test]
-fn a_resident_id_that_is_a_party_id_or_repeated_is_refused() {
+fn a_resident_id_that_is_a_party_id_or_repeated_is_numbered_never_refused() {
+    // The person is new; only the id was taken (host 45 lost a move to five refusals of it).
     let in_party = parse_design(
         &answer(vec![mover("elf", "left")], vec![vendor("rogue")]),
         &intent(&["elf"], "the market"),
         &party(),
     )
-    .unwrap_err();
-    assert_eq!(
-        in_party,
-        DesignError::BadResident {
-            id: "rogue".to_owned()
-        }
-    );
-    assert_eq!(in_party.key(), "bad_resident");
+    .expect("a taken id is numbered");
+    assert_eq!(in_party.residents[0].id, "rogue_2");
 
     let twice = parse_design(
         &answer(
@@ -274,8 +276,13 @@ fn a_resident_id_that_is_a_party_id_or_repeated_is_refused() {
         &intent(&["elf"], "the market"),
         &party(),
     )
-    .unwrap_err();
-    assert!(matches!(twice, DesignError::BadResident { .. }));
+    .expect("a repeated id is numbered");
+    let ids: Vec<&str> = twice
+        .residents
+        .iter()
+        .map(|resident| resident.id.as_str())
+        .collect();
+    assert_eq!(ids, ["fruit_vendor", "fruit_vendor_2"]);
 }
 
 #[test]
@@ -369,7 +376,8 @@ fn the_schema_is_closed_and_the_facts_carry_the_move_and_the_party() {
             "things",
             "shown_items",
             "residents",
-            "placements"
+            "placements",
+            "distances"
         ])
     );
     assert_eq!(
@@ -526,11 +534,11 @@ fn each_likely_cause_of_a_refusal_has_its_own_key_and_a_message_without_the_mode
             "invalid_shown_item",
             "names an owner who holds nothing in inventory",
         ),
-        // A resident whose id is a party member's.
+        // A resident whose id does not have the grammar of an id.
         (
-            refused(&|arrival| arrival["residents"][0]["id"] = json!("painter")),
+            refused(&|arrival| arrival["residents"][0]["id"] = json!("Fruit Vendor")),
             "bad_resident",
-            "a resident id is already taken",
+            "a resident id",
         ),
         // A resident also listed among the placements, which hold only the movers.
         (
@@ -630,12 +638,12 @@ fn the_sights_on_the_way_are_read_in_order_with_their_poses() {
             RouteSight {
                 id: "fountain_square".to_owned(),
                 sight: "a stone fountain".to_owned(),
-                pose: Pose::Walking
+                pose: Gait::Walking
             },
             RouteSight {
                 id: "shop-row".to_owned(),
                 sight: "a row of shopfronts".to_owned(),
-                pose: Pose::Pausing
+                pose: Gait::Pausing
             }
         ]
     );
@@ -1002,4 +1010,109 @@ fn the_instruction_tells_the_rules_the_refusals_come_from() {
     ] {
         assert!(DESIGN_INSTRUCTION.contains(rule), "{rule}");
     }
+}
+
+#[test]
+fn a_trader_has_wares_and_coin_whose_ids_and_counts_are_checked() {
+    let ware = |id: &str, count: i64| {
+        json!({"id": id, "name": "Red apples", "look": "shiny red apples",
+               "use": "consumed", "count": count, "price_cp": 3})
+    };
+    let coin = |id: &str, count: i64| {
+        json!({"id": id, "name": "silver pennies", "look": "worn silver pennies",
+               "use": "consumed", "count": count})
+    };
+    let mut trader = vendor("fruit_vendor");
+    trader["wares"] = json!([ware("apples", 40), ware("pears", 25), ware("spear", 2)]);
+    trader["coin"] = coin("coins", 30);
+    let parse = |trader: &Value| {
+        parse_design(
+            &answer(vec![mover("elf", "left")], vec![trader.clone()]),
+            &intent(&["elf"], "the market"),
+            &party(),
+        )
+    };
+    let design = parse(&trader).unwrap();
+    let resident = &design.residents[0];
+    assert_eq!(resident.wares.len(), 3);
+    assert_eq!(resident.wares[0].count, 40);
+    assert_eq!(resident.wares[0].price_cp, Some(3), "the answer's price");
+    assert_eq!(
+        resident.wares[2].price_cp,
+        Some(100),
+        "the rules' price of a spear"
+    );
+    assert_eq!(resident.coin.as_ref().map(|coin| coin.count), Some(30));
+    assert_eq!(resident.coin.as_ref().and_then(|coin| coin.price_cp), None);
+    // The coin is the coin the movers hold.
+    let held = |id: &str| -> MoverInventories {
+        vec![(
+            "elf".to_owned(),
+            vec![InventoryItem {
+                id: id.to_owned(),
+                name: "silver pennies".to_owned(),
+                look: "worn".to_owned(),
+                usage: crate::world::ItemUse::Consumed,
+                count: 20,
+                price_cp: None,
+                coin: None,
+            }],
+        )]
+    };
+    assert_eq!(check_coins(&design, &held("coins")), Ok(()));
+    // A standard coin passes too, and is that coin: a till of silver gives change for gold.
+    let mut till = design.clone();
+    for resident in &mut till.residents {
+        if let Some(coin) = resident.coin.as_mut() {
+            coin.id = "silver-piece".to_owned();
+        }
+    }
+    assert_eq!(check_coins(&till, &held("coins")), Ok(()));
+    settle_coins(&mut till, &held("coins"));
+    assert!(
+        till.residents
+            .iter()
+            .filter_map(|resident| resident.coin.as_ref())
+            .all(|coin| coin.coin == Some(df_rules::coins::Denomination::Sp))
+    );
+    assert_eq!(
+        check_coins(&design, &held("silver_pennies")),
+        Err(DesignError::BadWares {
+            resident: "fruit_vendor".to_owned()
+        })
+    );
+    let bad = DesignError::BadWares {
+        resident: "fruit_vendor".to_owned(),
+    };
+    let mut none = trader.clone();
+    none["wares"] = json!([ware("apples", 0)]);
+    assert_eq!(parse(&none).unwrap_err(), bad);
+    let mut twice = trader.clone();
+    twice["wares"] = json!([ware("apples", 3), ware("apples", 4)]);
+    assert_eq!(parse(&twice).unwrap_err(), bad);
+    let mut free = trader.clone();
+    free["wares"][0]["price_cp"] = json!(0);
+    assert_eq!(
+        parse(&free).unwrap_err(),
+        bad,
+        "a ware the rules do not price needs a price"
+    );
+    let mut named_coin = trader;
+    named_coin["coin"] = coin("Silver Penny", 3);
+    assert_eq!(parse(&named_coin).unwrap_err(), bad);
+}
+
+#[test]
+fn a_resident_never_takes_the_id_of_someone_already_met() {
+    // Host 47: a vendor came back under an id a stored persona had, and answered from an earlier
+    // run's talk. A new resident is a new person: the id is numbered past the people met.
+    let met = vec!["fruit_vendor".to_owned()];
+    let mut given = answer(vec![mover("elf", "left")], vec![vendor("fruit_vendor")]);
+    // The answer's distance names her by the id it gave her: it follows her new id (host 49).
+    given["distances"] = serde_json::json!([{"id": "fruit_vendor", "distance": "within_reach"}]);
+    let design =
+        super::design::parse_design_among(&given, &intent(&["elf"], "the market"), &party(), &met)
+            .expect("a met id is numbered, and so are its mentions");
+    assert_eq!(design.residents[0].id, "fruit_vendor_2");
+    assert_eq!(design.distances[0].id, "fruit_vendor_2");
 }

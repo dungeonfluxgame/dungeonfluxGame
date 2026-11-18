@@ -15,7 +15,7 @@ pub use self::host::{
 use crate::view::CanvasView;
 use crate::wire::{ControlsReply, EventsReply};
 
-/// The text of a change that was made (`Reply::Done`): its revision and its notices. A refusal
+/// The text of a change that was made (`wire::Changed`): its revision and its notices. A refusal
 /// prints as its `DevError::Rejected`.
 pub fn describe_done(revision: u64, notices: &[String]) -> String {
     let mut text = format!("ok (revision {revision})");

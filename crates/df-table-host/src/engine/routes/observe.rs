@@ -12,7 +12,8 @@ use tokio::time::Instant;
 
 use crate::engine::request::{ConfigControl, HistoryRequest, ReplayRequest, TraceQuery};
 
-use super::{EngineRoutes, answer, body, engine, query};
+use super::{EngineRoutes, answer, engine};
+use crate::dev_http::{read_body, read_query};
 
 pub(super) async fn history(
     State(routes): State<EngineRoutes>,
@@ -20,7 +21,7 @@ pub(super) async fn history(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let request = query(history_query)?;
+        let request = read_query(history_query)?;
         engine(&routes)?.history(request).await
     }
     .await;
@@ -33,7 +34,7 @@ pub(super) async fn trace(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let TraceQuery { operation } = query(trace_query)?;
+        let TraceQuery { operation } = read_query(trace_query)?;
         engine(&routes)?.trace(operation).await
     }
     .await;
@@ -46,7 +47,7 @@ pub(super) async fn replay(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let request: ReplayRequest = body(bytes)?;
+        let request: ReplayRequest = read_body(bytes)?;
         engine(&routes)?.replay(request).await
     }
     .await;
@@ -65,7 +66,7 @@ pub(super) async fn config_set(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let control: ConfigControl = body(bytes)?;
+        let control: ConfigControl = read_body(bytes)?;
         engine(&routes)?.config(control).await
     }
     .await;

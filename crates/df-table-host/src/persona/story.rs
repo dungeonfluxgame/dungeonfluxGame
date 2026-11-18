@@ -57,6 +57,9 @@ use crate::text::{TextAskError, TextRoute, TextRuntime};
 /// The address of the route: POST a [`StoryRequest`] to plot, GET to read the stored plot.
 pub(super) const PERSONA_STORY: &str = "/dev/persona/story";
 
+/// The address of the authoring route: POST an [`AuthorRequest`], a story written in the scenario.
+pub(super) const PERSONA_STORY_AUTHOR: &str = "/dev/persona/story/author";
+
 /// The file the plot is kept in, in the persona folder of the playground.
 const STORY_FILE: &str = "story.json";
 
@@ -270,6 +273,16 @@ pub struct StoryRequest {
     pub scenes: Vec<String>,
     #[serde(default)]
     pub model: Option<String>,
+}
+
+/// The body of `POST /dev/persona/story/author`: a story written in the scenario, in the shape the
+/// storyteller answers (`story_schema`, a character's `new` left out: the host knows who has a
+/// persona), and the players' heroes (persona ids), who take the `player` part.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthorRequest {
+    pub story: Value,
+    pub players: Vec<String>,
 }
 
 /// One character's part in the story and all it will be told of it.
@@ -1190,6 +1203,133 @@ async fn plot(routes: &StoryRoutes, request: &StoryRequest) -> Result<Story, Sto
     Ok(story)
 }
 
+/// The role of a player's hero in a story written in the scenario.
+const PLAYER_ROLE: &str = "a hero of the party, played from a seat at the table";
+
+/// Keeps a story written in the scenario (`request.story`), checked as a plotted one is
+/// (`parse_story`: every id, part, scene, piece of evidence and way), with each player's hero
+/// added in the `player` part. Its characters are new unless a persona is stored for them; the
+/// heroes are the host's own, named as their personas are, so their ids (`hero-6`) need not be
+/// the story's plain ids. A story kept before is replaced, with no play state.
+async fn author(routes: &StoryRoutes, request: &AuthorRequest) -> Result<Story, StoryRouteError> {
+    let started = Instant::now();
+    let mut players = Vec::new();
+    for id in &request.players {
+        let persona = load_persona(&routes.app, id)
+            .await
+            .map_err(|_| bad(StoryError::UnknownCast { id: id.clone() }))?;
+        players.push(StoryCharacter {
+            id: id.clone(),
+            name: persona.brief(BriefScope::Listener).public.display_name,
+            new: false,
+            part: super::story_next::PLAYER.to_owned(),
+            role: PLAYER_ROLE.to_owned(),
+            guidance: NarrativeGuidance::default(),
+            secrets: Vec::new(),
+        });
+    }
+    let directory = super::storage::persona_directory(&routes.app);
+    let stored = crate::blocking::run_blocking(
+        move || super::storage::list_personas(&directory),
+        super::request::PersonaError::Stopped,
+    )
+    .await
+    .map_err(|error| {
+        bad(StoryError::PersonasUnreadable {
+            reason: error.to_string(),
+        })
+    })?;
+    let taken: Vec<String> = stored
+        .iter()
+        .map(|persona| persona.id().to_string())
+        .filter(|id| !request.players.contains(id))
+        .collect();
+    let mut answer = request.story.clone();
+    if let Some(characters) = answer.get_mut("characters").and_then(Value::as_array_mut) {
+        for character in characters {
+            let new = character
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !taken.iter().any(|kept| kept == id));
+            character["new"] = json!(new);
+        }
+    }
+    let scenes: Vec<String> = answer
+        .get("scenes")
+        .and_then(Value::as_array)
+        .map(|scenes| {
+            scenes
+                .iter()
+                .filter_map(|scene| scene.get("id").and_then(Value::as_str))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let distinct = scenes
+        .iter()
+        .enumerate()
+        .all(|(at, id)| plain_id(id) && !scenes[..at].contains(id));
+    if scenes.is_empty() || !distinct {
+        return Err(bad(StoryError::BadScenes));
+    }
+    let mut story = parse_story(&answer, (&[], &taken), &scenes).map_err(bad)?;
+    if let Some(twice) = players
+        .iter()
+        .find(|player| story.characters.iter().any(|seen| seen.id == player.id))
+    {
+        return Err(bad(malformed(format!(
+            "'{}' is a player's hero and a character of the story",
+            twice.id
+        ))));
+    }
+    story.characters.extend(players);
+    let _writing = routes.story_write.lock().await;
+    let path = story_path(&routes.app);
+    let kept = story.clone();
+    crate::blocking::run_blocking(
+        move || write_story(&path, &kept).map_err(bad),
+        StoryRouteError::Stopped,
+    )
+    .await?;
+    *routes
+        .stretch
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Stretch::default();
+    routes.app.record_line(format!(
+        "PERSONA story_authored characters={} players={} scenes={} beats={} evidence={} \
+         duration_ms={}",
+        story.characters.len(),
+        request.players.len(),
+        story.scenes.len(),
+        story.beats.len(),
+        story.evidence.len(),
+        started.elapsed().as_millis()
+    ));
+    Ok(story)
+}
+
+async fn post_author(State(routes): State<Arc<StoryRoutes>>, bytes: Bytes) -> Response {
+    let result = match parse_body::<AuthorRequest>(&bytes) {
+        Ok(request) => {
+            let owned = Arc::clone(&routes);
+            run_owned(
+                async move { author(&owned, &request).await },
+                StoryRouteError::Stopped,
+            )
+            .await
+        }
+        Err(error) => Err(StoryRouteError::InvalidBody(error)),
+    };
+    refused(&routes.app, &result);
+    reply(result)
+}
+
+/// `persona story author <file> players=<id>,..`: keeps the story the file writes and shows it.
+pub(super) async fn author_story(port: u16, request: AuthorRequest) -> Result<String, DevError> {
+    let reply: StoryReply = post_json(port, PERSONA_STORY_AUTHOR, &request).await?;
+    Ok(shown(&reply_value(reply)?))
+}
+
 /// `story` with every character id it holds turned by `call` (into handles, or back to ids);
 /// a move put to the room stays put to the room.
 pub(super) fn with_ids(mut story: Story, call: impl Fn(&str) -> String) -> Story {
@@ -1719,6 +1859,19 @@ pub(crate) fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>) -> Router 
         .route(PERSONA_STORY, post(post_story).get(get_story))
         .route(PERSONA_STORY_MOVES, post(post_moves))
         .route(PERSONA_STORY_RESET, post(post_reset))
+        .route(PERSONA_STORY_AUTHOR, post(post_author))
+        .route(
+            super::story_quest::PERSONA_QUEST_PICK,
+            post(super::story_quest::post_quest_pick),
+        )
+        .route(
+            super::story_quest::PERSONA_RIDDLE_ASK,
+            post(super::story_quest::post_riddle_ask),
+        )
+        .route(
+            super::story_quest::PERSONA_RIDDLE_JUDGE,
+            post(super::story_quest::post_riddle_judge),
+        )
         .route(
             super::story_next::PERSONA_STORY_NEXT,
             post(super::story_next::post_next),
@@ -1924,6 +2077,9 @@ pub(super) async fn apply_story(port: u16, model: Option<String>) -> Result<Stri
                 guidance: Some(guidance.clone()),
                 model: model.clone(),
                 overwrite: false,
+                unplaced: false,
+                names_taken: Vec::new(),
+                as_painted: None,
             };
             let reply: PersonaReply<Generation> =
                 post_json(port, persona_path::PERSONA_GENERATE, &request).await?;

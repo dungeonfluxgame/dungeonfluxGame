@@ -163,8 +163,7 @@ async fn request(
 ) -> Result<Response, ClientError> {
     request_typed(
         port,
-        method,
-        path,
+        (method, path, &[]),
         "application/json",
         body.as_bytes(),
         limit,
@@ -174,15 +173,18 @@ async fn request(
 
 async fn request_typed(
     port: u16,
-    method: &str,
-    path: &str,
+    (method, path, headers): (&str, &str, &[(&str, &str)]),
     content_type: &str,
     body: &[u8],
     limit: usize,
 ) -> Result<Response, ClientError> {
+    let extra: String = headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect();
     let mut request = format!(
         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
-         {CLIENT_HEADER}: {CLI_CLIENT_NAME}\r\nContent-Type: {content_type}\r\n\
+         {CLIENT_HEADER}: {CLI_CLIENT_NAME}\r\n{extra}Content-Type: {content_type}\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     )
@@ -213,10 +215,27 @@ pub async fn post_bytes(
 ) -> Result<Response, ClientError> {
     request_typed(
         port,
-        "POST",
-        path,
+        ("POST", path, &[]),
         content_type,
         body,
+        MAXIMUM_RESPONSE_BYTES,
+    )
+    .await
+}
+
+/// `method` (GET, or POST with `body` as JSON) to `path` with the extra `headers` (the dev
+/// command line acting as a seat), and read the whole answer.
+pub async fn send_with(
+    port: u16,
+    (method, path): (&str, &str),
+    headers: &[(&str, &str)],
+    body: &str,
+) -> Result<Response, ClientError> {
+    request_typed(
+        port,
+        (method, path, headers),
+        "application/json",
+        body.as_bytes(),
         MAXIMUM_RESPONSE_BYTES,
     )
     .await

@@ -11,7 +11,7 @@ use df_playground::kit::ledger::Ledger;
 use serde::{Deserialize, Serialize};
 
 use super::{Memory, MemoryField, MemoryFilter, MemoryLink};
-use crate::dev_http::{BodyError, DevReply, RouteError};
+use crate::dev_http::{BodyError, DevReply, QueryError, RouteError};
 use crate::io_cause::IoCause;
 
 /// The answer of a memory route: its value, or why it was refused.
@@ -226,9 +226,7 @@ pub struct History {
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum MemoryError {
     InvalidBody(BodyError),
-    InvalidQuery {
-        detail: String,
-    },
+    InvalidQuery(QueryError),
     /// An owner id is not an id.
     InvalidOwner {
         owner: String,
@@ -362,7 +360,7 @@ impl MemoryError {
     pub fn key(&self) -> &'static str {
         match self {
             Self::InvalidBody(_) => "invalid_body",
-            Self::InvalidQuery { .. } => "invalid_query",
+            Self::InvalidQuery(_) => "invalid_query",
             Self::InvalidOwner { .. } => "invalid_owner",
             Self::InvalidId { .. } => "invalid_id",
             Self::InvalidKind { .. } => "invalid_kind",
@@ -412,7 +410,7 @@ impl fmt::Display for MemoryError {
         const ID_RULE: &str = "lowercase letters, digits, '_' or '-'";
         match self {
             Self::InvalidBody(error) => write!(formatter, "{error}"),
-            Self::InvalidQuery { detail } => write!(formatter, "the query is not valid: {detail}"),
+            Self::InvalidQuery(error) => write!(formatter, "{error}"),
             Self::InvalidOwner { owner } => {
                 write!(formatter, "{owner:?} is not an owner id ({ID_RULE})")
             }
@@ -517,7 +515,7 @@ impl RouteError for MemoryError {
     fn status(&self) -> StatusCode {
         match self {
             Self::InvalidBody(_)
-            | Self::InvalidQuery { .. }
+            | Self::InvalidQuery(_)
             | Self::InvalidOwner { .. }
             | Self::InvalidId { .. }
             | Self::InvalidKind { .. }

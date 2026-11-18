@@ -73,7 +73,7 @@ impl ScriptedHost {
 
 /// The persona the tests store for [`CHARACTER`]: public backstory and personality, private fears
 /// and backstory.
-pub(super) fn innkeeper() -> Persona {
+pub(crate) fn innkeeper() -> Persona {
     serde_json::from_value(json!({
         "schema": 1, "id": CHARACTER, "display_name": "Marta Venn", "job": "Keeper of the inn",
         "personality": ["warm but shrewd"],

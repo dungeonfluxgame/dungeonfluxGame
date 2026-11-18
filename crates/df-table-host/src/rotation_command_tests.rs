@@ -7,10 +7,14 @@ use df_table::event::RejectionCause;
 use crate::client::{get, post_json};
 use crate::command::{Command, CommandError, parse, split_words, usage_text};
 use crate::dev::{DevError, ReplyError, run_dev};
+use crate::dev_http::{BodyCause, DevReply};
 use crate::repl::{LineResult, run_line};
+use crate::server::request::HostError;
+use crate::server::request::HostReply;
 use crate::test_support::{Running, STARTER_FILES, start};
 use crate::view::{CanvasView, ElementView, PivotView};
-use crate::wire::{EffectRequest, EventsReply, Frame, PivotRequest, Reply};
+use crate::wire::{Changed, EffectRequest, EventsReply, PivotRequest};
+use df_playground::frame::Frame;
 
 fn words(line: &str) -> Vec<String> {
     split_words(line).expect("the line splits")
@@ -210,10 +214,10 @@ async fn rotating_an_element_that_is_not_there_is_refused_and_recorded() {
         matches!(
             &error,
             DevError::Rejected {
-                error: ReplyError::Canvas {
-                    cause: Some(RejectionCause::UnknownElement),
+                error: ReplyError::Host(HostError::InvalidEffect {
+                    cause: RejectionCause::UnknownElement,
                     ..
-                },
+                }),
                 ..
             }
         ),
@@ -224,7 +228,7 @@ async fn rotating_an_element_that_is_not_there_is_refused_and_recorded() {
     ));
 }
 
-async fn post_effect(running: &Running, body: &str) -> (StatusCode, Reply) {
+async fn post_effect(running: &Running, body: &str) -> (StatusCode, HostReply<Changed>) {
     let response = post_json(running.port, "/dev/effect", body)
         .await
         .expect("answers");
@@ -246,7 +250,7 @@ async fn the_wire_form_refuses_360_with_the_range_records_it_and_changes_nothing
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(matches!(
         &reply,
-        Reply::Rejected { message, .. } if message.contains("0 to 359")
+        DevReply::Rejected { message, .. } if message.contains("0 to 359")
     ));
     assert!(
         log_lines(&running).await.contains(
@@ -268,7 +272,8 @@ async fn a_wire_request_with_a_good_rotation_and_a_bad_pivot_applies_neither() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(matches!(
         &reply,
-        Reply::Rejected { message, .. } if message.contains("pivot") && message.contains("0 to 100")
+        DevReply::Rejected { message, .. }
+            if message.contains("pivot") && message.contains("0 to 100")
     ));
     let unchanged = element(&running, "m1").await;
     assert_eq!(unchanged.rotation_degrees, 0);
@@ -289,7 +294,7 @@ async fn the_wire_form_accepts_the_edges_zero_and_359() {
         let body = format!(r#"{{"op":"transform","id":"m1","rotation_degrees":{degrees}}}"#);
         let (status, reply) = post_effect(&running, &body).await;
         assert_eq!(status, StatusCode::OK);
-        assert!(matches!(reply, Reply::Done { .. }));
+        assert!(matches!(reply, DevReply::Done { .. }));
         assert_eq!(element(&running, "m1").await.rotation_degrees, degrees);
     }
 }
@@ -392,8 +397,10 @@ async fn refused_with_the_range(running: &Running, body: &str, range: &str) {
     let (status, reply) = post_effect(running, body).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert!(
-        matches!(&reply, Reply::Rejected { message, cause, .. }
-            if message.contains(range) && *cause == Some(df_table::event::RejectionCause::InvalidTransform)),
+        matches!(&reply, DevReply::Rejected {
+                error: HostError::InvalidEffect { cause, .. },
+                message,
+            } if message.contains(range) && *cause == RejectionCause::InvalidTransform),
         "{body}: {reply:?}"
     );
     assert!(
@@ -440,11 +447,11 @@ async fn a_missing_rotation_or_a_rotation_that_is_text_is_a_malformed_request() 
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert!(
             matches!(
-                reply,
-                Reply::Rejected {
-                    cause: Some(df_table::event::RejectionCause::MalformedRequest),
+                &reply,
+                DevReply::Rejected {
+                    error: HostError::InvalidBody(body),
                     ..
-                }
+                } if body.cause == BodyCause::Data
             ),
             "{body}"
         );
@@ -464,10 +471,10 @@ async fn a_pivot_change_on_a_turned_element_is_refused_once_and_the_log_says_why
         matches!(
             &error,
             DevError::Rejected {
-                error: ReplyError::Canvas {
-                    cause: Some(RejectionCause::InvalidTransform),
+                error: ReplyError::Host(HostError::InvalidEffect {
+                    cause: RejectionCause::InvalidTransform,
                     ..
-                },
+                }),
                 ..
             }
         ),

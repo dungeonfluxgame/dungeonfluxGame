@@ -12,6 +12,7 @@ use serde::de::DeserializeOwned;
 use crate::client::{self, Response};
 use crate::dev::{DevError, ReplyError};
 use crate::dev_http::DevReply;
+use crate::guard::GuardError;
 use crate::limits::MAXIMUM_ECHOED_ANSWER_CHARACTERS;
 
 /// The value of a dev route's reply, or its refusal as `DevError::Rejected` carrying the route's
@@ -40,10 +41,18 @@ pub(crate) fn unexpected_answer(response: &Response, reason: Option<String>) -> 
     }
 }
 
-/// Reads the body of `response` as `Reply`, whatever its status.
+/// Reads the body of `response` as `Reply`, whatever its status. A refusal by the guard in front of
+/// every route (`guard::GuardError`) is the guard's typed refusal, whichever reply was expected.
 pub(crate) fn read_answer<Reply: DeserializeOwned>(response: &Response) -> Result<Reply, DevError> {
-    serde_json::from_str(&response.body)
-        .map_err(|error| unexpected_answer(response, Some(error.to_string())))
+    serde_json::from_str(&response.body).map_err(|error| {
+        match serde_json::from_str::<DevReply<(), GuardError>>(&response.body) {
+            Ok(DevReply::Rejected { error, message }) => DevError::Rejected {
+                error: ReplyError::Guard(error),
+                message,
+            },
+            _ => unexpected_answer(response, Some(error.to_string())),
+        }
+    })
 }
 
 /// Writes `request` as the JSON body of a request.
@@ -86,6 +95,34 @@ pub(crate) async fn get_json<Reply: DeserializeOwned>(
     path: &str,
 ) -> Result<Reply, DevError> {
     read_answer(&get(port, path).await?)
+}
+
+/// Sends a GET to `path` with the extra `headers` (acting as a seat) and reads the answer as
+/// `Reply`.
+pub(crate) async fn get_json_with<Reply: DeserializeOwned>(
+    port: u16,
+    path: &str,
+    headers: &[(&str, &str)],
+) -> Result<Reply, DevError> {
+    let response = client::send_with(port, ("GET", path), headers, "")
+        .await
+        .map_err(DevError::Client)?;
+    read_answer(&response)
+}
+
+/// Posts `request` as JSON to `path` with the extra `headers` (acting as a seat) and reads the
+/// answer as `Reply`.
+pub(crate) async fn post_json_with<Request: Serialize, Reply: DeserializeOwned>(
+    port: u16,
+    path: &str,
+    headers: &[(&str, &str)],
+    request: &Request,
+) -> Result<Reply, DevError> {
+    let body = request_body(request)?;
+    let response = client::send_with(port, ("POST", path), headers, &body)
+        .await
+        .map_err(DevError::Client)?;
+    read_answer(&response)
 }
 
 /// Posts `request` as JSON to `path` on the host on `port` and reads the answer as `Reply`.

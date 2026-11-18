@@ -15,7 +15,8 @@ use crate::playground::{
     reconcile_fixtures,
 };
 use crate::test_support::{Running, STARTER_FILES, start};
-use crate::wire::{ControlsBatch, ControlsReply, EventsReply, Frame};
+use crate::wire::{ControlsBatch, ControlsReply, EventsReply};
+use df_playground::frame::Frame;
 
 const SCENE: &str = r#"{
     "name": "A scene",

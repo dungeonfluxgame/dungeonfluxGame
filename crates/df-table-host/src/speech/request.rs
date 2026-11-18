@@ -9,6 +9,7 @@ use std::fmt;
 
 use axum::http::StatusCode;
 use df_content::persona::PersonaError as ContentError;
+use df_playground::limits::{MAXIMUM_CAPTURE_MS, MAXIMUM_QUESTION_CHARACTERS, MINIMUM_CAPTURE_MS};
 // The page reads these, so the page owns them and the JSON is one.
 pub use df_playground::voice_wire::{
     MissingSetting, SpeechErrorKind, SpeechFeature, SpeechLimits, SpeechStatus, Transcript,
@@ -16,11 +17,8 @@ pub use df_playground::voice_wire::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::limits::{
-    MAXIMUM_AUDIO_MS, MAXIMUM_KEY_TERM_CHARACTERS, MAXIMUM_KEY_TERM_WORDS, MAXIMUM_KEY_TERMS,
-    MAXIMUM_TEXT_CHARACTERS, MINIMUM_AUDIO_MS,
-};
-use crate::dev_http::{BodyError, DevReply, RouteError};
+use super::limits::{MAXIMUM_KEY_TERM_CHARACTERS, MAXIMUM_KEY_TERM_WORDS, MAXIMUM_KEY_TERMS};
+use crate::dev_http::{BodyError, DevReply, QueryError, RouteError};
 use crate::io_cause::IoCause;
 use crate::persona::PersonaError;
 use crate::persona::story::JudgeRouteError;
@@ -32,9 +30,9 @@ pub type SpeechReply<T> = DevReply<T, SpeechError>;
 /// The bounds a caller works within, as this host sets them.
 pub(super) fn current_limits() -> SpeechLimits {
     SpeechLimits {
-        minimum_audio_ms: MINIMUM_AUDIO_MS,
-        maximum_audio_ms: MAXIMUM_AUDIO_MS,
-        maximum_text_characters: whole(MAXIMUM_TEXT_CHARACTERS),
+        minimum_audio_ms: MINIMUM_CAPTURE_MS,
+        maximum_audio_ms: MAXIMUM_CAPTURE_MS,
+        maximum_text_characters: whole(MAXIMUM_QUESTION_CHARACTERS),
         maximum_key_terms: whole(MAXIMUM_KEY_TERMS),
         maximum_kept_clips: whole(super::limits::kept_clips()),
     }
@@ -459,12 +457,11 @@ impl fmt::Display for ClipCause {
     }
 }
 
-/// What is wrong with the query of a transcription.
+/// What is wrong with the key terms of a transcription's query (a query that does not read at all
+/// is the shared `QueryError`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryCause {
-    /// The query string could not be read at all.
-    Unreadable,
     /// A key other than `terms`.
     UnknownKey,
     TooManyTerms,
@@ -478,8 +475,7 @@ pub enum QueryCause {
 }
 
 impl QueryCause {
-    pub const ALL: [Self; 7] = [
-        Self::Unreadable,
+    pub const ALL: [Self; 6] = [
         Self::UnknownKey,
         Self::TooManyTerms,
         Self::BlankTerm,
@@ -490,7 +486,6 @@ impl QueryCause {
 
     pub fn key(self) -> &'static str {
         match self {
-            Self::Unreadable => "unreadable",
             Self::UnknownKey => "unknown_key",
             Self::TooManyTerms => "too_many_terms",
             Self::BlankTerm => "blank_term",
@@ -508,7 +503,6 @@ impl QueryCause {
 impl fmt::Display for QueryCause {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unreadable => formatter.write_str("the query could not be read"),
             Self::UnknownKey => formatter.write_str("the only query key is terms"),
             Self::TooManyTerms => write!(formatter, "at most {MAXIMUM_KEY_TERMS} key terms"),
             Self::BlankTerm => formatter.write_str("a key term is blank"),
@@ -562,8 +556,10 @@ impl fmt::Display for VoicesCause {
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum SpeechError {
     InvalidBody(BodyError),
-    /// The query is not one the route reads.
-    InvalidQuery {
+    /// The query does not read as the route's.
+    InvalidQuery(QueryError),
+    /// The query's key terms are not ones the route takes.
+    InvalidTerms {
         cause: QueryCause,
     },
     /// The speech service is not set up; `missing` says what to set.
@@ -649,7 +645,8 @@ impl SpeechError {
     pub fn kind(&self) -> SpeechErrorKind {
         match self {
             Self::InvalidBody(_) => SpeechErrorKind::InvalidBody,
-            Self::InvalidQuery { .. } => SpeechErrorKind::InvalidQuery,
+            Self::InvalidQuery(_) => SpeechErrorKind::InvalidQuery,
+            Self::InvalidTerms { .. } => SpeechErrorKind::InvalidTerms,
             Self::NotConfigured { .. } => SpeechErrorKind::NotConfigured,
             Self::UnsupportedContentType => SpeechErrorKind::UnsupportedContentType,
             Self::UnsupportedWav => SpeechErrorKind::UnsupportedWav,
@@ -679,7 +676,8 @@ impl fmt::Display for SpeechError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidBody(error) => write!(formatter, "{error}"),
-            Self::InvalidQuery { cause } => write!(formatter, "the query is not valid: {cause}"),
+            Self::InvalidQuery(error) => write!(formatter, "{error}"),
+            Self::InvalidTerms { cause } => write!(formatter, "the query is not valid: {cause}"),
             Self::NotConfigured { missing } => write!(
                 formatter,
                 "the speech service is not set up: set {}",
@@ -775,7 +773,8 @@ impl RouteError for SpeechError {
     fn status(&self) -> StatusCode {
         match self {
             Self::InvalidBody(_)
-            | Self::InvalidQuery { .. }
+            | Self::InvalidQuery(_)
+            | Self::InvalidTerms { .. }
             | Self::UnsupportedContentType
             | Self::UnsupportedWav
             | Self::AudioEmpty

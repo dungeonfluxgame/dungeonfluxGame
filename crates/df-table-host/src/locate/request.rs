@@ -14,7 +14,7 @@ use df_scene_layout::SceneLayout;
 use serde::{Deserialize, Serialize};
 
 use super::limits::MAXIMUM_PICTURE_NAME_BYTES;
-use crate::dev_http::{BodyError, DevReply, RouteError};
+use crate::dev_http::{BodyError, DevReply, QueryError, RouteError};
 use crate::forge::{ForgeSetupCause, ForgeSetupError};
 use crate::io_cause::IoCause;
 use crate::text::TextServiceCause;
@@ -65,6 +65,27 @@ pub struct LocateRequest {
     pub prompt: Option<ScanPrompt>,
     #[serde(default)]
     pub masks: Option<u32>,
+}
+
+/// A search of a picture for one thing, by the words of what it is (`noun`, such as `hanging
+/// signboard`): the regions the segmentation finds are answered, never stored as the picture's
+/// layout (which stays the people's).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FindRequest {
+    pub picture: String,
+    pub noun: String,
+    #[serde(default)]
+    pub masks: Option<u32>,
+}
+
+/// What a search found: each region of the thing, with the picture's size, and how long the
+/// segmentation took. None found is an answer, not a refusal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FoundRegions {
+    pub picture: String,
+    pub duration_ms: u64,
+    pub layout: SceneLayout,
 }
 
 /// A name for one region of a stored layout, or `None` to clear it, and the name a page shows for
@@ -395,10 +416,8 @@ impl std::error::Error for LocateStageError {
 pub enum LocateError {
     /// The request body is not the JSON the route reads.
     InvalidBody(BodyError),
-    /// The query is not the one the route reads; `detail` is the reader's sentence.
-    InvalidQuery {
-        detail: String,
-    },
+    /// The query is not the one the route reads.
+    InvalidQuery(QueryError),
     /// Not a picture of the media library: a plain file name with a picture extension.
     InvalidPictureName {
         name: String,
@@ -417,6 +436,8 @@ pub enum LocateError {
     },
     /// An identification that names no character.
     NoCharacters,
+    /// A search's words are blank, over 64 characters or hold a control character.
+    InvalidNoun,
     /// `region` is not a region of the picture's layout, which has `region_count` regions named
     /// `names`.
     UnknownRegion {
@@ -491,12 +512,13 @@ impl LocateError {
     pub fn key(&self) -> &'static str {
         match self {
             Self::InvalidBody(_) => "invalid_body",
-            Self::InvalidQuery { .. } => "invalid_query",
+            Self::InvalidQuery(_) => "invalid_query",
             Self::InvalidPictureName { .. } => "invalid_picture_name",
             Self::InvalidMaskCount { .. } => "invalid_mask_count",
             Self::InvalidLabel { .. } => "invalid_label",
             Self::InvalidMinimumConfidence { .. } => "invalid_minimum_confidence",
             Self::NoCharacters => "no_characters",
+            Self::InvalidNoun => "invalid_noun",
             Self::UnknownRegion { .. } => "unknown_region",
             Self::PictureMissing { .. } => "picture_missing",
             Self::PictureUnreadable { .. } => "picture_unreadable",
@@ -545,7 +567,7 @@ impl fmt::Display for LocateError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidBody(error) => write!(formatter, "{error}"),
-            Self::InvalidQuery { detail } => write!(formatter, "the query is not valid: {detail}"),
+            Self::InvalidQuery(error) => write!(formatter, "{error}"),
             Self::InvalidPictureName { name } => write!(
                 formatter,
                 concat!(
@@ -571,6 +593,9 @@ impl fmt::Display for LocateError {
                 "min={min_confidence_permille} is out of range: 0 to 1000 thousandths"
             ),
             Self::NoCharacters => formatter.write_str("name at least one character to look for"),
+            Self::InvalidNoun => formatter.write_str(
+                "say what to look for in a few words, at most 64 characters, on one line",
+            ),
             Self::UnknownRegion {
                 region,
                 region_count,
@@ -672,12 +697,13 @@ impl RouteError for LocateError {
     fn status(&self) -> StatusCode {
         match self {
             Self::InvalidBody(_)
-            | Self::InvalidQuery { .. }
+            | Self::InvalidQuery(_)
             | Self::InvalidPictureName { .. }
             | Self::InvalidMaskCount { .. }
             | Self::InvalidLabel { .. }
             | Self::InvalidMinimumConfidence { .. }
             | Self::NoCharacters
+            | Self::InvalidNoun
             | Self::UnknownRegion { .. }
             | Self::QuestionInvalid { .. } => StatusCode::BAD_REQUEST,
             Self::PictureMissing { .. } | Self::NoLayout { .. } => StatusCode::NOT_FOUND,

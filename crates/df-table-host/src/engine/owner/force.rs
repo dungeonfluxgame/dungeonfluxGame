@@ -106,9 +106,31 @@ impl Owner {
             (Scope::Group, None) => return Err(closed(ForceCause::NoActiveScene)),
             (Scope::Seat, _) => return Err(closed(ForceCause::SeatLane)),
         };
+        // A table machine forced with `clear_scene` takes the focus back from the focus scene's
+        // machine, which stops first (a day that ended goes back to the lobby).
+        if request.clear_scene
+            && home == MachineHome::Table
+            && let Some(scene) = working.facts().active_scene()
+            && working
+                .facts()
+                .snapshot()
+                .scene(scene)
+                .and_then(|record| record.active())
+                .is_some()
+        {
+            let operation = self.mint_engine_operation();
+            working
+                .clear_scene_machine(self.correlation_for(operation), scene)
+                .map_err(|error| refused(ForceCause::StartRefused, error))?;
+        }
         let operation = self.mint_engine_operation();
         working
             .start_machine(self.correlation_for(operation), home, slot)
+            .map_err(|error| refused(ForceCause::StartRefused, error))?;
+        // The seats' buttons follow the machine the table is in now, as after a turn.
+        self.turn_context()
+            .with_pipeline(|pipeline| pipeline.refresh_offers(&mut working))
+            .map_err(|error| refused(ForceCause::StartRefused, error))?
             .map_err(|error| refused(ForceCause::StartRefused, error))?;
         self.commit_forced(working, id, state)
     }

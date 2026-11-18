@@ -7,7 +7,7 @@
 //! host's recording dice over system entropy (`RecordedDice::from_system_entropy`): a run is never
 //! seeded in the host, and a test passes its own entropy.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -19,8 +19,9 @@ use axum::routing::post;
 
 use super::flow::{RunClock, run_check};
 use super::judge::judge_check;
-use super::limits::{LINE_BUDGET_MS, MAXIMUM_REMEMBERED_FLOURISHES};
-use super::request::{CheckJudgeRequest, CheckRouteError, CheckRunRequest};
+use super::limits::{LINE_BUDGET_MS, MAXIMUM_REMEMBERED_FLOURISHES, ROLL_WATCH_MS};
+use super::pending::PendingRolls;
+use super::request::{CheckJudgeRequest, CheckRouteError, CheckRunRequest, CheckTest};
 use crate::adapters::{ActionBook, DfRulesOwner, RecordedDice, RulesCheckKit, SeatRoster};
 use crate::blocking::run_owned;
 use crate::dev_http::{parse_body, reply};
@@ -37,14 +38,27 @@ pub(in crate::persona) mod path {
 
 /// What the check routes work with: the persona routes (the host, the text surface, the speech
 /// service and the dungeon master's box) and the kit that draws and resolves a roll.
-pub(super) struct CheckRoutes {
+pub(crate) struct CheckRoutes {
     pub(super) persona: Arc<PersonaRoutes>,
     pub(super) kit: RulesCheckKit,
     /// How long a line of the dungeon master may take before it is said as its numbers alone.
     pub(super) line_budget: Duration,
     /// The last flourishes the dungeon master said, oldest first, so the next does not repeat them.
     said: Mutex<VecDeque<String>>,
+    /// The table's turn: one check runs at a time (its card, its lines and its clearing), whoever
+    /// asked for it, the runner or a seat.
+    table: tokio::sync::Mutex<()>,
+    /// The tests each character rolled from a seat at each place, by (character, place): the
+    /// judge is told them, so a check is not rolled again until something changes.
+    seat_checked: Mutex<SeatChecked>,
+    /// The roll a seated hero's player is asked to make now.
+    pub(super) pending: PendingRolls,
+    /// How long a called roll waits for the player before the host rolls it.
+    pub(super) roll_watch: Duration,
 }
+
+/// The tests rolled from a seat, by (character, place).
+type SeatChecked = BTreeMap<(String, Option<String>), Vec<CheckTest>>;
 
 impl CheckRoutes {
     pub(super) fn new(
@@ -57,7 +71,36 @@ impl CheckRoutes {
             kit,
             line_budget,
             said: Mutex::new(VecDeque::new()),
+            table: tokio::sync::Mutex::new(()),
+            seat_checked: Mutex::new(BTreeMap::new()),
+            pending: PendingRolls::default(),
+            roll_watch: Duration::from_millis(ROLL_WATCH_MS),
         }
+    }
+
+    /// Waits for the table's turn; the check runs while the guard is held.
+    pub(super) async fn table_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.table.lock().await
+    }
+
+    /// The tests `character` rolled from a seat at `place`.
+    pub(super) fn seat_checked(&self, character: &str, place: Option<&str>) -> Vec<CheckTest> {
+        self.seat_checked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&(character.to_owned(), place.map(str::to_owned)))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Keeps `test` as rolled from a seat by `character` at `place`.
+    pub(super) fn keep_seat_checked(&self, character: &str, place: Option<&str>, test: CheckTest) {
+        self.seat_checked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry((character.to_owned(), place.map(str::to_owned)))
+            .or_default()
+            .push(test);
     }
 
     /// The flourishes said last, oldest first.
@@ -111,7 +154,10 @@ async fn post_run(State(routes): State<Arc<CheckRoutes>>, bytes: Bytes) -> Respo
         Ok(request) => {
             let owned = Arc::clone(&routes);
             run_owned(
-                async move { run_check(&owned, &RunClock::start(), &request).await },
+                async move {
+                    let _turn = owned.table_turn().await;
+                    run_check(&owned, &RunClock::start(), &request).await
+                },
                 CheckRouteError::Stopped,
             )
             .await
@@ -131,12 +177,16 @@ pub(in crate::persona) fn router_over(
         SeatRoster::default(),
         ActionBook::default(),
     ));
+    let app = Arc::clone(&persona.app);
+    let routes = Arc::new(CheckRoutes::new(
+        persona,
+        RulesCheckKit::new(rules, dice),
+        Duration::from_millis(LINE_BUDGET_MS),
+    ));
+    // A seat's roll reaches the same runner from either listener (`seat_roll`).
+    app.set_check_rolls(Arc::clone(&routes));
     Router::new()
         .route(path::PERSONA_CHECK_JUDGE, post(post_judge))
         .route(path::PERSONA_CHECK_RUN, post(post_run))
-        .with_state(Arc::new(CheckRoutes::new(
-            persona,
-            RulesCheckKit::new(rules, dice),
-            Duration::from_millis(LINE_BUDGET_MS),
-        )))
+        .with_state(routes)
 }

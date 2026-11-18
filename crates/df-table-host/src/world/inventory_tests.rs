@@ -27,6 +27,8 @@ fn item(id: &str, count: u64) -> InventoryItem {
         look: format!("the {id} as it looks"),
         usage: ItemUse::Consumed,
         count,
+        price_cp: None,
+        coin: None,
     }
 }
 
@@ -58,6 +60,7 @@ fn add(id: &str, count: u64) -> InventoryChange {
         name: None,
         look: None,
         usage: None,
+        price_cp: None,
         why: String::new(),
     }
 }
@@ -91,6 +94,8 @@ fn an_inventory_is_checked_when_it_is_made() {
         look: look.to_owned(),
         usage: ItemUse::Consumed,
         count: 1,
+        price_cp: None,
+        coin: None,
     };
     let make = |owner: &str, items: Vec<InventoryItem>| {
         Inventory::new(owner, OwnerKind::Character, items).unwrap_err()
@@ -225,6 +230,7 @@ fn every_refusal_of_a_change_is_typed_and_changes_nothing() {
         name: Some("brush".to_owned()),
         look: Some("splayed bristles".to_owned()),
         usage: Some(ItemUse::Kept),
+        price_cp: None,
         why: "bought".to_owned(),
     };
     let (after, _) = apply_changes(&danny, &[new]).unwrap();
@@ -1350,6 +1356,23 @@ fn the_verbs_read_their_words() {
         parse("batch danny changes.json").unwrap(),
         InventoryCommand::Batch { .. }
     ));
+    let InventoryCommand::Pay(pay) = parse(r#"pay hero-1 ferryman 50 why="ferry fare""#).unwrap()
+    else {
+        panic!("a pay");
+    };
+    assert_eq!(
+        (
+            pay.from.as_str(),
+            pay.to.as_str(),
+            pay.amount_cp,
+            pay.why.as_str()
+        ),
+        ("hero-1", "ferryman", 50, "ferry fare")
+    );
+    assert!(matches!(
+        parse("pay hero-1 ferryman five"),
+        Err(CommandError::BadChoice { .. })
+    ));
     assert_eq!(
         parse("history danny limit=5").unwrap(),
         InventoryCommand::History {
@@ -1385,9 +1408,9 @@ fn every_error_has_its_own_key_a_sentence_and_a_status() {
     use crate::dev_http::BodyError;
     use crate::io_cause::IoCause;
     let errors = [
-        InventoryError::InvalidQuery {
+        InventoryError::InvalidQuery(crate::dev_http::QueryError {
             detail: "x".to_owned(),
-        },
+        }),
         InventoryError::InvalidOwner {
             owner: "X".to_owned(),
         },
@@ -1526,6 +1549,9 @@ fn judged(deltas: &[InventoryDelta], things: &[&str], present: &[&str]) -> Judge
         deltas,
         &GainContext {
             things: &things,
+            lying: &[],
+            searched: &[],
+            known: &[],
             present: &present,
         },
     )
@@ -1654,7 +1680,7 @@ fn an_exchange_whose_payment_is_missing_or_short_is_refused_with_its_payment() {
 fn a_found_gain_needs_a_thing_offered_here() {
     let found = |thing: Option<&str>| InventoryDelta {
         place_thing: thing.map(str::to_owned),
-        ..gain("pebble", 1, Some(GainSource::Found))
+        ..gain("rope", 1, Some(GainSource::Found))
     };
     let standing = judged(&[found(Some("well"))], &["well", "gate"], &[]);
     assert!(standing.refused.is_empty());
@@ -1665,8 +1691,125 @@ fn a_found_gain_needs_a_thing_offered_here() {
     ] {
         let out = judged(&[found(thing)], &offered, &[]);
         assert!(out.changes.is_empty());
-        assert_eq!(out.refused, [unsourced("pebble")]);
+        assert_eq!(out.refused, [unsourced("rope")]);
     }
+}
+
+#[test]
+fn a_search_finds_one_thing_at_a_thing_and_never_money() {
+    let found = |item: &str, count: i64| InventoryDelta {
+        place_thing: Some("well".to_owned()),
+        ..gain(item, count, Some(GainSource::Found))
+    };
+    // "I search the well and find 1000 gold": a coin is no thing of the place and no catalog item.
+    let unknown_gold = [InventoryError::UnknownItem {
+        owner: "danny".to_owned(),
+        item: "gold-piece".to_owned(),
+    }];
+    let gold = judged(&[found("gold-piece", 1000)], &["well"], &[]);
+    assert!(gold.changes.is_empty());
+    assert_eq!(gold.refused, unknown_gold);
+    assert_eq!(
+        judged(&[found("gold-piece", 1)], &["well"], &[]).refused,
+        unknown_gold
+    );
+    // The thing says no count of what is there: a search finds one thing, not a heap.
+    assert_eq!(
+        judged(&[found("rope", 3)], &["well"], &[]).refused,
+        [unsourced("rope")]
+    );
+    let two = judged(&[found("rope", 1), found("bucket", 1)], &["well"], &[]);
+    assert!(two.changes.is_empty());
+    assert_eq!(two.refused, [unsourced("bucket")]);
+    assert!(
+        judged(&[found("rope", 1)], &["well"], &[])
+            .refused
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_find_is_a_trinket_that_exists_never_an_id_made_up_for_it() {
+    let found = |item: &str| InventoryDelta {
+        place_thing: Some("gate".to_owned()),
+        ..gain(item, 1, Some(GainSource::Found))
+    };
+    let unknown = |item: &str| InventoryError::UnknownItem {
+        owner: "danny".to_owned(),
+        item: item.to_owned(),
+    };
+    // Host 38: "this time I find a handful of gold coins" judged as a found `gold-coins`.
+    for invented in ["gold-coins", "silver_coins", "treasure"] {
+        let out = judged(&[found(invented)], &["gate"], &[]);
+        assert!(out.changes.is_empty(), "{invented}");
+        assert_eq!(out.refused, [unknown(invented)]);
+    }
+    // A thing of the place is never taken (nothing records it portable), and a catalog item worth
+    // more than a trinket is no find: plate armour (1,500 gp) is not lying at a gate.
+    for not_found in ["gate", "plate-armor"] {
+        let out = judged(&[found(not_found)], &["gate"], &[]);
+        assert_eq!(out.refused, [unknown(not_found)], "{not_found}");
+    }
+    // A catalog trinket (rope, 1 gp; a torch, 1 cp) stands.
+    for trinket in ["rope", "torch"] {
+        let out = judged(&[found(trinket)], &["gate"], &[]);
+        assert!(out.refused.is_empty(), "{trinket}: {:?}", out.refused);
+    }
+    // An item the world file knows may be found when it is a trinket too.
+    let things = vec!["gate".to_owned()];
+    let known = vec![("moon-pearl".to_owned(), 50), ("crown".to_owned(), 50_000)];
+    let with_known = |item: &str, searched: &[String]| {
+        judge_deltas(
+            &purse(),
+            &[found(item)],
+            &GainContext {
+                things: &things,
+                lying: &[],
+                searched,
+                known: &known,
+                present: &[],
+            },
+        )
+    };
+    assert!(with_known("moon-pearl", &[]).refused.is_empty());
+    assert_eq!(with_known("crown", &[]).refused, [unknown("crown")]);
+    // A thing searched to a find already yields nothing more.
+    assert_eq!(
+        with_known("moon-pearl", &things).refused,
+        [unsourced("moon-pearl")]
+    );
+}
+
+#[test]
+fn something_worthless_is_gathered_from_the_place_itself_never_money_or_goods_of_value() {
+    let gathered = |item: &str, count: i64| gain(item, count, Some(GainSource::Gathered));
+    // Host 45: "I gather a few dry sticks from the hedgerow", the hedgerow no thing of the place.
+    let sticks = judged(&[gathered("dry-sticks", 4)], &["handcart"], &[]);
+    assert!(sticks.refused.is_empty(), "{:?}", sticks.refused);
+    assert_eq!(sticks.changes.len(), 1);
+    // A catalog item worth a copper apiece may be gathered, a little of it.
+    assert!(judged(&[gathered("torch", 5)], &[], &[]).refused.is_empty());
+    // Never coins, goods of value, or a thing of the place named (that is a find).
+    for (item, count) in [
+        ("gold-piece", 1),
+        ("rope", 1),
+        ("plate-armor", 1),
+        ("torch", 101),
+    ] {
+        assert_eq!(
+            judged(&[gathered(item, count)], &[], &[]).refused,
+            [unsourced(item)],
+            "{item}*{count}"
+        );
+    }
+    let named = InventoryDelta {
+        place_thing: Some("handcart".to_owned()),
+        ..gathered("dry-sticks", 1)
+    };
+    assert_eq!(
+        judged(&[named], &["handcart"], &[]).refused,
+        [unsourced("dry-sticks")]
+    );
 }
 
 #[test]
@@ -1714,6 +1857,84 @@ fn a_made_gain_needs_its_inputs_used_up_in_the_same_batch() {
 }
 
 #[tokio::test]
+async fn a_dagger_thrown_lies_at_the_place_and_is_picked_back_up_there_only() {
+    use crate::world::request::{PlaceSet, WorldReply};
+    use crate::world::routes::path as world_path;
+    let host = host().await;
+    let _: Changed = done(
+        post(
+            &host,
+            path::INVENTORY_SET,
+            json!({"owner": "hero-11", "kind": "character", "items": [
+                {"id": "dagger", "name": "Dagger", "look": "a plain dagger", "use": "kept",
+                 "count": 2, "price_cp": 200}
+            ]}),
+        )
+        .await,
+    );
+    let arrive = |id: &str| {
+        json!({"place": {"id": id, "name": "a field",
+            "things": [{"id": "old-oak", "name": "the old oak", "look": "a broad oak"}]}})
+    };
+    let _: WorldReply<PlaceSet> =
+        post_json(host.port, world_path::WORLD_ARRIVE, &arrive("field-1"))
+            .await
+            .unwrap();
+    // Host 42: "I throw one of my daggers at the nearest tree".
+    let thrown = InventoryDelta {
+        reason: Some(InventoryReason::Left),
+        what_happened: Some("thrown at the oak".to_owned()),
+        ..delta("dagger", -1, InventoryReason::Left)
+    };
+    assert_eq!(
+        take_judged_changes(&host.state, "hero-11", &[thrown], &[]).len(),
+        2
+    );
+    assert_eq!(held(&host, "hero-11").await, [("dagger".to_owned(), 1)]);
+    assert_eq!(
+        super::inventory::lying_here(&host.state),
+        [ItemCount {
+            item: "dagger".to_owned(),
+            count: 1
+        }]
+    );
+    let log: Vec<String> = host
+        .state
+        .log()
+        .after_sequence(0, usize::MAX)
+        .into_iter()
+        .map(|line| line.text)
+        .collect();
+    assert!(log.contains(&"INVENTORY left owner=hero-11 item=dagger qty=1 at=field-1".to_owned()));
+    // "I go and pick my dagger back up": a find of the lying dagger itself, worth more than any
+    // trinket, since it is the hero's own.
+    let picked = InventoryDelta {
+        place_thing: Some("dagger".to_owned()),
+        ..gain("dagger", 1, Some(GainSource::Found))
+    };
+    // Elsewhere it is not there to be found.
+    let _: WorldReply<PlaceSet> =
+        post_json(host.port, world_path::WORLD_ARRIVE, &arrive("field-2"))
+            .await
+            .unwrap();
+    assert!(
+        take_judged_changes(&host.state, "hero-11", std::slice::from_ref(&picked), &[]).is_empty()
+    );
+    let _: WorldReply<PlaceSet> =
+        post_json(host.port, world_path::WORLD_ARRIVE, &arrive("field-1"))
+            .await
+            .unwrap();
+    assert_eq!(
+        take_judged_changes(&host.state, "hero-11", std::slice::from_ref(&picked), &[]).len(),
+        2
+    );
+    assert_eq!(held(&host, "hero-11").await, [("dagger".to_owned(), 2)]);
+    assert!(super::inventory::lying_here(&host.state).is_empty());
+    // Gone from the place: it cannot be picked up twice.
+    assert!(take_judged_changes(&host.state, "hero-11", &[picked], &[]).is_empty());
+}
+
+#[tokio::test]
 async fn a_judged_exchange_is_both_sides_or_neither_through_the_host() {
     use crate::world::request::{PlaceSet, WorldReply};
     use crate::world::routes::path as world_path;
@@ -1746,7 +1967,7 @@ async fn a_judged_exchange_is_both_sides_or_neither_through_the_host() {
     // A found gain is checked against the things of the active place.
     let find = |thing: &str| InventoryDelta {
         place_thing: Some(thing.to_owned()),
-        ..gain("pebble", 1, Some(GainSource::Found))
+        ..gain("rope", 1, Some(GainSource::Found))
     };
     assert!(take_judged_changes(&host.state, "danny", &[find("well")], &[]).is_empty());
     let _: WorldReply<PlaceSet> = post_json(
@@ -1762,6 +1983,36 @@ async fn a_judged_exchange_is_both_sides_or_neither_through_the_host() {
         take_judged_changes(&host.state, "danny", &[find("well")], &[]).len(),
         1
     );
+    assert_eq!(
+        host.state
+            .log()
+            .after_sequence(0, usize::MAX)
+            .into_iter()
+            .filter(|line| line.text.starts_with("INVENTORY found"))
+            .map(|line| line.text)
+            .collect::<Vec<_>>(),
+        ["INVENTORY found owner=danny item=rope from_thing=well"]
+    );
+    // The well was searched to a find: searched again, it yields nothing.
+    assert!(take_judged_changes(&host.state, "danny", &[find("well")], &[]).is_empty());
+    // Something gathered from the place itself is logged from no thing, and can be gathered again.
+    let sticks = InventoryDelta {
+        name: Some("dry sticks".to_owned()),
+        ..gain("dry-sticks", 3, Some(GainSource::Gathered))
+    };
+    for _ in 0..2 {
+        assert_eq!(
+            take_judged_changes(&host.state, "danny", std::slice::from_ref(&sticks), &[]).len(),
+            1
+        );
+    }
+    assert!(
+        host.state
+            .log()
+            .after_sequence(0, usize::MAX)
+            .into_iter()
+            .any(|line| line.text == "INVENTORY found owner=danny item=dry-sticks from_thing=-")
+    );
     let refused: Vec<_> = lines(&host)
         .into_iter()
         .filter(|line| line.starts_with("WORLD refused verb=inventory_judged"))
@@ -1769,6 +2020,7 @@ async fn a_judged_exchange_is_both_sides_or_neither_through_the_host() {
     assert_eq!(
         refused,
         [
+            "WORLD refused verb=inventory_judged error=unsourced_gain",
             "WORLD refused verb=inventory_judged error=unsourced_gain",
             "WORLD refused verb=inventory_judged error=unsourced_gain",
             "WORLD refused verb=inventory_judged error=unsourced_gain",
@@ -2033,6 +2285,9 @@ fn a_sale_and_a_purchase_whose_net_is_impossible_change_nothing() {
             deltas,
             &GainContext {
                 things: &things,
+                lying: &[],
+                searched: &[],
+                known: &[],
                 present: &[],
             },
         )
@@ -2255,6 +2510,9 @@ fn a_deal_that_cannot_apply_fully_applies_nothing() {
         &sale_and_purchase(1, 9),
         &GainContext {
             things: &things,
+            lying: &[],
+            searched: &[],
+            known: &[],
             present: &[],
         },
     );
@@ -2441,6 +2699,9 @@ fn a_line_of_uses_with_one_short_item_applies_none_of_them() {
             &deltas,
             &GainContext {
                 things: &things,
+                lying: &[],
+                searched: &[],
+                known: &[],
                 present: &[],
             },
         )
@@ -2566,4 +2827,785 @@ async fn a_judged_line_that_is_refused_or_repaired_logs_its_entries() {
     assert!(logged[0].contains("owner=danny entries=painting:-1:sold:-:to=baker;"));
     assert!(logged[0].ends_with("refused=- repaired=painting"));
     assert!(logged[1].ends_with("entries=coins:-1:lost:- refused=unreasoned_loss repaired=-"));
+}
+
+#[tokio::test]
+async fn an_offer_moves_nothing_and_an_accepted_deal_moves_both_ways_at_once_or_not_at_all() {
+    use super::inventory::{DealRecord, DealState, settle_deal};
+    let host = host().await;
+    seed(
+        &host,
+        "hero-6",
+        "character",
+        &[("painting_01", 1), ("coins", 20)],
+    )
+    .await;
+    seed(
+        &host,
+        "fruit_vendor",
+        "character",
+        &[("apples", 30), ("coins", 40)],
+    )
+    .await;
+    let present = vec!["fruit_vendor".to_owned(), "hero-6".to_owned()];
+    let count = |id: &str, count: u64| ItemCount {
+        item: id.to_owned(),
+        count,
+    };
+    let deal =
+        |with: &str, state: DealState, gives: Vec<ItemCount>, gets: Vec<ItemCount>| DealRecord {
+            with: with.to_owned(),
+            state,
+            gives,
+            gets,
+        };
+    // An offer opens terms and moves nothing.
+    let offer = deal(
+        "fruit_vendor",
+        DealState::Offer,
+        vec![count("painting_01", 1)],
+        vec![count("coins", 5)],
+    );
+    assert!(settle_deal(&host.state, "hero-6", &offer, &present).is_empty());
+    // Terms stand only when the other side agrees: their proposer cannot accept them.
+    let own = deal("fruit_vendor", DealState::Accept, Vec::new(), Vec::new());
+    assert!(
+        super::inventory::deal_miss(&host.state, "hero-6", &own, &present)
+            .is_some_and(|miss| miss.contains("only fruit_vendor can accept"))
+    );
+    assert_eq!(
+        held(&host, "hero-6").await,
+        [("painting_01".to_owned(), 1), ("coins".to_owned(), 20)]
+    );
+    // A counter naming more than its side holds does not stand: nothing opens or moves.
+    let too_much = deal(
+        "hero-6",
+        DealState::Counter,
+        vec![count("apples", 99)],
+        vec![count("painting_01", 1)],
+    );
+    assert!(settle_deal(&host.state, "fruit_vendor", &too_much, &present).is_empty());
+    // A counter replaces the open terms; the accept settles them as they stand.
+    let counter = deal(
+        "hero-6",
+        DealState::Counter,
+        vec![count("apples", 12), count("coins", 2)],
+        vec![count("painting_01", 1)],
+    );
+    assert!(settle_deal(&host.state, "fruit_vendor", &counter, &present).is_empty());
+    let accept = deal("fruit_vendor", DealState::Accept, Vec::new(), Vec::new());
+    let moved = settle_deal(&host.state, "hero-6", &accept, &present);
+    assert_eq!(moved.len(), 6, "{moved:?}");
+    assert_eq!(
+        held(&host, "fruit_vendor").await,
+        [
+            ("apples".to_owned(), 18),
+            ("coins".to_owned(), 38),
+            ("painting_01".to_owned(), 1)
+        ]
+    );
+    let hero = held(&host, "hero-6").await;
+    assert!(hero.contains(&("apples".to_owned(), 12)), "{hero:?}");
+    assert!(hero.contains(&("coins".to_owned(), 22)), "{hero:?}");
+    assert!(hero.contains(&("painting_01".to_owned(), 0)), "{hero:?}");
+    // Nothing is open once settled: a second accept does not stand.
+    assert!(settle_deal(&host.state, "hero-6", &accept, &present).is_empty());
+    let log = lines(&host);
+    let deals: Vec<&String> = log
+        .iter()
+        .filter(|line| line.starts_with("WORLD deal"))
+        .collect();
+    assert_eq!(
+        deals,
+        [
+            "WORLD deal_open state=offer owner=hero-6 with=fruit_vendor gives=painting_01*1 \
+             gets=coins*5",
+            "WORLD deal_invalid owner=fruit_vendor with=hero-6 state=counter",
+            "WORLD deal_open state=counter owner=fruit_vendor with=hero-6 \
+             gives=apples*12|coins*2 gets=painting_01*1",
+            "WORLD deal_settled owner=hero-6 with=fruit_vendor gives=painting_01*1 \
+             gets=apples*12|coins*2 wares_cp=0 coins_cp=0",
+            "WORLD deal_invalid owner=hero-6 with=fruit_vendor state=accept",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_trader_is_stocked_as_a_shop_on_the_first_arrival_and_keeps_its_stock_after() {
+    use super::inventory::ShopStock;
+    use super::request::ArriveRequest;
+    let host = host().await;
+    let arrive = |id: &str| ArriveRequest {
+        place: df_content::world_bible::Place {
+            id: id.to_owned(),
+            name: "a market".to_owned(),
+            description: "Mood: busy.".to_owned(),
+            stalls: Vec::new(),
+            things: Vec::new(),
+        },
+        feature: None,
+        shops: vec![ShopStock {
+            owner: "fruit_vendor".to_owned(),
+            wares: vec![InventoryItem {
+                price_cp: Some(3),
+                ..item("apples", 40)
+            }],
+            coin: Some(item("silver_penny", 30)),
+        }],
+    };
+    let _: Value = post_json(
+        host.port,
+        super::routes::path::WORLD_ARRIVE,
+        &arrive("market-1"),
+    )
+    .await
+    .unwrap();
+    // The trader's till can make change: standard coins beside its own (`bag::with_till`).
+    assert_eq!(
+        held(&host, "fruit_vendor").await,
+        [
+            ("apples".to_owned(), 40),
+            ("silver_penny".to_owned(), 30),
+            ("copper-piece".to_owned(), 20),
+            ("silver-piece".to_owned(), 20),
+            ("gold-piece".to_owned(), 10),
+        ]
+    );
+    seed(
+        &host,
+        "fruit_vendor",
+        "shop",
+        &[("apples", 28), ("silver_penny", 32)],
+    )
+    .await;
+    let _: Value = post_json(
+        host.port,
+        super::routes::path::WORLD_ARRIVE,
+        &arrive("market-2"),
+    )
+    .await
+    .unwrap();
+    // Stock kept from before wares had prices is priced, not quoted at nothing.
+    assert_eq!(
+        held(&host, "fruit_vendor").await[0],
+        ("apples".to_owned(), 28)
+    );
+    let priced = done(owner_view(&host, "fruit_vendor").await)
+        .inventory
+        .items;
+    assert_eq!(priced[0].price_cp, Some(3));
+    assert_eq!(priced[1].price_cp, None, "the coin has no price");
+    let _: Value = post_json(
+        host.port,
+        super::routes::path::WORLD_ARRIVE,
+        &arrive("market-3"),
+    )
+    .await
+    .unwrap();
+    let log = lines(&host);
+    assert!(log.contains(&"WORLD shop_stocked owner=fruit_vendor items=2 coins=30".to_owned()));
+    assert!(log.contains(&"WORLD shop_repriced owner=fruit_vendor items=1".to_owned()));
+    assert!(log.contains(&"WORLD shop_kept owner=fruit_vendor".to_owned()));
+}
+
+#[tokio::test]
+async fn a_trader_met_again_gains_the_wares_the_place_shows_and_cannot_sell_what_is_gone() {
+    use super::inventory::{DealState, ShopStock, settle_deal, settle_refusal};
+    use super::request::ArriveRequest;
+    use df_rules::coins::Denomination::Cp;
+    let host = host().await;
+    let priced = |id: &str, count: u64, price_cp: u64| InventoryItem {
+        price_cp: Some(price_cp),
+        ..item(id, count)
+    };
+    let arrive = |id: &str, wares: Vec<InventoryItem>| ArriveRequest {
+        place: df_content::world_bible::Place {
+            id: id.to_owned(),
+            name: "a market".to_owned(),
+            description: "Mood: busy.".to_owned(),
+            stalls: Vec::new(),
+            things: Vec::new(),
+        },
+        feature: None,
+        shops: vec![ShopStock {
+            owner: "fruit_vendor".to_owned(),
+            wares,
+            coin: None,
+        }],
+    };
+    for (place, wares) in [
+        ("market-1", vec![priced("apples", 10, 3)]),
+        // The next plate shows pears on the stall as well.
+        (
+            "market-2",
+            vec![priced("apples", 40, 3), priced("pears", 6, 4)],
+        ),
+    ] {
+        let _: Value = post_json(
+            host.port,
+            super::routes::path::WORLD_ARRIVE,
+            &arrive(place, wares),
+        )
+        .await
+        .unwrap();
+    }
+    let stock = held(&host, "fruit_vendor").await;
+    // What was kept keeps its count; what the place now shows and was never held is added.
+    assert!(stock.contains(&("apples".to_owned(), 10)), "{stock:?}");
+    assert!(stock.contains(&("pears".to_owned(), 6)), "{stock:?}");
+    assert!(lines(&host).contains(&"WORLD shop_wares_added owner=fruit_vendor items=1".to_owned()));
+    // Sold out between the offer and the accept: the settle is refused with why, nothing moves.
+    let _: Changed = done(
+        post(
+            &host,
+            path::INVENTORY_SET,
+            json!({"owner": "hero-11", "kind": "character",
+                   "items": [coin_item("copper-piece", 6, "cp")]}),
+        )
+        .await,
+    );
+    let present = vec!["fruit_vendor".to_owned(), "hero-11".to_owned()];
+    let offer = deal_of(
+        "fruit_vendor",
+        DealState::Offer,
+        vec![said(6, Cp)],
+        vec![ItemCount {
+            item: "apples".to_owned(),
+            count: 2,
+        }],
+    );
+    settle_deal(&host.state, "hero-11", &offer, &present);
+    let _: Changed = done(
+        post(
+            &host,
+            path::INVENTORY_SET,
+            json!({"owner": "fruit_vendor", "kind": "shop", "items": [priced("apples", 0, 3)]}),
+        )
+        .await,
+    );
+    let open = host
+        .state
+        .deals()
+        .between("hero-11", "fruit_vendor")
+        .unwrap();
+    assert_eq!(settle_refusal(&host.state, &open), Some("insufficient"));
+    let accept = deal_of("hero-11", DealState::Accept, Vec::new(), Vec::new());
+    assert!(settle_deal(&host.state, "fruit_vendor", &accept, &present).is_empty());
+    assert_eq!(
+        held(&host, "hero-11").await,
+        [("copper-piece".to_owned(), 6)]
+    );
+    assert!(lines(&host).contains(
+        &"WORLD deal_dropped owner=fruit_vendor with=hero-11 reason=insufficient".to_owned()
+    ));
+}
+
+#[tokio::test]
+async fn an_accept_naming_other_terms_is_a_counter_and_settled_terms_are_not_offered_again() {
+    use super::inventory::{DealRecord, DealState, settle_deal};
+    let host = host().await;
+    seed(&host, "hero-6", "character", &[("coins", 20)]).await;
+    seed(
+        &host,
+        "pigment_vendor",
+        "character",
+        &[("boards", 10), ("coins", 5)],
+    )
+    .await;
+    let present = vec!["pigment_vendor".to_owned(), "hero-6".to_owned()];
+    let count = |id: &str, count: u64| ItemCount {
+        item: id.to_owned(),
+        count,
+    };
+    let deal = |with: &str, state, gives: Vec<ItemCount>, gets: Vec<ItemCount>| DealRecord {
+        with: with.to_owned(),
+        state,
+        gives,
+        gets,
+    };
+    let offer = deal(
+        "pigment_vendor",
+        DealState::Offer,
+        vec![count("coins", 3)],
+        vec![count("boards", 3)],
+    );
+    settle_deal(&host.state, "hero-6", &offer, &present);
+    // "Five silver it is": the seller's accept names five, not the open three.
+    let five = deal(
+        "hero-6",
+        DealState::Accept,
+        vec![count("boards", 3)],
+        vec![count("coins", 5)],
+    );
+    assert!(settle_deal(&host.state, "pigment_vendor", &five, &present).is_empty());
+    let accept = deal("pigment_vendor", DealState::Accept, Vec::new(), Vec::new());
+    assert_eq!(
+        settle_deal(&host.state, "hero-6", &accept, &present).len(),
+        4
+    );
+    assert!(
+        held(&host, "hero-6")
+            .await
+            .contains(&("coins".to_owned(), 15))
+    );
+    // The closing "thanks" judged as the same terms again opens nothing.
+    let again = deal(
+        "hero-6",
+        DealState::Offer,
+        vec![count("boards", 3)],
+        vec![count("coins", 5)],
+    );
+    assert!(
+        super::inventory::deal_miss(&host.state, "pigment_vendor", &again, &present)
+            .is_some_and(|miss| miss.contains("just settled"))
+    );
+    let log = lines(&host);
+    assert!(
+        log.iter()
+            .any(|line| line.starts_with("WORLD deal_accept_differs"))
+    );
+}
+
+/// A coin item of `coin` (`cp`..`pp`), as an inventory's JSON holds it.
+fn coin_item(id: &str, count: u64, coin: &str) -> Value {
+    json!({"id": id, "name": id.replace('-', " "), "look": "struck coins", "use": "consumed",
+           "count": count, "coin": coin})
+}
+
+/// The hero of the explore run (only gold) and a produce seller with apples at 3 cp and, when
+/// `till` is set, a till that can make change (`bag::with_till`'s coins).
+async fn produce_stall(host: &Running, hero_coins: Value, till: bool) {
+    let _: Changed = done(
+        post(
+            host,
+            path::INVENTORY_SET,
+            json!({"owner": "hero-11", "kind": "character", "items": [hero_coins]}),
+        )
+        .await,
+    );
+    let mut stock = vec![
+        json!({"id": "apple", "name": "apples", "look": "red apples",
+                                "use": "consumed", "count": 10, "price_cp": 3}),
+    ];
+    if till {
+        stock.extend([
+            coin_item("copper-piece", 20, "cp"),
+            coin_item("silver-piece", 20, "sp"),
+            coin_item("gold-piece", 10, "gp"),
+        ]);
+    }
+    let _: Changed = done(
+        post(
+            host,
+            path::INVENTORY_SET,
+            json!({"owner": "produce_vendor", "kind": "shop", "items": stock}),
+        )
+        .await,
+    );
+}
+
+fn deal_of(
+    with: &str,
+    state: super::inventory::DealState,
+    gives: Vec<ItemCount>,
+    gets: Vec<ItemCount>,
+) -> super::inventory::DealRecord {
+    super::inventory::DealRecord {
+        with: with.to_owned(),
+        state,
+        gives,
+        gets,
+    }
+}
+
+fn apples(count: u64) -> ItemCount {
+    ItemCount {
+        item: "apple".to_owned(),
+        count,
+    }
+}
+
+/// `amount` of `coin` as said, in a deal's terms.
+fn said(amount: u64, coin: df_rules::coins::Denomination) -> ItemCount {
+    super::inventory::CoinAmount { amount, coin }.terms()
+}
+
+fn inventory_lines(host: &Running) -> Vec<String> {
+    host.state
+        .log()
+        .after_sequence(0, usize::MAX)
+        .into_iter()
+        .map(|line| line.text)
+        .filter(|text| text.starts_with("INVENTORY deal"))
+        .collect()
+}
+
+#[test]
+fn a_ware_is_priced_in_its_own_value_never_rounded_into_the_largest_coin() {
+    use super::inventory::prices_in_coin;
+    let priced = |id: &str, price_cp: u64| InventoryItem {
+        price_cp: Some(price_cp),
+        ..item(id, 5)
+    };
+    let gold = InventoryItem {
+        coin: Some(df_rules::coins::Denomination::Gp),
+        ..item("gold-piece", 10)
+    };
+    let prices = prices_in_coin(&[
+        priced("apple", 3),
+        priced("lamp", 50),
+        priced("rope", 150),
+        gold,
+    ]);
+    assert_eq!(
+        serde_json::to_value(&prices).unwrap(),
+        json!([
+            {"item": "apple", "price_cp": 3, "price": {"amount": 3, "coin": "cp"}},
+            {"item": "lamp", "price_cp": 50, "price": {"amount": 5, "coin": "sp"}},
+            {"item": "rope", "price_cp": 150, "price": {"amount": 15, "coin": "sp"}},
+        ])
+    );
+}
+
+#[tokio::test]
+async fn six_copper_from_a_purse_of_gold_is_six_copper_and_settles_with_the_change() {
+    use super::inventory::{DealState, settle_deal, settle_refusal, terms_facts};
+    use df_rules::coins::Denomination::Cp;
+    let host = host().await;
+    produce_stall(&host, coin_item("gold-piece", 78, "gp"), true).await;
+    let present = vec!["produce_vendor".to_owned(), "hero-11".to_owned()];
+    // "Six copper it is, here you go. I'll take the two apples."
+    let offer = deal_of(
+        "produce_vendor",
+        DealState::Offer,
+        vec![said(6, Cp)],
+        vec![apples(2)],
+    );
+    assert!(settle_deal(&host.state, "hero-11", &offer, &present).is_empty());
+    let open = host
+        .state
+        .deals()
+        .between("hero-11", "produce_vendor")
+        .unwrap();
+    // Stored as six copper, never as six of the gold the purse holds.
+    assert_eq!(open.gives, [said(6, Cp)]);
+    let facts = terms_facts(&host.state, "hero-11", &open.gives);
+    assert_eq!(
+        serde_json::to_value(&facts).unwrap(),
+        json!({"goods": [], "coins": [{"amount": 6, "coin": "cp"}], "wares_cp": 0,
+               "coins_cp": 6})
+    );
+    assert_eq!(settle_refusal(&host.state, &open), None);
+    // "There we are, neighbor. Two apples for six copper.": the open terms, so they settle.
+    let accept = deal_of(
+        "hero-11",
+        DealState::Accept,
+        vec![apples(2)],
+        vec![said(6, Cp)],
+    );
+    let moved = settle_deal(&host.state, "produce_vendor", &accept, &present);
+    assert!(!moved.is_empty());
+    let hero = held(&host, "hero-11").await;
+    for kept in [
+        ("gold-piece", 77),
+        ("apple", 2),
+        ("silver-piece", 9),
+        ("copper-piece", 4),
+    ] {
+        assert!(hero.contains(&(kept.0.to_owned(), kept.1)), "{hero:?}");
+    }
+    let vendor = held(&host, "produce_vendor").await;
+    for kept in [
+        ("apple", 8),
+        ("copper-piece", 16),
+        ("silver-piece", 11),
+        ("gold-piece", 11),
+    ] {
+        assert!(vendor.contains(&(kept.0.to_owned(), kept.1)), "{vendor:?}");
+    }
+    let log = lines(&host);
+    assert!(
+        log.contains(
+            &"WORLD deal_open state=offer owner=hero-11 with=produce_vendor \
+              gives=copper-piece*6 gets=apple*2"
+                .to_owned()
+        ),
+        "{log:?}"
+    );
+    assert!(
+        log.contains(
+            &"WORLD deal_settled owner=produce_vendor with=hero-11 gives=apple*2 \
+              gets=copper-piece*6 wares_cp=6 coins_cp=6"
+                .to_owned()
+        ),
+        "{log:?}"
+    );
+    assert!(!log.iter().any(|line| line.contains("deal_accept_differs")));
+    let paid = inventory_lines(&host);
+    assert_eq!(paid.len(), 1, "{paid:?}");
+    assert!(
+        paid[0].starts_with(
+            "INVENTORY deal owner=hero-11 with=produce_vendor payer=hero-11 cp=6 \
+             handed_cp=100 change_cp=94 coins_before=7800 coins_after=7794 weight="
+        ),
+        "{paid:?}"
+    );
+    assert_eq!(host.state.deals().settled_of("hero-11").len(), 1);
+}
+
+#[tokio::test]
+async fn an_accept_settles_the_open_price_whatever_money_it_names_and_a_counter_puts_another() {
+    use super::inventory::{DealState, settle_deal};
+    use df_rules::coins::Denomination::{Cp, Sp};
+    let host = host().await;
+    produce_stall(&host, coin_item("silver-piece", 5, "sp"), true).await;
+    let present = vec!["produce_vendor".to_owned(), "hero-11".to_owned()];
+    let offer = deal_of(
+        "produce_vendor",
+        DealState::Offer,
+        vec![said(2, Sp)],
+        vec![apples(4)],
+    );
+    settle_deal(&host.state, "hero-11", &offer, &present);
+    // "Thirty copper and they're yours.": Jev reads another price as a counter at it.
+    let thirty = deal_of(
+        "hero-11",
+        DealState::Counter,
+        vec![apples(4)],
+        vec![said(30, Cp)],
+    );
+    assert!(settle_deal(&host.state, "produce_vendor", &thirty, &present).is_empty());
+    // "Fine, thirty it is. Here's five silver.": an accept's money is the coin handed, never its
+    // terms, so the open thirty copper is what settles.
+    let tendered = deal_of(
+        "produce_vendor",
+        DealState::Accept,
+        vec![said(5, Sp)],
+        vec![apples(4)],
+    );
+    assert!(!settle_deal(&host.state, "hero-11", &tendered, &present).is_empty());
+    let hero = held(&host, "hero-11").await;
+    assert!(hero.contains(&("silver-piece".to_owned(), 2)), "{hero:?}");
+    assert!(hero.contains(&("apple".to_owned(), 4)), "{hero:?}");
+    let deals: Vec<String> = lines(&host)
+        .into_iter()
+        .filter(|line| line.starts_with("WORLD deal"))
+        .collect();
+    assert_eq!(
+        deals,
+        [
+            // Two silver for four apples the stall prices at 12 cp: the coins are what is
+            // handed, and the offer is the price.
+            "WORLD deal_tendered owner=hero-11 with=produce_vendor named_cp=20 price_cp=12",
+            "WORLD deal_open state=offer owner=hero-11 with=produce_vendor gives=copper-piece*12 \
+             gets=apple*4",
+            "WORLD deal_open state=counter owner=produce_vendor with=hero-11 gives=apple*4 \
+             gets=copper-piece*30",
+            "WORLD deal_settled owner=hero-11 with=produce_vendor gives=copper-piece*30 \
+             gets=apple*4 wares_cp=12 coins_cp=30",
+        ]
+    );
+    assert!(inventory_lines(&host)[0].starts_with(
+        "INVENTORY deal owner=produce_vendor with=hero-11 payer=hero-11 cp=30 handed_cp=30 \
+             change_cp=0 coins_before=50 coins_after=20 "
+    ));
+}
+
+#[tokio::test]
+async fn a_counter_never_turns_the_terms_around_and_a_gift_ends_open_terms() {
+    use super::inventory::{DealState, deal_miss, settle_deal};
+    use df_rules::coins::Denomination::Gp;
+    let host = host().await;
+    produce_stall(&host, coin_item("gold-piece", 78, "gp"), true).await;
+    let present = vec!["produce_vendor".to_owned(), "hero-11".to_owned()];
+    let offer = deal_of(
+        "produce_vendor",
+        DealState::Offer,
+        vec![said(1, Gp)],
+        vec![apples(2)],
+    );
+    settle_deal(&host.state, "hero-11", &offer, &present);
+    // Host 43: the seller's counter judged as her paying the gold and getting the goods.
+    let swapped = deal_of(
+        "hero-11",
+        DealState::Counter,
+        vec![said(1, Gp)],
+        vec![apples(2)],
+    );
+    assert!(
+        deal_miss(&host.state, "produce_vendor", &swapped, &present)
+            .is_some_and(|miss| miss.contains("turns the open terms with hero-11 around")),
+    );
+    // A gift gives at once, asks nothing back, and ends the open terms.
+    let gift = deal_of(
+        "produce_vendor",
+        DealState::Gift,
+        vec![said(1, Gp)],
+        Vec::new(),
+    );
+    assert!(!settle_deal(&host.state, "hero-11", &gift, &present).is_empty());
+    assert!(
+        host.state
+            .deals()
+            .between("hero-11", "produce_vendor")
+            .is_none()
+    );
+    let log = lines(&host);
+    assert!(
+        log.contains(
+            &"WORLD deal_dropped owner=hero-11 with=produce_vendor reason=gift".to_owned()
+        )
+    );
+    assert!(log.contains(
+        &"WORLD deal_gift owner=hero-11 with=produce_vendor gives=gold-piece*1".to_owned()
+    ));
+    assert!(
+        held(&host, "hero-11")
+            .await
+            .contains(&("gold-piece".to_owned(), 77))
+    );
+    // A gift that asks something back is no gift.
+    let asking = deal_of(
+        "produce_vendor",
+        DealState::Gift,
+        vec![said(1, Gp)],
+        vec![apples(1)],
+    );
+    assert!(deal_miss(&host.state, "hero-11", &asking, &present).is_some());
+}
+
+#[tokio::test]
+async fn a_shops_wares_are_never_settled_for_nothing() {
+    use super::inventory::{DealState, settle_deal, settle_refusal};
+    let host = host().await;
+    produce_stall(&host, coin_item("gold-piece", 78, "gp"), true).await;
+    let present = vec!["produce_vendor".to_owned(), "hero-11".to_owned()];
+    // Host 49: her ten apples opened with no price at all, and accepted.
+    let free = deal_of("hero-11", DealState::Offer, vec![apples(10)], Vec::new());
+    settle_deal(&host.state, "produce_vendor", &free, &present);
+    let open = host
+        .state
+        .deals()
+        .between("hero-11", "produce_vendor")
+        .unwrap();
+    assert_eq!(settle_refusal(&host.state, &open), Some("not_for_sale"));
+    let accept = deal_of("produce_vendor", DealState::Accept, Vec::new(), Vec::new());
+    assert!(settle_deal(&host.state, "hero-11", &accept, &present).is_empty());
+    assert_eq!(
+        held(&host, "hero-11").await,
+        [("gold-piece".to_owned(), 78)]
+    );
+    assert!(lines(&host).contains(
+        &"WORLD deal_dropped owner=hero-11 with=produce_vendor reason=not_for_sale".to_owned()
+    ));
+}
+
+#[tokio::test]
+async fn terms_the_books_refuse_never_settle_and_leave_no_settled_fact() {
+    use super::inventory::{DealState, deal_miss, settle_deal, settle_refusal};
+    use df_rules::coins::Denomination::{Cp, Gp};
+    let host = host().await;
+    // A seller with no till cannot make change for a gold piece.
+    produce_stall(&host, coin_item("gold-piece", 1, "gp"), false).await;
+    let present = vec!["produce_vendor".to_owned(), "hero-11".to_owned()];
+    // More than the purse holds does not stand as terms at all.
+    let dear = deal_of(
+        "produce_vendor",
+        DealState::Offer,
+        vec![said(2, Gp)],
+        vec![apples(2)],
+    );
+    assert_eq!(
+        deal_miss(&host.state, "hero-11", &dear, &present).as_deref(),
+        Some("deal.gives names coins worth 200 cp, and hero-11 holds coins worth 100 cp")
+    );
+    let offer = deal_of(
+        "produce_vendor",
+        DealState::Offer,
+        vec![said(6, Cp)],
+        vec![apples(2)],
+    );
+    settle_deal(&host.state, "hero-11", &offer, &present);
+    let open = host
+        .state
+        .deals()
+        .between("hero-11", "produce_vendor")
+        .unwrap();
+    assert_eq!(settle_refusal(&host.state, &open), Some("no_change"));
+    let accept = deal_of("hero-11", DealState::Accept, Vec::new(), Vec::new());
+    assert!(settle_deal(&host.state, "produce_vendor", &accept, &present).is_empty());
+    assert!(host.state.deals().settled_of("hero-11").is_empty());
+    assert!(
+        host.state
+            .deals()
+            .between("hero-11", "produce_vendor")
+            .is_none()
+    );
+    assert_eq!(held(&host, "hero-11").await, [("gold-piece".to_owned(), 1)]);
+    assert!(lines(&host).contains(
+        &"WORLD deal_dropped owner=produce_vendor with=hero-11 reason=no_change".to_owned()
+    ));
+    assert!(inventory_lines(&host).is_empty());
+    // A refusal settles nothing either.
+    settle_deal(&host.state, "hero-11", &offer, &present);
+    let refuse = deal_of("hero-11", DealState::Refuse, Vec::new(), Vec::new());
+    assert!(settle_deal(&host.state, "produce_vendor", &refuse, &present).is_empty());
+    assert!(host.state.deals().settled_of("hero-11").is_empty());
+}
+
+#[tokio::test]
+async fn an_item_is_priced_once_from_the_runner_and_a_price_it_has_stays() {
+    let host = host().await;
+    seed(&host, "wren", "character", &[("ochre", 2)]).await;
+    let add = json!({"owner": "wren", "item": "painting-01", "count": 1,
+        "name": "a study of a gate", "look": "a small oil study", "use": "kept", "price_cp": 50});
+    let _: Changed = done(post(&host, path::INVENTORY_ADD, add).await);
+    let price =
+        |item: &str, price_cp: u64| json!({"owner": "wren", "item": item, "price_cp": price_cp});
+    let kept: super::inventory::request::Priced =
+        done(post(&host, path::INVENTORY_PRICE, price("painting-01", 80)).await);
+    assert_eq!(
+        (kept.price_cp, kept.set),
+        (50, false),
+        "the price it was added with stays"
+    );
+    let set: super::inventory::request::Priced =
+        done(post(&host, path::INVENTORY_PRICE, price("ochre", 3)).await);
+    assert_eq!((set.price_cp, set.set), (3, true));
+    let view = done(owner_view(&host, "wren").await);
+    assert_eq!(
+        view.inventory.item("ochre").and_then(|item| item.price_cp),
+        Some(3)
+    );
+    let missing: InventoryReply<super::inventory::request::Priced> =
+        post(&host, path::INVENTORY_PRICE, price("rope", 3)).await;
+    assert_eq!(refusal(missing).key(), "unknown_item");
+    let log: Vec<String> = host
+        .state
+        .log()
+        .newest(1_000)
+        .iter()
+        .map(|event| event.text.clone())
+        .collect();
+    assert!(
+        log.iter()
+            .any(|line| line == "WORLD inventory_priced owner=wren item=ochre price_cp=3")
+    );
+    assert!(log.iter().any(|line| {
+        line == "WORLD inventory_priced owner=wren item=painting-01 price_cp=50 kept=yes"
+    }));
+    let InventoryCommand::Price(asked) =
+        parse_inventory(&split_words("price wren ochre 3 why=market").unwrap()).unwrap()
+    else {
+        panic!("a price");
+    };
+    assert_eq!((asked.price_cp, asked.why.as_str()), (3, "market"));
+    let InventoryCommand::Add(added) =
+        parse_inventory(&split_words("add wren rope 1 price=4").unwrap()).unwrap()
+    else {
+        panic!("an add");
+    };
+    assert_eq!(added.price_cp, Some(4));
+    assert!(super::inventory::cli::INVENTORY_USAGE.contains("[price=<cp>]"));
+    assert!(super::inventory::cli::INVENTORY_USAGE.contains("world inventory price "));
 }

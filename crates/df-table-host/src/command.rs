@@ -41,7 +41,7 @@ pub const DEFAULT_TRAVEL_SPEED: f32 = 20.0;
 /// The top-level verbs `parse` matches by name. The verbs of `engine::VERBS`,
 /// `scene_builder::cli::VERBS` and `director::cli::VERBS` are matched after these, so no verb may
 /// be in two of the tables.
-pub const VERBS: [&str; 30] = [
+pub const VERBS: [&str; 31] = [
     "spawn",
     "set",
     "move",
@@ -67,6 +67,7 @@ pub const VERBS: [&str; 30] = [
     "world",
     "tempo",
     "players",
+    "look",
     "speech",
     "fixtures",
     "fixture",
@@ -144,6 +145,10 @@ pub enum Command {
     Tempo(crate::tempo::TempoCommand),
     /// The players books: seats, friend profiles, approvals and sample heroes.
     Players(crate::seat::PlayersCommand),
+    /// The look studio: base poses, a seat's versions and the lock-in.
+    Look(crate::look::LookCommand),
+    /// The creation machine: offers, a seat's build steps, its sheet and the start of play.
+    Creation(crate::creation::CreationCommand),
     /// A scene transition's stages from a movement line: `move say|interpret|design|brief`.
     Move(crate::movement::cli::MoveCommand),
     /// Voice chat: the speech service's status, a spoken line, a transcript, voices and clips.
@@ -498,7 +503,7 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         "spawn" => spawn(rest),
         "set" => set(rest),
         "move" => match rest.first().map(String::as_str) {
-            Some("say" | "act" | "interpret" | "design" | "brief") => {
+            Some("say" | "act" | "approach" | "interpret" | "design" | "brief") => {
                 crate::movement::cli::parse(rest).map(Command::Move)
             }
             _ => move_element(rest),
@@ -523,6 +528,8 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         "world" => crate::world::parse(rest).map(Command::World),
         "tempo" => crate::tempo::parse(rest).map(Command::Tempo),
         "players" => crate::seat::parse(rest).map(Command::Players),
+        "look" => crate::look::parse(rest).map(Command::Look),
+        "creation" => crate::creation::parse(rest).map(Command::Creation),
         "speech" => crate::speech::parse(rest).map(Command::Speech),
         "reload" => Ok(Command::Reload),
         "playground" => playground::playground(rest),

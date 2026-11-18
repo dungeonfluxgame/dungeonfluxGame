@@ -221,11 +221,20 @@ fn scene_fields(
         SceneChange::ClearCaption {} => ("caption_clear", Vec::new()),
         SceneChange::PartyAdd { member } => (
             "party_add",
-            vec![
-                ("name", value(&member.name)),
-                ("hp", member.hit_points.to_string()),
-                ("max", member.maximum_hit_points.to_string()),
-            ],
+            [
+                Some(("name", value(&member.name))),
+                member
+                    .character
+                    .as_ref()
+                    .map(|character| ("character", value(character))),
+                member.hit_points.map(|hp| ("hp", hp.to_string())),
+                member
+                    .maximum_hit_points
+                    .map(|max| ("max", max.to_string())),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
         ),
         SceneChange::PartySet {
             name,
@@ -345,6 +354,13 @@ fn scene_fields(
             ],
         ),
         SceneChange::ClearRoll {} => ("roll_clear", Vec::new()),
+        SceneChange::ShowClue { clue } => ("clue_shown", vec![("clue", value(clue))]),
+        SceneChange::ClearShownClue {} => ("clue_shown_clear", Vec::new()),
+        SceneChange::TitleCard { card } => (
+            "title_card",
+            vec![("title", value(card.title.as_deref().unwrap_or("-")))],
+        ),
+        SceneChange::ClearTitleCard {} => ("title_card_clear", Vec::new()),
         SceneChange::Sound {
             media,
             target,
@@ -410,6 +426,7 @@ fn scene_fields(
         SceneChange::ClearNarration {} => ("narration_clear", Vec::new()),
         SceneChange::SeatSet {
             name,
+            character,
             class,
             level,
             portrait,
@@ -425,6 +442,9 @@ fn scene_fields(
             pairs.extend(edit_pair("portrait", portrait, |text| value(text)));
             pairs.extend(edit_pair("glyph", glyph, |glyph| glyph.key().to_owned()));
             pairs.extend(edit_pair("accent", accent, |text| value(text)));
+            if let Some(character) = character {
+                pairs.push(("character", value(character)));
+            }
             if let Some(hit_points) = hit_points {
                 pairs.push(("hp", hit_points.to_string()));
             }
@@ -440,6 +460,9 @@ fn scene_fields(
         SceneChange::SeatsOpen { open } => ("seats_open", vec![("open", open.to_string())]),
         SceneChange::SeatsClear {} => ("seats_clear", Vec::new()),
         SceneChange::Brand { on } => ("logo", vec![("on", on.to_string())]),
+        SceneChange::PartyHidden { hidden } => {
+            ("party_hidden", vec![("hidden", hidden.to_string())])
+        }
         SceneChange::Screen { edit } => edit.audit_fields(),
         SceneChange::Home { edit } => edit.audit_fields(),
         SceneChange::Reset {} => ("reset", Vec::new()),

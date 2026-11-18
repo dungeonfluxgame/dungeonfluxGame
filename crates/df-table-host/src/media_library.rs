@@ -47,7 +47,8 @@ pub use crate::media_ingest::{
 use crate::media_range::{ByteSpan, RangeRequest, parse_range};
 use crate::media_store::{AddError, Added, ingest_upload};
 use crate::playground::{
-    FileError, PlaygroundFiles, done, playground_line, refuse_file, refused, reject_body,
+    FileError, PlaygroundChangeError, PlaygroundFiles, answer_change, playground_line, refuse_file,
+    reject_change_body,
 };
 use crate::state::AppState;
 use crate::wire::{MediaAdd, MediaRemove, path};
@@ -154,7 +155,7 @@ pub fn media_problem(change: &SceneChange, entries: &[MediaEntry]) -> Option<Str
 /// A value that changes when the file does, so a page can ask whether it has the current one. A
 /// file whose modification time cannot be read has no such value, and the answer says so: a
 /// made-up value would let a replaced file of the same size answer 304 with stale bytes.
-fn entity_tag(metadata: &std::fs::Metadata) -> Result<String, FileError> {
+pub(crate) fn entity_tag(metadata: &std::fs::Metadata) -> Result<String, FileError> {
     let modified = metadata
         .modified()?
         .duration_since(std::time::UNIX_EPOCH)
@@ -516,14 +517,14 @@ fn record_media_refused(
     ));
 }
 
-/// Records and answers a refused add. The name of a refused add is not known to be plain until
-/// the file is published, so it is never written.
-fn refuse_add(state: &AppState, error: &AddError, received_bytes: u64) -> Response {
+/// Records a refused add and gives its refusal. The name of a refused add is not known to be plain
+/// until the file is published, so it is never written.
+fn refuse_add(state: &AppState, error: AddError, received_bytes: u64) -> PlaygroundChangeError {
     if matches!(error, AddError::Ingest(IngestError::InvalidRequest(_))) {
         record_malformed(state);
     }
     record_media_refused(state, MediaVerb::Add, None, error.key(), received_bytes);
-    refused(error.status(), error.to_string())
+    error.into()
 }
 
 /// Reads the request body as it arrives and hands it to the thread that stages the file. After
@@ -536,7 +537,7 @@ async fn add_media(State(state): State<Arc<AppState>>, headers: HeaderMap, body:
         let error = AddError::Ingest(IngestError::TooLarge {
             maximum_bytes: limits.maximum_file_bytes,
         });
-        return refuse_add(&state, &error, 0);
+        return answer_change(&state, Err(refuse_add(&state, error, 0)));
     }
     let directory = media_directory(state.playground().files());
     let (sender, worker) = start_staging(directory, limits);
@@ -553,7 +554,7 @@ async fn add_media(State(state): State<Arc<AppState>>, headers: HeaderMap, body:
         }
     }
     drop(sender);
-    match finish_staging(worker).await {
+    let result = match finish_staging(worker).await {
         Ok(added) => {
             // A published file has a media name, so it has a kind; `-` only keeps this total.
             let kind = media_kind(&added.name).map_or("-", MediaKind::key);
@@ -568,10 +569,11 @@ async fn add_media(State(state): State<Arc<AppState>>, headers: HeaderMap, body:
                     ("duration_ms", duration_ms.to_string()),
                 ],
             ));
-            done(&state)
+            Ok(())
         }
-        Err(error) => refuse_add(&state, &error, received),
-    }
+        Err(error) => Err(refuse_add(&state, error, received)),
+    };
+    answer_change(&state, result)
 }
 
 /// Starts the thread that stages one add into `directory`; the add request is sent to it in
@@ -622,23 +624,25 @@ pub(crate) async fn store_bytes(
 }
 
 async fn remove_media(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    let result = remove_media_body(&state, &body).await;
+    answer_change(&state, result)
+}
+
+/// Removes the media file a body names.
+async fn remove_media_body(state: &AppState, body: &[u8]) -> Result<(), PlaygroundChangeError> {
     let received = u64::try_from(body.len()).unwrap_or(u64::MAX);
     let refuse = |name: Option<&str>, cause: &'static str| {
-        record_media_refused(&state, MediaVerb::Remove, name, cause, received);
+        record_media_refused(state, MediaVerb::Remove, name, cause, received);
     };
-    let request: MediaRemove = match parse_body(&body) {
-        Ok(request) => request,
-        Err(error) => {
-            refuse(None, "invalid_body");
-            return reject_body(&state, &error);
-        }
-    };
+    let request: MediaRemove = parse_body(body).map_err(|error| {
+        refuse(None, "invalid_body");
+        reject_change_body(state, error)
+    })?;
     if media_kind(&request.name).is_none() {
         refuse(None, "invalid_media_name");
-        return refused(
-            StatusCode::BAD_REQUEST,
-            format!("'{}' is not a media name", request.name),
-        );
+        return Err(PlaygroundChangeError::InvalidChange {
+            detail: format!("'{}' is not a media name", request.name),
+        });
     }
     let media_path = media_directory(state.playground().files()).join(&request.name);
     let removed = run_blocking(
@@ -649,18 +653,17 @@ async fn remove_media(State(state): State<Arc<AppState>>, body: Bytes) -> Respon
     match removed {
         Ok(()) => {
             state.record_line(playground_line("media_remove", &[("name", request.name)]));
-            done(&state)
+            Ok(())
         }
         Err(FileError::NotFound) => {
             refuse(Some(&request.name), FileError::NotFound.key());
-            refused(
-                StatusCode::BAD_REQUEST,
-                format!("there is no media '{}'", request.name),
-            )
+            Err(PlaygroundChangeError::InvalidChange {
+                detail: format!("there is no media '{}'", request.name),
+            })
         }
         Err(error) => {
             refuse(Some(&request.name), error.key());
-            refuse_file(error)
+            Err(error.into())
         }
     }
 }

@@ -9,9 +9,11 @@ use df_table::event::RejectionCause;
 use crate::client::get;
 use crate::command::{Command, CommandError, DEFAULT_TRAVEL_SPEED, parse, split_words, usage_text};
 use crate::dev::{DevError, ReplyError, run_dev};
+use crate::server::request::HostError;
 use crate::test_support::{Running, STARTER_FILES, start};
 use crate::view::CanvasView;
-use crate::wire::{EffectRequest, EventsReply, Frame};
+use crate::wire::{EffectRequest, EventsReply};
+use df_playground::frame::Frame;
 
 fn words(line: &str) -> Vec<String> {
     split_words(line).expect("the line splits")
@@ -162,10 +164,10 @@ async fn a_speed_that_is_not_allowed_is_refused_with_the_limits_and_recorded() {
         matches!(
             &error,
             DevError::Rejected {
-                error: ReplyError::Canvas {
-                    cause: Some(RejectionCause::InvalidSpeed),
+                error: ReplyError::Host(HostError::InvalidEffect {
+                    cause: RejectionCause::InvalidSpeed,
                     ..
-                },
+                }),
                 ..
             }
         ),

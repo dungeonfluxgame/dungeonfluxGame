@@ -1,5 +1,8 @@
-//! The playground's files: the page, theme, fixtures and compiled package, read from disk and
-//! served with a never-cache answer.
+//! The playground's files: the page, theme, fixtures and compiled package, read from disk. The
+//! page, the fixtures and the revision are served with a never-cache answer; the theme and the
+//! package carry an entity tag (`media_library::entity_tag`) and are checked each time, so a page
+//! that reloads (a phone back from its lock screen) gets a bodiless 304 for the files it already
+//! has instead of the whole package again.
 //!
 //! Names that reach the disk are checked first (a plain file name with an allowed extension), the
 //! size is bounded, and blocking file work runs off the async threads. Nothing here reads the
@@ -17,14 +20,14 @@ use std::time::UNIX_EPOCH;
 
 use axum::body::Body;
 use axum::extract::{Path as UrlPath, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use super::audit::playground_line;
 use crate::blocking::run_blocking;
-use crate::limits::{MAXIMUM_ASSET_FILE_BYTES, MAXIMUM_PACKAGE_FILE_BYTES};
-use crate::media_library::read_in_chunks;
+use crate::limits::{FILES_WATCH_INTERVAL, MAXIMUM_ASSET_FILE_BYTES, MAXIMUM_PACKAGE_FILE_BYTES};
+use crate::media_library::{entity_tag, read_in_chunks};
 use crate::state::AppState;
 
 const INDEX_FILE: &str = "index.html";
@@ -166,10 +169,24 @@ pub fn content_type(name: &str) -> &'static str {
 /// `MAXIMUM_ASSET_FILE_BYTES` long (a page, a theme or a fixture; the package is streamed, not
 /// read whole). A file that grows while it is read is refused the same way.
 pub fn read_file(directory: &Path, name: &str, extensions: &[&str]) -> Result<Vec<u8>, FileError> {
+    read_whole(open_asset_file(directory, name, extensions)?)
+}
+
+/// Opens `name` in `directory` if it is a plain file name with one of `extensions`, and at most
+/// `MAXIMUM_ASSET_FILE_BYTES` long.
+fn open_asset_file(
+    directory: &Path,
+    name: &str,
+    extensions: &[&str],
+) -> Result<std::fs::File, FileError> {
     if !is_plain_file_name(name) || !has_extension(name, extensions) {
         return Err(FileError::InvalidName);
     }
-    let file = open_plain_file(&directory.join(name), MAXIMUM_ASSET_FILE_BYTES)?;
+    open_plain_file(&directory.join(name), MAXIMUM_ASSET_FILE_BYTES)
+}
+
+/// The bytes of an asset file opened by `open_asset_file`.
+fn read_whole(file: std::fs::File) -> Result<Vec<u8>, FileError> {
     let mut bytes = Vec::new();
     // One byte past the limit shows that the file outgrew it after it was measured.
     file.take(MAXIMUM_ASSET_FILE_BYTES.saturating_add(1))
@@ -275,6 +292,44 @@ pub fn revision(files: &PlaygroundFiles) -> Result<String, FileError> {
         assets.finish(),
         package.finish()
     ))
+}
+
+/// Reads the playground's files every `FILES_WATCH_INTERVAL` and announces a new revision as a
+/// change (`AppState::refresh_files_revision`), so every page follows the files from its frames
+/// instead of asking for them itself; on the same beat it reads the party's heroes again
+/// (`AppState::refresh_party_heroes`), whose headshot is made in the background. A new revision
+/// writes `PLAYGROUND files_changed revision=`; a read that fails writes
+/// `PLAYGROUND files_unreadable reason=` once, until a read succeeds.
+/// Abort the handle to stop it.
+pub(crate) fn spawn_files_watch(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(FILES_WATCH_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut failing = false;
+        loop {
+            interval.tick().await;
+            state.refresh_party_heroes().await;
+            match state.refresh_files_revision().await {
+                Ok(changed) => {
+                    failing = false;
+                    if let Some(revision) = changed {
+                        state.record_line_and_echo(playground_line(
+                            "files_changed",
+                            &[("revision", revision)],
+                        ));
+                    }
+                }
+                Err(error) if !failing => {
+                    failing = true;
+                    state.record_line_and_echo(playground_line(
+                        "files_unreadable",
+                        &[("reason", error.key().to_owned())],
+                    ));
+                }
+                Err(_) => {}
+            }
+        }
+    })
 }
 
 /// Which playground file a read was for, in its audit line.
@@ -391,8 +446,73 @@ pub(super) async fn page(State(state): State<Arc<AppState>>) -> Response {
     asset(&state, ServedFileKind::Asset, INDEX_FILE).await
 }
 
-pub(super) async fn theme(State(state): State<Arc<AppState>>) -> Response {
-    asset(&state, ServedFileKind::Theme, THEME_FILE).await
+/// What a read of a file the page keeps found: the page's copy is current, or the current file
+/// (`body`). Either way `tag` is the current file's entity tag.
+enum TaggedRead<T> {
+    Unchanged { tag: String },
+    Changed { body: T, tag: String },
+}
+
+/// The entity tag of the copy the page already has (`If-None-Match`), when it names one.
+fn held_tag(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+/// Lets the page keep the answer and check it each time by its entity tag `tag`.
+fn checked_by_tag(response: &mut Response, tag: &str) {
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    if let Ok(value) = HeaderValue::from_str(tag) {
+        headers.insert(header::ETAG, value);
+    }
+}
+
+/// The bodiless answer to a page that already has the file tagged `tag`.
+fn not_modified(tag: &str) -> Response {
+    let mut response = StatusCode::NOT_MODIFIED.into_response();
+    checked_by_tag(&mut response, tag);
+    response
+}
+
+/// The theme, unless `held` is its current entity tag. The tag and the bytes come from one open
+/// handle, so a file replaced meanwhile cannot pair one version's tag with another's bytes.
+fn read_theme(assets: &Path, held: Option<&str>) -> Result<TaggedRead<Vec<u8>>, FileError> {
+    let file = open_asset_file(assets, THEME_FILE, &ASSET_EXTENSIONS)?;
+    let tag = entity_tag(&file.metadata()?)?;
+    if held == Some(tag.as_str()) {
+        return Ok(TaggedRead::Unchanged { tag });
+    }
+    Ok(TaggedRead::Changed {
+        body: read_whole(file)?,
+        tag,
+    })
+}
+
+pub(super) async fn theme(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let files = state.playground().files().clone();
+    let held = held_tag(&headers);
+    let read = run_blocking(
+        move || read_theme(&files.assets, held.as_deref()),
+        FileError::Stopped,
+    )
+    .await;
+    match read {
+        Ok(TaggedRead::Unchanged { tag }) => not_modified(&tag),
+        Ok(TaggedRead::Changed { body, tag }) => {
+            let mut response = respond(
+                &state,
+                ServedFileKind::Theme,
+                Some(THEME_FILE),
+                Ok((body, content_type(THEME_FILE))),
+            );
+            checked_by_tag(&mut response, &tag);
+            response
+        }
+        Err(error) => respond(&state, ServedFileKind::Theme, Some(THEME_FILE), Err(error)),
+    }
 }
 
 pub(super) async fn fixture(
@@ -446,18 +566,24 @@ pub(super) async fn dice(
 pub(super) async fn package_file(
     State(state): State<Arc<AppState>>,
     UrlPath(name): UrlPath<String>,
+    headers: HeaderMap,
 ) -> Response {
     let files = state.playground().files().clone();
+    let held = held_tag(&headers);
     let opened = {
         let name = name.clone();
         run_blocking(
-            move || open_package_file(&files.package, &name),
+            move || open_package_file(&files.package, &name, held.as_deref()),
             FileError::Stopped,
         )
         .await
     };
     match opened {
-        Ok((file, length)) => {
+        Ok(TaggedRead::Unchanged { tag }) => not_modified(&tag),
+        Ok(TaggedRead::Changed {
+            body: (file, length),
+            tag,
+        }) => {
             // The package is the biggest file there is: it is streamed in chunks, never held whole.
             let mut response = Response::new(Body::from_stream(read_in_chunks(file, length)));
             let headers = response.headers_mut();
@@ -465,8 +591,8 @@ pub(super) async fn package_file(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static(content_type(&name)),
             );
-            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             headers.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
+            checked_by_tag(&mut response, &tag);
             response
         }
         Err(error) => respond(&state, ServedFileKind::Package, Some(&name), Err(error)),
@@ -474,14 +600,25 @@ pub(super) async fn package_file(
 }
 
 /// Opens the package file `name` and measures it, if it is a plain name with a package extension
-/// and at most `MAXIMUM_PACKAGE_FILE_BYTES`.
-fn open_package_file(directory: &Path, name: &str) -> Result<(std::fs::File, u64), FileError> {
+/// and at most `MAXIMUM_PACKAGE_FILE_BYTES`, unless `held` is its current entity tag.
+fn open_package_file(
+    directory: &Path,
+    name: &str,
+    held: Option<&str>,
+) -> Result<TaggedRead<(std::fs::File, u64)>, FileError> {
     if !is_plain_file_name(name) || !has_extension(name, &PACKAGE_EXTENSIONS) {
         return Err(FileError::InvalidName);
     }
     let file = open_plain_file(&directory.join(name), MAXIMUM_PACKAGE_FILE_BYTES)?;
-    let length = file.metadata().map_err(FileError::from)?.len();
-    Ok((file, length))
+    let metadata = file.metadata().map_err(FileError::from)?;
+    let tag = entity_tag(&metadata)?;
+    if held == Some(tag.as_str()) {
+        return Ok(TaggedRead::Unchanged { tag });
+    }
+    Ok(TaggedRead::Changed {
+        body: (file, metadata.len()),
+        tag,
+    })
 }
 
 pub(super) async fn fixture_list(State(state): State<Arc<AppState>>) -> Response {

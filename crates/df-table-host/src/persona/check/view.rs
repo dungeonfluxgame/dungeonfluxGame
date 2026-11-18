@@ -96,6 +96,20 @@ fn kind_of(subject: RollSubject, contested: bool) -> RollKind {
     }
 }
 
+/// The card's title of a tool check, `Thieves' Tools (Dexterity)`: the catalog's name of the tool
+/// it uses and its ability; none for any other call.
+pub(super) fn tool_title(call: &super::request::CheckCall) -> Option<String> {
+    if call.kind != super::request::CheckKind::ToolCheck {
+        return None;
+    }
+    let tool = df_rules::hero::Tool::from_key(call.uses.as_deref()?)?;
+    Some(format!(
+        "{} ({})",
+        tool.title(),
+        ability_word(call.ability?)
+    ))
+}
+
 /// What is tested, as the card's title says it: `Athletics (Strength)`.
 fn title_of(subject: RollSubject, contested: bool) -> String {
     let title = match subject {
@@ -143,7 +157,7 @@ fn outcome_of(outcome: RollOutcome, contested: bool) -> Option<ViewOutcome> {
     }
 }
 
-fn mode_of(mode: RollMode) -> ViewMode {
+pub(super) fn mode_of(mode: RollMode) -> ViewMode {
     match mode {
         RollMode::Normal => ViewMode::Normal,
         RollMode::Advantage => ViewMode::Advantage,

@@ -9,8 +9,9 @@
 use df_scene_layout::{SceneLayout, percent_text};
 
 use super::request::{
-    CharacterRequest, IdentifiedLayout, IdentifyRequest, IdentityOutcome, LabelRequest,
-    LocateReply, LocateRequest, LocatedLayout, ScanPrompt, StoredLayout,
+    CharacterRequest, FindRequest, FoundRegions, IdentifiedLayout, IdentifyRequest,
+    IdentityOutcome, LabelRequest, LocateReply, LocateRequest, LocatedLayout, ScanPrompt,
+    StoredLayout,
 };
 use super::routes::path;
 use crate::command::{Command, CommandError, bad_choice};
@@ -21,6 +22,7 @@ pub const MEDIA_LOCATE_USAGE: &str = concat!(
     "media locate <picture> [prompt=person|head] [masks=1-32]",
     " | media locate show <picture>",
     " | media locate points <picture>",
+    " | media locate find <picture> <what to look for...>",
     " | media locate identify <picture> <name>[=<description>] ... [portrait.<name>=<file>]",
     " [min=0-1000]",
     " | media locate label <picture> <number|id|name> <name|-> [<shown name...>]"
@@ -47,6 +49,8 @@ pub enum MediaLocate {
     },
     /// Print every character point and camera shot of a picture's named characters.
     Points { picture: String },
+    /// Search a picture for one thing by its words, storing nothing.
+    Find { picture: String, noun: String },
     /// Name a picture's regions by asking a vision model which is which character.
     Identify {
         picture: String,
@@ -65,6 +69,10 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         [verb, picture] if verb == "points" => MediaLocate::Points {
             picture: picture.clone(),
         },
+        [verb, picture, noun @ ..] if verb == "find" && !noun.is_empty() => MediaLocate::Find {
+            picture: picture.clone(),
+            noun: noun.join(" "),
+        },
         [verb, picture, region, label, shown @ ..] if verb == "label" => MediaLocate::Label {
             picture: picture.clone(),
             region: region.clone(),
@@ -72,7 +80,10 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
             display_name: (!shown.is_empty()).then(|| shown.join(" ")),
         },
         [picture, options @ ..]
-            if !matches!(picture.as_str(), "show" | "label" | "points" | "identify") =>
+            if !matches!(
+                picture.as_str(),
+                "show" | "label" | "points" | "identify" | "find"
+            ) =>
         {
             parse_scan(picture, options)?
         }
@@ -195,7 +206,7 @@ fn show_address(picture: &str) -> String {
 }
 
 /// `text` percent-encoded for a query value: every byte but the unreserved ones is escaped.
-fn query_value(text: &str) -> String {
+pub(crate) fn query_value(text: &str) -> String {
     text.bytes()
         .map(|byte| match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
@@ -234,6 +245,16 @@ pub async fn run(port: u16, command: MediaLocate) -> Result<String, DevError> {
         }
         MediaLocate::Points { picture } => Ok(format_points(&show(port, &picture).await?.layout)),
         MediaLocate::Show { picture } => Ok(format_stored(&show(port, &picture).await?)),
+        MediaLocate::Find { picture, noun } => {
+            let request = FindRequest {
+                picture,
+                noun,
+                masks: None,
+            };
+            let found: FoundRegions =
+                reply_value(post_json(port, path::LOCATE_FIND, &request).await?)?;
+            Ok(format_found(&found))
+        }
         MediaLocate::Identify {
             picture,
             characters,
@@ -291,6 +312,34 @@ fn format_located(located: &LocatedLayout) -> String {
         },
         format_regions(layout)
     )
+}
+
+/// `found regions=<n> duration_ms=<ms>`, then one `region <n>: box=<left>,<top>,<right>,<bottom>
+/// score=<permille>` line per region found, in thousandths of the picture.
+fn format_found(found: &FoundRegions) -> String {
+    let mut lines = vec![format!(
+        "found regions={} duration_ms={}",
+        found.layout.regions().len(),
+        found.duration_ms
+    )];
+    lines.extend(
+        found
+            .layout
+            .regions()
+            .iter()
+            .enumerate()
+            .map(|(at, region)| {
+                format!(
+                    "region {at}: box={},{},{},{} score={}",
+                    region.left_permille(),
+                    region.top_permille(),
+                    region.right_permille(),
+                    region.bottom_permille(),
+                    region.score_permille()
+                )
+            }),
+    );
+    lines.join("\n")
 }
 
 fn format_stored(stored: &StoredLayout) -> String {

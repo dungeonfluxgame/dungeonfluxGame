@@ -247,24 +247,36 @@ pub(super) async fn declared_line(
 ) -> Result<SaidLine, PersonaError> {
     let character = own.id().as_str();
     let inventory = crate::world::inventory_of(app, character);
-    if let Some(text) = &request.text {
-        let line = text.trim();
-        if line.is_empty() {
-            return Err(PersonaError::EmptyLine);
-        }
+    // A declaration given whole with what it shows (`doing`, `uses`) is a dev tool's: spoken as
+    // written with the action as given. Given words alone are judged like a worded declaration.
+    if let Some(text) = request
+        .text
+        .as_ref()
+        .filter(|_| request.doing.is_some() || !request.uses.is_empty())
+    {
         let action = DeclaredAction {
-            doing: request.doing.as_deref().map_or(line, str::trim).to_owned(),
+            doing: request
+                .doing
+                .as_deref()
+                .map_or(text.trim(), str::trim)
+                .to_owned(),
             pose: None,
             items_in_use: distinct(request.uses.clone()),
         };
         check_declared(&action, &inventory).map_err(refused)?;
+        let said = spoken_as_written(app, own, text, action)?;
         app.record_line(format!(
             "PERSONA declaration id={character} verbatim=true items={}",
-            action.items_in_use.len()
+            said.declared
+                .as_ref()
+                .map_or(0, |action| action.items_in_use.len())
         ));
-        return Ok(spoken_as_written(app, character, line, action));
+        return Ok(said);
     }
-    if request.situation.trim().is_empty() {
+    let given = request.text.as_deref();
+    if given.is_some_and(|text| text.trim().is_empty())
+        || (given.is_none() && request.situation.trim().is_empty())
+    {
         return Err(PersonaError::EmptyLine);
     }
     let occasion = Occasion {
@@ -277,10 +289,13 @@ pub(super) async fn declared_line(
         intent: Some(DECLARE_INTENT),
         strike: false,
         declare: true,
+        given,
+        expect: None,
     };
     let said = say_line(app, route, scene, own, occasion).await?;
     app.record_line(format!(
-        "PERSONA declaration id={character} verbatim=false items={} retried={}",
+        "PERSONA declaration id={character} verbatim=false given={} items={} retried={}",
+        given.is_some(),
         said.declared
             .as_ref()
             .map_or(0, |action| action.items_in_use.len()),
@@ -297,15 +312,20 @@ pub(super) fn refused(detail: String) -> PersonaError {
     }
 }
 
-/// A line that is `line` as written, declaring `action`: nothing was judged, so it moves no
-/// feeling and no inventory.
+/// A declaration of `own` given whole: `text` as written, declaring `declared` as given. Nothing
+/// was judged, so it moves no feeling and no inventory.
 fn spoken_as_written(
     app: &AppState,
-    character: &str,
-    line: &str,
-    action: DeclaredAction,
-) -> SaidLine {
-    SaidLine {
+    own: &Persona,
+    text: &str,
+    declared: DeclaredAction,
+) -> Result<SaidLine, PersonaError> {
+    let line = text.trim();
+    if line.is_empty() {
+        return Err(PersonaError::EmptyLine);
+    }
+    let character = own.id().as_str();
+    Ok(SaidLine {
         line: line.to_owned(),
         behavior: None,
         fired_triggers: Vec::new(),
@@ -324,11 +344,11 @@ fn spoken_as_written(
         retry_reason: None,
         names_learned: Vec::new(),
         inventory: Vec::new(),
-        declared: Some(action),
+        declared: Some(declared),
         state: load_state(app, character),
         model_ms: 0,
         total_ms: 0,
-    }
+    })
 }
 
 /// What the frame watch is handed for a declaration: the words spoken and the action.

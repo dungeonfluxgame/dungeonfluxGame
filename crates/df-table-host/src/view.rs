@@ -1,13 +1,18 @@
 //! A copy of the canvas taken under the lock, for the viewer and the JSON answer.
 //!
 //! It owns the shape of what a reader of the canvas sees, in one typed form that the server
-//! writes and the command line reads back. Taking a copy keeps the lock short: every element is
+//! writes and the command line reads back. An element (`ElementView`) and the canvas of a frame
+//! (`df_playground::frame::FrameCanvas`) are the page's own types, which the host writes, so the
+//! two cannot drift. Taking a copy keeps the lock short: every element is
 //! copied once, its problem is found in the same pass, and rendering or writing JSON happens after
 //! the lock is released. A value that cannot be written (a number that is not finite) is an error,
 //! never a quiet `null`.
 
 use std::fmt;
 
+use df_playground::fixture::ElementShape;
+pub use df_playground::fixture::{ElementView, PivotView, TravelView};
+use df_playground::frame::FrameCanvas;
 use df_table::canvas::Canvas;
 use df_table::element::{Color, Element, FieldValue, Pivot};
 use df_table::field_type::FieldType;
@@ -50,61 +55,6 @@ pub struct KindView {
     pub fields: Vec<FieldView>,
 }
 
-/// Where an element is heading and how fast, while it travels.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct TravelView {
-    pub x: f32,
-    pub y: f32,
-    pub speed: f32,
-}
-
-/// The point an element turns about, in whole percent of its own width and height.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PivotView {
-    pub x_percent: u8,
-    pub y_percent: u8,
-}
-
-impl Default for PivotView {
-    /// The centre, which is also what a frame from before pivots existed means.
-    fn default() -> Self {
-        Self::from(Pivot::CENTER)
-    }
-}
-
-impl From<Pivot> for PivotView {
-    fn from(pivot: Pivot) -> Self {
-        Self {
-            x_percent: pivot.x.get(),
-            y_percent: pivot.y.get(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ElementView {
-    pub id: String,
-    pub kind: String,
-    pub x: f32,
-    pub y: f32,
-    pub label: String,
-    pub color: Option<String>,
-    pub shape: Shape,
-    pub width_units: f32,
-    pub height_units: f32,
-    pub fields: serde_json::Map<String, serde_json::Value>,
-    /// Why the element no longer fits its kind, when it does not.
-    pub problem: Option<String>,
-    /// Where the element is heading, while it travels.
-    #[serde(default)]
-    pub travelling: Option<TravelView>,
-    /// Clockwise turn, 0 to 359; a frame from before rotation existed reads as 0.
-    #[serde(default)]
-    pub rotation_degrees: u16,
-    #[serde(default)]
-    pub pivot: PivotView,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CanvasView {
     pub revision: u64,
@@ -112,19 +62,14 @@ pub struct CanvasView {
     pub kinds: Vec<KindView>,
 }
 
-/// The canvas as the playground page reads it: the revision and the elements, without the kinds
-/// (the page never reads them, and they would be sent again with every frame).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FrameCanvas {
-    pub revision: u64,
-    pub elements: Vec<ElementView>,
-}
-
-/// Why a copy of the canvas could not be made.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Why a copy of the canvas could not be made: a typed route error, answered as a `DevReply`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "error", rename_all = "snake_case")]
 pub enum ViewError {
     /// A number field holds a value JSON cannot write (not a finite number).
     NotWritable { element: String, field: String },
+    /// A frame of the canvas could not be written or built; `detail` says why.
+    NotBuilt { detail: String },
 }
 
 impl fmt::Display for ViewError {
@@ -134,7 +79,16 @@ impl fmt::Display for ViewError {
                 formatter,
                 "field '{field}' of element '{element}' holds a number that is not finite"
             ),
+            Self::NotBuilt { detail } => formatter.write_str(detail),
         }
+    }
+}
+
+impl std::error::Error for ViewError {}
+
+impl crate::dev_http::RouteError for ViewError {
+    fn status(&self) -> axum::http::StatusCode {
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
     }
 }
 
@@ -212,7 +166,7 @@ fn element_view(canvas: &Canvas, element: Element) -> Result<ElementView, ViewEr
         color: definition
             .and_then(|kind| kind.color(&element))
             .map(Color::to_hex),
-        shape: definition.map_or(FALLBACK_SHAPE, |kind| kind.shape),
+        shape: element_shape(definition.map_or(FALLBACK_SHAPE, |kind| kind.shape)),
         width_units: definition.map_or(FALLBACK_SIZE_UNITS, |kind| kind.width_units),
         height_units: definition.map_or(FALLBACK_SIZE_UNITS, |kind| kind.height_units),
         fields,
@@ -225,7 +179,7 @@ fn element_view(canvas: &Canvas, element: Element) -> Result<ElementView, ViewEr
             speed: motion.speed.units_per_second(),
         }),
         rotation_degrees: element.appearance.rotation.get(),
-        pivot: element.appearance.pivot.into(),
+        pivot: pivot_view(element.appearance.pivot),
     })
 }
 
@@ -236,13 +190,28 @@ fn element_views(canvas: &Canvas) -> Result<Vec<ElementView>, ViewError> {
         .collect()
 }
 
-impl FrameCanvas {
-    pub fn from_canvas(canvas: &Canvas) -> Result<Self, ViewError> {
-        Ok(Self {
-            revision: canvas.revision(),
-            elements: element_views(canvas)?,
-        })
+/// How the page draws an element of a kind of `shape`.
+pub fn element_shape(shape: Shape) -> ElementShape {
+    match shape {
+        Shape::Circle => ElementShape::Circle,
+        Shape::Rect => ElementShape::Rect,
     }
+}
+
+/// The point an element turns about, as the page reads it.
+pub fn pivot_view(pivot: Pivot) -> PivotView {
+    PivotView {
+        x_percent: pivot.x.get(),
+        y_percent: pivot.y.get(),
+    }
+}
+
+/// The canvas as a frame carries it: its revision and its elements, without the kinds.
+pub fn frame_canvas(canvas: &Canvas) -> Result<FrameCanvas, ViewError> {
+    Ok(FrameCanvas {
+        revision: canvas.revision(),
+        elements: element_views(canvas)?,
+    })
 }
 
 impl CanvasView {

@@ -7,12 +7,10 @@
 
 pub use df_playground::controls::ControlsReply;
 use df_playground::media::ClientReport;
-use df_table::event::RejectionCause;
 use serde::{Deserialize, Serialize};
 
 use crate::event_log::LoggedLine;
 use crate::limits::MAXIMUM_LISTED_PROBLEMS;
-use crate::view::FrameCanvas;
 
 /// The addresses of the API. `CANVAS` and `EVENTS` answer GET; `EFFECT` and `RELOAD` answer POST
 /// with JSON. The addresses the playground page asks for are `df_playground::path`'s, so the page
@@ -161,20 +159,14 @@ pub struct PivotRequest {
     pub y_percent: serde_json::Number,
 }
 
-/// The answer to a request that changes something.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "outcome", rename_all = "snake_case")]
-pub enum Reply {
-    /// The change was made. `notices` carries things worth knowing, such as elements that no
-    /// longer fit a reloaded kind.
-    Done { revision: u64, notices: Vec<String> },
-    /// The change was not made. `cause` is absent for a rejected reload, which has no single
-    /// cause; `problems` lists what is wrong.
-    Rejected {
-        cause: Option<RejectionCause>,
-        message: String,
-        problems: Vec<String>,
-    },
+/// What a change made: the revision after it, and things worth knowing, such as elements that no
+/// longer fit a reloaded kind. The value of the `DevReply` of `/dev/effect`, `/dev/reload` and the
+/// playground's fixture and media routes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Changed {
+    pub revision: u64,
+    pub notices: Vec<String>,
 }
 
 /// Changes of what the playground shows that are applied together: if one is refused none is
@@ -238,16 +230,6 @@ pub struct ClientView {
     #[serde(default)]
     pub remote: Option<std::net::IpAddr>,
     pub report: ClientReport,
-}
-
-/// Everything the playground page draws, taken at one moment: the canvas and what the
-/// playground is showing. `frame` counts the host's changes, so a page that has frame N asks for
-/// the next one with `after=N` and is answered when there is one.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Frame {
-    pub frame: u64,
-    pub canvas: FrameCanvas,
-    pub controls: ControlsReply,
 }
 
 /// The answer to a request for events.

@@ -4,11 +4,12 @@
 //! change, no foreign origin), because they are merged into the one router before its layers.
 //! A read is a GET and a change is a POST of JSON; every answer is an `EngineReply` (the host's
 //! one envelope), `done` with the value or `rejected` with a typed `EngineError`, whose `status()`
-//! is the answer's status. A body is read with `dev_http::parse_body` and a query with `query`, so
-//! a malformed one is a typed `invalid_body` or `invalid_query` refusal and never a bare 400; a
-//! body over the host's limit or one that broke off is a typed `unreadable_body`, not the
-//! extractor's own answer. The routes hold no state of their own beyond the handle to the owner
-//! thread, which they start with the router.
+//! is the answer's status. A body is read with `dev_http::read_body` and a query with
+//! `dev_http::read_query`, so a malformed one is a typed `invalid_body` or `invalid_query` refusal
+//! and never a bare 400; a body over the host's limit (`too_large`, a 413) or one that broke off
+//! (`truncated`) is an `invalid_body` with that cause, not the extractor's own answer. The routes
+//! hold no state of their own beyond the handle to the owner thread, which they start with the
+//! router.
 //!
 //! What they record: the owner audits every call it answers, and the routes write one
 //! `ENGINE refused verb=<verb> error=<key> duration_ms=<n>` line for every refusal, whoever
@@ -26,16 +27,14 @@ use axum::Router;
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, QueryRejection};
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::{get, post};
 use serde::Serialize;
-use serde::de::DeserializeOwned;
 use tokio::time::Instant;
 
 use crate::adapters::dev_route;
 use crate::adapters::{RulesBackend, RulesCheckKit, story_ports};
-use crate::dev_http::{parse_body, reply};
+use crate::dev_http::{read_body, read_query, reply};
 use crate::locate::text_runtime;
 use crate::state::AppState;
 
@@ -48,7 +47,7 @@ use super::extras::Extras;
 use super::handle::EngineHandle;
 use super::jev::JevInterpreter;
 use super::limits::COMMAND_MAILBOX_CAPACITY;
-use super::report::{EngineError, QueryError, UnreadableBodyCause};
+use super::report::EngineError;
 use super::request::{
     AudienceQuery, BrokerRequest, ChaosRequest, ClockControl, DiceControl, DumpQuery, ForceRequest,
     InputRequest, QueueControl, ViableQuery,
@@ -199,28 +198,6 @@ fn engine(routes: &EngineRoutes) -> Result<&EngineHandle, EngineError> {
         })
 }
 
-/// The query of a GET, or the typed refusal of one that does not read (a missing or an unknown
-/// parameter, a value of the wrong kind).
-fn query<T>(query: Result<Query<T>, QueryRejection>) -> Result<T, EngineError> {
-    query.map(|Query(query)| query).map_err(|rejection| {
-        EngineError::from(QueryError {
-            detail: rejection.body_text(),
-        })
-    })
-}
-
-/// The JSON body of a POST, or the typed refusal of one that could not be read or does not read.
-fn body<T: DeserializeOwned>(bytes: Result<Bytes, BytesRejection>) -> Result<T, EngineError> {
-    let bytes = bytes.map_err(|rejection| EngineError::UnreadableBody {
-        cause: if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
-            UnreadableBodyCause::TooLarge
-        } else {
-            UnreadableBodyCause::Interrupted
-        },
-    })?;
-    Ok(parse_body(&bytes)?)
-}
-
 /// Answers a call of `verb`, writing its refusal line when it was refused.
 fn answer<T: Serialize>(
     routes: &EngineRoutes,
@@ -244,7 +221,7 @@ async fn input(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let request: InputRequest = body(bytes)?;
+        let request: InputRequest = read_body(bytes)?;
         engine(&routes)?.submit(request).await
     }
     .await;
@@ -257,9 +234,9 @@ async fn dump(
     dump_query: Result<Query<DumpQuery>, QueryRejection>,
 ) -> Response {
     let started = Instant::now();
-    let named = match query(dump_query) {
+    let named = match read_query(dump_query) {
         Ok(DumpQuery { machine }) => machine,
-        Err(error) => return answer::<()>(&routes, "dump", started, Err(error)),
+        Err(error) => return answer::<()>(&routes, "dump", started, Err(error.into())),
     };
     match named {
         None => {
@@ -279,7 +256,7 @@ async fn viable(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let ViableQuery { seat } = query(viable_query)?;
+        let ViableQuery { seat } = read_query(viable_query)?;
         engine(&routes)?.viable(seat).await
     }
     .await;
@@ -292,7 +269,7 @@ async fn force(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let request: ForceRequest = body(bytes)?;
+        let request: ForceRequest = read_body(bytes)?;
         engine(&routes)?.force(request).await
     }
     .await;
@@ -305,7 +282,7 @@ async fn projection(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let AudienceQuery { audience } = query(audience_query)?;
+        let AudienceQuery { audience } = read_query(audience_query)?;
         engine(&routes)?.projection(audience.0).await
     }
     .await;
@@ -324,7 +301,7 @@ async fn queue_control(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let control: QueueControl = body(bytes)?;
+        let control: QueueControl = read_body(bytes)?;
         engine(&routes)?.queue_control(control).await
     }
     .await;
@@ -349,7 +326,7 @@ async fn clock(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let control: ClockControl = body(bytes)?;
+        let control: ClockControl = read_body(bytes)?;
         engine(&routes)?.clock(control).await
     }
     .await;
@@ -362,7 +339,7 @@ async fn dice(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let control: DiceControl = body(bytes)?;
+        let control: DiceControl = read_body(bytes)?;
         engine(&routes)?.dice(control).await
     }
     .await;
@@ -381,7 +358,7 @@ async fn chaos(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let request: ChaosRequest = body(bytes)?;
+        let request: ChaosRequest = read_body(bytes)?;
         engine(&routes)?.chaos(request).await
     }
     .await;
@@ -406,7 +383,7 @@ async fn broker_request(
 ) -> Response {
     let started = Instant::now();
     let result = async {
-        let request: BrokerRequest = body(bytes)?;
+        let request: BrokerRequest = read_body(bytes)?;
         engine(&routes)?.broker_request(request.purpose).await
     }
     .await;

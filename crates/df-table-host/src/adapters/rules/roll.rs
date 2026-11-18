@@ -10,7 +10,7 @@
 
 use std::num::NonZeroU16;
 
-use df_rules::roll::{DieSize, RollError, RollRequest, RollResult};
+use df_rules::roll::{DieSize, RollError, RollRequest, RollResult, RollStyle};
 use df_table::identity::OperationId;
 use df_table::ports::{ActionId, Draw, DrawRequest, PortError};
 
@@ -40,7 +40,11 @@ fn plan(request: &RollRequest) -> Result<Vec<DrawRequest>, RulesRefusal> {
         .map_err(refused)
 }
 
-pub(super) fn step(request: &RollRequest, draws: &[Draw]) -> Result<RollStep, RulesRefusal> {
+pub(super) fn step(
+    request: &RollRequest,
+    style: RollStyle,
+    draws: &[Draw],
+) -> Result<RollStep, RulesRefusal> {
     let wanted = plan(request)?;
     if draws.len() > wanted.len()
         || draws
@@ -57,7 +61,7 @@ pub(super) fn step(request: &RollRequest, draws: &[Draw]) -> Result<RollStep, Ru
     }
     let faces: Vec<u16> = draws.iter().map(|draw| draw.value()).collect();
     request
-        .resolve(&faces)
+        .resolve_styled(&faces, style)
         .map(|result| RollStep::Rolled(Box::new(result)))
         .map_err(refused)
 }
@@ -74,15 +78,17 @@ pub fn prepare_roll(
     })
 }
 
-/// Resolves a roll with the dice drawn for it: the result and a `RULES rolled` line, or the dice
-/// still missing.
+/// Resolves a roll with the dice drawn for it, with the Fighting Style its attack carries
+/// (`RollRequest::resolve_styled`): the result and a `RULES rolled` line, or the dice still
+/// missing.
 pub fn resolve_roll(
     action: &ActionId,
     operation: OperationId,
     request: &RollRequest,
+    style: RollStyle,
     draws: &[Draw],
 ) -> Result<RollStep, PortError> {
-    match step(request, draws) {
+    match step(request, style, draws) {
         Ok(RollStep::Rolled(result)) => {
             record(operation, rolled_line(action, operation, &result));
             Ok(RollStep::Rolled(result))

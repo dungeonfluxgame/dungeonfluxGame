@@ -24,14 +24,14 @@ use df_types::saturating_millis;
 use tokio::time::Instant;
 
 use super::request::{
-    IdentifiedLayout, IdentifyRequest, LabelRequest, LocateError, LocateRequest, LocateStage,
-    LocateStageError, LocatedLayout, ShowQuery, StoredLayout,
+    FindRequest, FoundRegions, IdentifiedLayout, IdentifyRequest, LabelRequest, LocateError,
+    LocateRequest, LocateStage, LocateStageError, LocatedLayout, ShowQuery, StoredLayout,
 };
-use super::scan::{ScanSupplier, scan_stages};
+use super::scan::{ScanSupplier, find_regions, scan_stages};
 use super::storage::LAYOUT_WRITES;
 use super::{check_picture_name, layout_file_name, relabel, write_layout};
 use crate::blocking::run_blocking;
-use crate::dev_http::{parse_body, reply};
+use crate::dev_http::{parse_body, read_query, reply};
 use crate::media_library::media_directory;
 use crate::state::AppState;
 use crate::text::TextRuntime;
@@ -46,6 +46,8 @@ pub mod path {
     pub const LOCATE_LABEL: &str = "/dev/media/locate/label";
     /// Names regions by asking the text service (POST an `IdentifyRequest`).
     pub const LOCATE_IDENTIFY: &str = "/dev/media/locate/identify";
+    /// Searches a picture for one thing by its words (POST a `FindRequest`); nothing is stored.
+    pub const LOCATE_FIND: &str = "/dev/media/locate/find";
 }
 
 fn layouts(app: &AppState) -> PathBuf {
@@ -261,12 +263,10 @@ async fn show(
     State(app): State<Arc<AppState>>,
     query: Result<Query<ShowQuery>, QueryRejection>,
 ) -> Response {
-    let Query(query) = match query {
+    let query = match read_query(query) {
         Ok(query) => query,
-        Err(rejection) => {
-            let error = LocateError::InvalidQuery {
-                detail: rejection.body_text(),
-            };
+        Err(error) => {
+            let error = LocateError::InvalidQuery(error);
             return answer::<StoredLayout>(&app, "show", "-", Err(error.into()));
         }
     };
@@ -374,7 +374,53 @@ pub fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>) -> Router {
             }),
         )
         .route(path::LOCATE_LABEL, post(label))
+        .route(path::LOCATE_FIND, post(find))
         .with_state(app)
+}
+
+async fn find(State(app): State<Arc<AppState>>, bytes: Bytes) -> Response {
+    find_answer(&app, &bytes, ScanSupplier::from_environment()).await
+}
+
+/// Answers the search request `bytes` through `supplier`: one `LOCATE found picture= regions=
+/// duration_ms=` line (the words are the player's and stay out of the log), or a failure line.
+pub(super) async fn find_answer(app: &AppState, bytes: &[u8], supplier: ScanSupplier) -> Response {
+    let request: FindRequest = match parse_body(bytes) {
+        Ok(request) => request,
+        Err(error) => {
+            return answer::<FoundRegions>(app, "find", "-", Err(LocateError::from(error).into()));
+        }
+    };
+    let picture = request.picture.clone();
+    let result = async {
+        check_picture_name(&request.picture)?;
+        super::check_masks(request.masks)?;
+        if !df_imagery::oneshot_segment::is_noun(request.noun.trim()) {
+            return Err(LocateError::InvalidNoun.into());
+        }
+        let failure = StageFailure {
+            verb: "find",
+            picture: &picture,
+            started: Instant::now(),
+            operation: None,
+        };
+        let directory = media(app);
+        let found = run_scan_task(async move {
+            find_regions(&directory, &request, supplier)
+                .await
+                .map_err(LocateStageError::at(LocateStage::Scan))
+        })
+        .await
+        .map_err(|failed| failure.record(app, failed))?;
+        app.record_line(format!(
+            "LOCATE found picture={picture} regions={} duration_ms={}",
+            found.layout.regions().len(),
+            found.duration_ms
+        ));
+        Ok::<_, Ended>(found)
+    }
+    .await;
+    answer(app, "find", &picture, result)
 }
 
 /// Names the regions of a picture's layout: the imagery API prepares the question, the host's one

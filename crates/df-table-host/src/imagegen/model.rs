@@ -85,16 +85,19 @@ pub enum Purpose {
     Plate,
     Background,
     Portrait,
+    /// A whole-body character reference: a look studio's base pose, version or turnaround sheet.
+    Figure,
 }
 
 impl Purpose {
-    pub const ALL: [Self; 3] = [Self::Plate, Self::Background, Self::Portrait];
+    pub const ALL: [Self; 4] = [Self::Plate, Self::Background, Self::Portrait, Self::Figure];
 
     pub fn key(self) -> &'static str {
         match self {
             Self::Plate => "plate",
             Self::Background => "background",
             Self::Portrait => "portrait",
+            Self::Figure => "figure",
         }
     }
 
@@ -107,6 +110,7 @@ impl Purpose {
         match self {
             Self::Plate | Self::Background => Aspect::WIDE,
             Self::Portrait => Aspect::PORTRAIT,
+            Self::Figure => Aspect::FIGURE,
         }
     }
 
@@ -124,6 +128,10 @@ impl Purpose {
             Self::Portrait => concat!(
                 "Intended use: a character portrait, one figure from the chest up, centred, in a ",
                 "plain setting."
+            ),
+            Self::Figure => concat!(
+                "Intended use: a character reference picture for a tabletop role-playing game, ",
+                "the whole body from head to feet on a plain studio ground."
             ),
         }
     }
@@ -179,6 +187,12 @@ impl Aspect {
     pub const PORTRAIT: Self = Self {
         width: 3,
         height: 4,
+    };
+
+    /// A standing figure from head to feet.
+    pub const FIGURE: Self = Self {
+        width: 2,
+        height: 3,
     };
 
     pub fn new(width: u32, height: u32) -> Result<Self, AspectError> {

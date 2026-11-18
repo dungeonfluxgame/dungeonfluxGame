@@ -360,6 +360,20 @@ pub(super) fn commit_backfill_with(
     Ok((updated, sequence))
 }
 
+/// The ids of every stored persona; none when they cannot be read.
+pub(crate) async fn stored_ids(app: &AppState) -> Vec<String> {
+    let directory = persona_directory(app);
+    run_blocking(move || list_personas(&directory), PersonaError::Stopped)
+        .await
+        .map(|stored| {
+            stored
+                .iter()
+                .map(|persona| persona.id().as_str().to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The summary of each of `names` that has a stored persona, in the order given. A name that is
 /// not a persona id has none: a cast name is a layout label, which has the persona id grammar (a
 /// test keeps the two in step). A persona file that does not read is left out and recorded as

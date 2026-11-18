@@ -5,6 +5,8 @@
 //! the host. Everything here crosses a route or a record, so it is serializable.
 
 use df_content::world_bible::Thing;
+
+use crate::world::InventoryItem;
 use serde::{Deserialize, Serialize};
 
 /// The closed list of ways a party moves, as Jev's label list names them. `key` is the word a
@@ -124,10 +126,143 @@ pub struct Clarification {
 pub enum Interpreted {
     Move {
         intent: MoveIntent,
+        /// The place designed in play the line goes back to, by id (one of the places the party
+        /// has been to, checked in code), when it goes back to one.
+        #[serde(default)]
+        back_to: Option<String>,
     },
     /// Not a movement: a question, a social line or another action.
     NotAMove,
     NeedsClarification(Clarification),
+}
+
+/// How far something in sight is from the one who sees it, nearest first (`planning/explore.md`,
+/// "Movement toward what is on screen"): a place design gives one for each thing and resident, and
+/// an approach brings its target closer one step at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Distance {
+    WithinReach,
+    AcrossTheSquare,
+    DownTheRoad,
+    OnTheHorizon,
+}
+
+impl Distance {
+    pub const ALL: [Self; 4] = [
+        Self::WithinReach,
+        Self::AcrossTheSquare,
+        Self::DownTheRoad,
+        Self::OnTheHorizon,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::WithinReach => "within_reach",
+            Self::AcrossTheSquare => "across_the_square",
+            Self::DownTheRoad => "down_the_road",
+            Self::OnTheHorizon => "on_the_horizon",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|distance| distance.key() == key)
+    }
+}
+
+/// A way to walk in the view when no thing or person on the plate names where to: closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Direction {
+    Ahead,
+    Left,
+    Right,
+    Behind,
+}
+
+impl Direction {
+    pub const ALL: [Self; 4] = [Self::Ahead, Self::Left, Self::Right, Self::Behind];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Ahead => "ahead",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Behind => "behind",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|direction| direction.key() == key)
+    }
+}
+
+/// How the movers go on a move (the intent judge's reading of the line, a closed set): walking,
+/// running, which covers more ground a step, or sneaking.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pace {
+    #[default]
+    Walk,
+    Run,
+    Sneak,
+}
+
+impl Pace {
+    pub const ALL: [Self; 3] = [Self::Walk, Self::Run, Self::Sneak];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Walk => "walk",
+            Self::Run => "run",
+            Self::Sneak => "sneak",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|pace| pace.key() == key)
+    }
+}
+
+/// How far one thing or resident of a design is, by its id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetDistance {
+    pub id: String,
+    pub distance: Distance,
+}
+
+/// How far `id` is among `distances`, when they give it.
+pub fn distance_of(distances: &[TargetDistance], id: &str) -> Option<Distance> {
+    distances
+        .iter()
+        .find(|known| known.id == id)
+        .map(|known| known.distance)
+}
+
+/// One step of an approach along a line of sight, as the design is asked for it: the target (a
+/// thing or resident id of the place before, or a direction's key, which the step's design names a
+/// thing by), what it is in words, how far it was before the step and the step's number from 1;
+/// step 0 is a turn to face it from where the movers stand (a look that way), no step at all. The
+/// pace is how the movers go: a run covers one band more a step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApproachAsk {
+    pub target: String,
+    pub toward: String,
+    pub distance: Distance,
+    pub step: u32,
+    #[serde(default)]
+    pub pace: Pace,
+    /// The movers back away from the target, keeping it in view: it grows farther.
+    #[serde(default)]
+    pub away: bool,
+    /// How the hero stands in the step's picture (crouched low, sitting on the wall), in words
+    /// with no names: kept from an act until a move or an act changes it.
+    #[serde(default)]
+    pub pose: Option<String>,
 }
 
 /// How far back from the viewer a character stands.
@@ -139,6 +274,18 @@ pub enum Depth {
     Background,
 }
 
+impl Depth {
+    pub const ALL: [Self; 3] = [Self::Foreground, Self::Middle, Self::Background];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Foreground => "foreground",
+            Self::Middle => "middle",
+            Self::Background => "background",
+        }
+    }
+}
+
 /// Which part of the picture a character stands in, left to right.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -146,6 +293,18 @@ pub enum Side {
     Left,
     Centre,
     Right,
+}
+
+impl Side {
+    pub const ALL: [Self; 3] = [Self::Left, Self::Centre, Self::Right];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Centre => "centre",
+            Self::Right => "right",
+        }
+    }
 }
 
 /// Where a character stands and what they are doing there.
@@ -168,6 +327,12 @@ pub struct Resident {
     pub display_name: String,
     pub job: String,
     pub look: String,
+    /// What a trader has to sell, each with its count; empty for one who trades nothing.
+    #[serde(default)]
+    pub wares: Vec<InventoryItem>,
+    /// The coin a trader holds to pay and give change with.
+    #[serde(default)]
+    pub coin: Option<InventoryItem>,
 }
 
 /// The narrative engine's design of the scene a move arrives in. The place and mood are words for
@@ -196,17 +361,20 @@ pub struct SceneDesign {
     /// The look of the town the place is in, shared by the place and every sight on the way to it.
     #[serde(default)]
     pub town_look: Option<String>,
+    /// How far each thing and resident is, as the design gives it (one each at most).
+    #[serde(default)]
+    pub distances: Vec<TargetDistance>,
 }
 
 /// How a mover goes through a sight on the way: on the move, or stopped to take it in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Pose {
+pub enum Gait {
     Walking,
     Pausing,
 }
 
-impl Pose {
+impl Gait {
     pub const ALL: [Self; 2] = [Self::Walking, Self::Pausing];
 
     pub fn key(self) -> &'static str {
@@ -227,7 +395,7 @@ impl Pose {
 pub struct RouteSight {
     pub id: String,
     pub sight: String,
-    pub pose: Pose,
+    pub pose: Gait,
 }
 
 /// What a move is asked to do with the town it is in. The role of a kind of move is data of the

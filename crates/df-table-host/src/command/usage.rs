@@ -9,7 +9,9 @@ use df_playground::limits::{
 
 use super::media_generate::{MEDIA_BACKEND_USAGE, MEDIA_GENERATE_USAGE};
 use crate::cast::cli::{CAMERA_ON_USAGE, CAST_USAGE, CUE_USAGE};
+use crate::creation::CREATION_USAGE;
 use crate::locate::cli::MEDIA_LOCATE_USAGE;
+use crate::look::LOOK_USAGE;
 use crate::movement::cli::MOVEMENT_USAGE;
 use crate::persona::cli::{
     GUIDANCE_OPTIONS, PERSONA_ADD_USAGE, PERSONA_ASK_USAGE, PERSONA_BACKFILL_USAGE,
@@ -57,8 +59,8 @@ pub(super) const SCENE_USAGE: &str = concat!(
 );
 pub(super) const CAPTION_USAGE: &str = "scene caption <text> [speaker=NAME]";
 pub(super) const PARTY_USAGE: &str = concat!(
-    "scene party add <name> hp=N [max=N] [color=#rrggbb] [conditions=a,b] | set <name> [hp=N] ",
-    "[max=N] [conditions=a,b] | remove <name> | clear",
+    "scene party add <name> [character=ID] [hp=N] [max=N] [color=#rrggbb] [conditions=a,b] | ",
+    "set <name> [hp=N] [max=N] [conditions=a,b] | remove <name> | clear",
 );
 pub(super) const IMAGE_USAGE: &str = concat!(
     "scene image <tv-backdrop|tv-card|phone> <name> [caption=TEXT] [rotate=0-359] ",
@@ -81,7 +83,8 @@ pub(super) const NARRATION_USAGE: &str = concat!(
 );
 pub(super) const SEAT_USAGE: &str = concat!(
     "scene seat set <name> [class=TEXT|none] [level=N|none] [portrait=FILE|none] ",
-    "[glyph=NAME|none] [accent=#rrggbb|none] [hp=N] [max=N] [conditions=a,b] | remove <name>",
+    "[glyph=NAME|none] [accent=#rrggbb|none] [character=ID] [hp=N] [max=N] [conditions=a,b] | ",
+    "remove <name>",
 );
 pub(super) const SEATS_USAGE: &str = "scene seats open <N> | clear";
 pub(super) const CLUES_USAGE: &str = concat!(
@@ -351,6 +354,24 @@ pub fn usage_text() -> String {
          friend on a profile the host approves), the account's friend profiles, the requests \
          waiting (also on /playground/phone-link), and a sample hero for a seat until creation \
          makes real ones; remove takes a seat off the table and the book.\n\
+         \n  {LOOK_USAGE}\
+         \n      the look studio (phone P3): pose candidates asks the image service for a body \
+         frame's base pose (or, once a base is chosen, its three-view sheet) and pose choose \
+         makes one the frame's pose-<frame>.png (or pose-<frame>-sheet.png); hero sets the hero \
+         a seat plays; details has Jev read words into details; refine makes a new version from \
+         a draft (the phone's JSON, one quoted word), editing the kept one; keep, discard and \
+         again keep a version, keep the old one, or start from the base pose; lock makes the \
+         kept version the hero's portrait and ref-<hero>.png from it. Prompts and controls are \
+         data in the playground's look/studio.json.\n\
+         \n  {CREATION_USAGE}\
+         \n      the creation machine (phone P2, P3), through the phone's own routes as the seat: \
+         offers lists every 2024 core species, class and background with its status; begin \
+         starts a seat's build from its look-studio hero as a quick hero (random unless chosen); \
+         choose and clear set a pick and fill the rest (show lists the build and what it asks \
+         for); surprise proposes a new build; submit makes the seat ready in the lobby and \
+         reopen takes it back; sheet prints the derived sheet or writes it (out=<file>) for \
+         persona check run; table shows every seat; start hands the table to play once every \
+         seat is ready.\n\
          \n  {SPEECH_USAGE}\
          \n      voice chat through the speech service (see services): the status and the \
          voices; {SPEECH_SPEAK_USAGE} voices operator text in a character's voice (- for the \

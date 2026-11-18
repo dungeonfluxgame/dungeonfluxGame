@@ -1080,6 +1080,19 @@ pub(super) async fn figures_in(port: u16, picture: &str) -> Option<usize> {
         .map(|stored| stored.layout.regions().len())
 }
 
+/// Whether a frame goes up with its own cast: it named every character it was asked to draw
+/// (`named` of `asked`), and, when it replaces a room (`room`, the names of that room's layout),
+/// every character the room names is named in the frame too (`frame`). Otherwise it is shown with
+/// the room's cast (`PlateKind::RoomKeptCast`), so a frame never shrinks the cast: whoever is in
+/// the room can go on speaking while a close-up of one is up.
+pub(super) fn keeps_own_cast(
+    (named, asked): (usize, usize),
+    room: Option<&[&str]>,
+    frame: &[&str],
+) -> bool {
+    named == asked && room.is_none_or(|room| room.iter().all(|name| frame.contains(name)))
+}
+
 /// Puts the room `picture` behind the scene with the cast of `cast` (its own scan when it is
 /// `cast`, otherwise as a room that kept the cast before it).
 pub(super) async fn show_with_cast(
@@ -1152,7 +1165,15 @@ pub(super) async fn scan_plate(
     characters: Vec<CharacterRequest>,
     base: Option<&str>,
 ) -> Result<ScannedPlate, PlateFailure> {
-    scan_plate_with(port, name, painting, characters, base, (Priority::Normal, None)).await
+    scan_plate_with(
+        port,
+        name,
+        painting,
+        characters,
+        base,
+        (Priority::Normal, None),
+    )
+    .await
 }
 
 /// [`scan_plate`] with the picture's urgency for the image backend and the view of the people's
@@ -1292,12 +1313,27 @@ pub(super) async fn show_scanned(
     };
     // A tighter shot that leaves someone out does not take them out of the scene: the frame is
     // shown with the cast of the picture it replaces, so they can go on speaking (run 61: an
-    // extreme close-up named only the keeper, and three lines were refused).
-    let own_cast = made.named == made.asked;
-    let kept_cast = match (&turn.cast_from, own_cast) {
-        (Some(room), false) => Some((room.clone(), layout_of(port, room).await?)),
-        _ => None,
+    // extreme close-up named only the keeper, and three lines were refused). A frame asked to draw
+    // only some of the room is short of the room too (town to tomb run 6: a close-up of one hero
+    // named all it was asked for, and the other hero and the baker left the scene).
+    let room = match &turn.cast_from {
+        Some(room) => Some((room.clone(), layout_of(port, room).await?)),
+        None => None,
     };
+    let frame_names = match &room {
+        Some(_) => layout_of(port, &picture)
+            .await
+            .map(|layout| layout.names().into_iter().map(str::to_owned).collect())
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let room_names: Option<Vec<&str>> = room.as_ref().map(|(_, layout)| layout.names());
+    let own_cast = keeps_own_cast(
+        (made.named, made.asked),
+        room_names.as_deref(),
+        &frame_names.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let kept_cast = if own_cast { None } else { room };
     let making = Some(made.since.elapsed());
     if !claim(turn).await {
         return Ok(not_shown(turn, name, own_cast, making));
@@ -1305,6 +1341,7 @@ pub(super) async fn show_scanned(
     let cast_note = kept_cast.as_ref().map_or_else(String::new, |(room, _)| {
         format!(", with the cast of {room}")
     });
+    let kept_cast_shown = kept_cast.is_some();
     match kept_cast {
         Some((_, layout)) => {
             put_backdrop(port, &picture, Some(layout), PlateKind::RoomKeptCast).await?;
@@ -1314,8 +1351,12 @@ pub(super) async fn show_scanned(
     Ok(Shown {
         summary: format!(
             "plate {name}: {picture} is behind the scene ({} regions found, {} of {} characters \
-             named; {}){cast_note}",
-            made.regions, made.named, made.asked, made.sheets_note
+             named; {}){cast_note} cast={}",
+            made.regions,
+            made.named,
+            made.asked,
+            made.sheets_note,
+            if kept_cast_shown { "room" } else { "own" }
         ),
         own_cast,
         captioned: None,
@@ -1423,22 +1464,27 @@ pub(super) async fn make_declared(
     }
 }
 
-/// The reference sheets (`ref-<persona id>.png`) the media library holds for `characters`, in
-/// their order; a character without one (the library answers 404) is left out. A request that
-/// fails, or any other answer, is the failure of the step.
+/// The reference sheets of `characters`, in their order, through the one lookup every scene
+/// picture uses (`look::routes::path::REFERENCE`): a seated player's hero's sheet from its pack,
+/// else `ref-<persona id>.png` when the media library holds it. A character without one is left
+/// out. A request that fails, or a refusal, is the failure of the step.
 pub(super) async fn reference_sheets(
     port: u16,
     characters: &[CharacterRequest],
 ) -> Result<Vec<String>, PlateFailure> {
     let mut sheets = Vec::new();
     for character in characters {
-        let sheet = reference_sheet_name(&character.name);
-        if library_holds(port, &sheet)
-            .await
-            .map_err(at(PlateStep::References))?
-        {
-            sheets.push(sheet);
-        }
+        let address = format!(
+            "{}?character={}",
+            crate::look::routes::path::REFERENCE,
+            crate::locate::cli::query_value(&character.name)
+        );
+        let reply: crate::look::request::LookReply<crate::look::request::CharacterSheet> =
+            get_json(port, &address)
+                .await
+                .map_err(at(PlateStep::References))?;
+        let found = reply_value(reply).map_err(at(PlateStep::References))?;
+        sheets.extend(found.sheet);
     }
     Ok(sheets)
 }
@@ -1610,7 +1656,7 @@ async fn request_sheet(
 }
 
 /// The media library's name of the reference sheet of the persona `id`.
-pub(super) fn reference_sheet_name(id: &str) -> String {
+pub(crate) fn reference_sheet_name(id: &str) -> String {
     format!("ref-{id}.png")
 }
 

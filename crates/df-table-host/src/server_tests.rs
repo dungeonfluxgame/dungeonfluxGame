@@ -2,12 +2,14 @@ use axum::http::StatusCode;
 use serde_json::json;
 
 use crate::client::{get, post_json};
+use crate::dev_http::DevReply;
 use crate::limits::{MAXIMUM_EVENTS_PER_ANSWER, MAXIMUM_REQUEST_BYTES};
+use crate::server::request::{HostError, HostReply};
 use crate::test_support::{Running, STARTER_FILES, post_request, raw_exchange, start};
 use crate::view::CanvasView;
-use crate::wire::{EventsReply, Reply};
+use crate::wire::{Changed, EventsReply};
 
-async fn post(running: &Running, body: serde_json::Value) -> (StatusCode, Reply) {
+async fn post(running: &Running, body: serde_json::Value) -> (StatusCode, HostReply<Changed>) {
     let response = post_json(running.port, "/dev/effect", &body.to_string())
         .await
         .expect("answers");
@@ -52,9 +54,11 @@ async fn a_spawn_is_answered_with_the_new_revision_and_shows_in_the_canvas() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         reply,
-        Reply::Done {
-            revision: 1,
-            notices: Vec::new()
+        DevReply::Done {
+            value: Changed {
+                revision: 1,
+                notices: Vec::new()
+            }
         }
     );
     assert_eq!(canvas(&running).await.elements.len(), 1);
@@ -69,7 +73,13 @@ async fn a_refused_change_is_a_400_with_its_cause_and_is_recorded_with_effect_an
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(matches!(reply, Reply::Rejected { cause: Some(_), .. }));
+    assert!(matches!(
+        reply,
+        DevReply::Rejected {
+            error: HostError::InvalidEffect { .. },
+            ..
+        }
+    ));
     let log = events(&running, "").await;
     assert!(
         texts(&log)
@@ -268,7 +278,11 @@ async fn a_reload_that_leaves_an_element_without_a_fitting_kind_says_so_in_a_not
     let response = post_json(running.port, "/dev/reload", "")
         .await
         .expect("answers");
-    let Reply::Done { notices, .. } = serde_json::from_str(&response.body).expect("a reply") else {
+    let reply: HostReply<Changed> = serde_json::from_str(&response.body).expect("a reply");
+    let DevReply::Done {
+        value: Changed { notices, .. },
+    } = reply
+    else {
         panic!("expected the reload to be accepted");
     };
     assert!(
@@ -286,7 +300,11 @@ async fn a_reload_with_a_broken_file_is_refused_and_the_old_kinds_stay() {
         .await
         .expect("answers");
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
-    let Reply::Rejected { problems, .. } = serde_json::from_str(&response.body).expect("a reply")
+    let reply: HostReply<Changed> = serde_json::from_str(&response.body).expect("a reply");
+    let DevReply::Rejected {
+        error: HostError::InvalidKinds { problems },
+        ..
+    } = reply
     else {
         panic!("expected a rejection");
     };
@@ -452,8 +470,8 @@ async fn an_events_query_that_does_not_read_is_refused_typed_and_recorded() {
         assert!(
             matches!(
                 reply,
-                crate::dev_http::DevReply::Rejected {
-                    error: crate::server::request::HostError::InvalidQuery { .. },
+                DevReply::Rejected {
+                    error: HostError::InvalidQuery(_),
                     ..
                 }
             ),

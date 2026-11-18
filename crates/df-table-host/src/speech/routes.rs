@@ -26,7 +26,7 @@ use super::request::{
 use super::service::Speech;
 use super::voices::{change_voice, voices_path};
 use crate::blocking::{run_blocking, run_owned};
-use crate::dev_http::{parse_body, reply};
+use crate::dev_http::{parse_body, read_query, reply};
 
 /// The addresses of the speech dev API.
 pub mod path {
@@ -56,7 +56,7 @@ fn answer<T: Serialize>(speech: &Speech, verb: &str, result: Result<T, SpeechErr
 
 /// That the body is declared as 16 kHz 16-bit PCM: `audio/L16;rate=16000`, optionally with
 /// `channels=1`, in any case.
-pub(super) fn check_content_type(headers: &HeaderMap) -> Result<(), SpeechError> {
+pub(crate) fn check_content_type(headers: &HeaderMap) -> Result<(), SpeechError> {
     let declared = headers
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -86,13 +86,11 @@ pub(super) fn check_content_type(headers: &HeaderMap) -> Result<(), SpeechError>
 fn key_terms(
     query: Result<Query<Vec<(String, String)>>, QueryRejection>,
 ) -> Result<Vec<String>, SpeechError> {
-    let Query(pairs) = query.map_err(|_| SpeechError::InvalidQuery {
-        cause: QueryCause::Unreadable,
-    })?;
+    let pairs = read_query(query).map_err(SpeechError::InvalidQuery)?;
     let mut terms = Vec::new();
     for (key, value) in pairs {
         if key != "terms" {
-            return Err(SpeechError::InvalidQuery {
+            return Err(SpeechError::InvalidTerms {
                 cause: QueryCause::UnknownKey,
             });
         }
