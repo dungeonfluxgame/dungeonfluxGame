@@ -20,8 +20,10 @@ pub mod coins;
 #[cfg(test)]
 mod coins_tests;
 pub mod creation_build;
+pub mod hero;
 pub mod local_journey;
 pub mod species;
+pub mod spells;
 pub mod srd_equipment_prices;
 
 mod srd_creatures;

@@ -261,12 +261,39 @@ impl HeroSpecies {
     }
 }
 
-/// The Origin feats a background grants (SRD p. 83).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OriginFeat {
-    Alert,
-    MagicInitiate,
-    SavageAttacker,
+listed_enum! {
+    keyed
+    /// The Origin feats of SRD 5.2.1 (p. 87): a background grants one (p. 83) and the Human's
+    /// Versatile trait grants one of the player's choice (p. 86).
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum OriginFeat {
+        Alert,
+        MagicInitiate,
+        SavageAttacker,
+        Skilled,
+    }
+}
+
+impl OriginFeat {
+    /// The stable key of this feat.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Alert => "alert",
+            Self::MagicInitiate => "magic_initiate",
+            Self::SavageAttacker => "savage_attacker",
+            Self::Skilled => "skilled",
+        }
+    }
+
+    /// The feat's name as the SRD prints it.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Alert => "Alert",
+            Self::MagicInitiate => "Magic Initiate",
+            Self::SavageAttacker => "Savage Attacker",
+            Self::Skilled => "Skilled",
+        }
+    }
 }
 
 /// SRD 5.2.1 p. 83: Acolyte/Sage list "Feat: Magic Initiate," Criminal "Feat: Alert," and Soldier
@@ -355,7 +382,7 @@ impl FighterProgression {
     pub fn champion(self) -> bool {
         self.level >= 3
     }
-    /// Maximum hit points at this level with the species' base bonus (no Tough).
+    /// Maximum hit points at this level with the species' base bonus.
     pub fn hit_points(self, constitution: u8, species: HeroSpecies) -> u16 {
         maximum_hit_points(
             self.level,
@@ -966,7 +993,7 @@ pub const FIGHTER_FIRST_LEVEL_HIT_POINTS: u8 = 10;
 
 /// The one maximum hit point figure (SRD 5.2.1 pp. 47, 84, 87): the first-level base, the fixed 6
 /// for each further Fighter level, and per level the Constitution modifier plus the species bonus
-/// (Dwarven Toughness 1, Tough 2). Creation, level advancement and every bound derive from it.
+/// (Dwarven Toughness 1). Creation, level advancement and every bound derive from it.
 pub fn maximum_hit_points(
     level: u8,
     first_level_base: u8,

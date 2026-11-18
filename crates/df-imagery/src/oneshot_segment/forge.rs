@@ -38,9 +38,11 @@ pub async fn segment_with_forge(
     request: SegmentRequest,
     timeout: Duration,
 ) -> Result<Segmented, SegmentError> {
+    // Forge segments by the prompt's own word only: a noun of the caller's is refused unsent.
     if !(1..=MAXIMUM_MASKS).contains(&request.maximum_masks)
         || timeout.is_zero()
         || timeout > MAXIMUM_TIMEOUT
+        || request.noun.is_some()
     {
         return Err(SegmentError::unsent(SegmentCause::Configuration));
     }

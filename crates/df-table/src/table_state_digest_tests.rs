@@ -169,6 +169,10 @@ fn world_changing_effects() -> Vec<(&'static str, TableEffect)> {
             "a machine is handed back to",
             TableEffect::HandOffPopped { scene: scene(10) },
         ),
+        (
+            "the scene's machine stops",
+            TableEffect::ActiveMachineCleared { scene: scene(10) },
+        ),
     ]
 }
 

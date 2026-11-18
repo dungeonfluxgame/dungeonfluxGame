@@ -92,6 +92,9 @@ fn sample(kind: TableEffectKind) -> TableEffect {
         TableEffectKind::HandOffPopped => TableEffect::HandOffPopped {
             scene: SceneId::new(4),
         },
+        TableEffectKind::ActiveMachineCleared => TableEffect::ActiveMachineCleared {
+            scene: SceneId::new(4),
+        },
     }
 }
 
@@ -161,18 +164,18 @@ fn a_stamped_record_opens_and_a_newer_or_versionless_one_is_refused_with_its_fau
 
 #[test]
 fn a_record_from_a_newer_engine_with_an_effect_this_one_does_not_know_is_a_version_refusal() {
-    let text = r#"{"schema_version":2,"effect":{"effect":"quest_started","quest":"q1"}}"#;
+    let text = r#"{"schema_version":3,"effect":{"effect":"quest_started","quest":"q1"}}"#;
     let record: EffectRecord = serde_json::from_str(text).expect("the record itself parses");
     let refused = record.open().expect_err("refused");
     assert_eq!(refused.cause, LoadCause::UnsupportedVersion);
     assert_eq!(
         (refused.found, refused.expected),
-        (2, TABLE_EFFECT_SCHEMA_VERSION)
+        (3, TABLE_EFFECT_SCHEMA_VERSION)
     );
     let event = refused.event(TableId::new(4));
     assert_eq!(
         event.render_audit_line(),
-        "LOAD refused table=4 record=effect_intent version=2 expected=1 cause=unsupported_version"
+        "LOAD refused table=4 record=effect_intent version=3 expected=2 cause=unsupported_version"
     );
     assert!(refused.to_string().contains("unsupported_version"));
 }
@@ -428,5 +431,48 @@ fn a_table_state_needs_a_real_capacity_and_a_seating_that_fits() {
     assert_eq!(
         TableState::seated(3, &[seat(1), seat(1)]).err(),
         Some(TableStateError::DuplicateSeat(seat(1)))
+    );
+}
+
+#[test]
+fn a_scenes_machine_that_stops_gives_the_focus_back_to_the_table_machine() {
+    let mut table = table();
+    apply(
+        &mut table,
+        1,
+        &[
+            TableEffect::ActiveMachineSet {
+                home: crate::table_state::MachineHome::Table,
+                machine: machine("lobby"),
+                slot: crate::table_state_tests::slot_with("lobby", "gathering"),
+            },
+            TableEffect::SceneEntered {
+                scene: SceneId::new(4),
+            },
+            TableEffect::ActiveMachineSet {
+                home: crate::table_state::MachineHome::Scene {
+                    scene: SceneId::new(4),
+                },
+                machine: machine("explore"),
+                slot: crate::table_state_tests::slot_with("explore", "presenting"),
+            },
+        ],
+    )
+    .expect("sets");
+    assert_eq!(
+        table.snapshot().focus_machine().unwrap().machine(),
+        &machine("explore")
+    );
+    let cleared = TableEffect::ActiveMachineCleared {
+        scene: SceneId::new(4),
+    };
+    apply(&mut table, 2, std::slice::from_ref(&cleared)).expect("stops");
+    assert_eq!(
+        table.snapshot().focus_machine().unwrap().machine(),
+        &machine("lobby")
+    );
+    assert!(
+        apply(&mut table, 3, &[cleared]).is_err(),
+        "a scene with no machine has none to stop"
     );
 }

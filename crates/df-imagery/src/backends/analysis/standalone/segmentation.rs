@@ -17,11 +17,25 @@ const MAXIMUM_CHECKPOINT_BYTES: usize = 24_576;
 const MAXIMUM_LOCATOR_BYTES: usize = 8192;
 const POLL_INTERVAL: Duration = Duration::from_millis(400);
 
+/// The most characters of a noun a segmentation looks for in place of its prompt's own word.
+pub(crate) const MAXIMUM_NOUN_CHARACTERS: usize = 64;
+
+/// Whether `noun` can stand for a prompt's word: some words, within the bound, no control
+/// characters.
+pub(crate) fn is_noun(noun: &str) -> bool {
+    !noun.trim().is_empty()
+        && noun.chars().count() <= MAXIMUM_NOUN_CHARACTERS
+        && !noun.chars().any(char::is_control)
+}
+
 /// Authorized source and one noun prompt; each input represents a separately admitted call.
 pub(crate) struct SegmentationInput<'a> {
     pub(crate) source: &'a [u8],
     pub(crate) source_pin: &'a SourceRef,
     pub(crate) prompt: SegmentationPrompt,
+    /// Words the supplier looks for in place of the prompt's own word (a thing a player named),
+    /// when given; the masks are still of `prompt`'s set.
+    pub(crate) noun: Option<&'a str>,
     pub(crate) preparation_recipe: SegmentationPreparation,
     pub(crate) maximum_masks: u32,
     pub(crate) route: &'a SegmentationRoute,
@@ -39,6 +53,7 @@ pub(crate) struct SegmentationCheckpoint {
     status_url: String,
     result_url: String,
     prompt: SegmentationPrompt,
+    noun: Option<String>,
     preparation_recipe: SegmentationPreparation,
     width_px: u32,
     height_px: u32,
@@ -57,7 +72,7 @@ impl std::fmt::Debug for SegmentationCheckpoint {
 }
 impl SegmentationCheckpoint {
     pub(crate) fn encode(&self) -> String {
-        json!({
+        let mut encoded = json!({
             "kind": "fal-sam-rle-v1",
             "preparation": match self.preparation_recipe {
                 SegmentationPreparation::FigureMask => "figure_mask",
@@ -73,15 +88,24 @@ impl SegmentationCheckpoint {
             "height_px": self.height_px,
             "maximum_masks": self.maximum_masks,
             "digest": self.digest,
-        })
-        .to_string()
+        });
+        // A checkpoint of a prompt's own word keeps its twelve fields; a noun is a thirteenth.
+        if let Some(noun) = &self.noun {
+            encoded["noun"] = json!(noun);
+        }
+        encoded.to_string()
     }
     pub(crate) fn decode(encoded: &str) -> Result<Self, RuntimeError> {
         let value = parse(encoded.as_bytes(), MAXIMUM_CHECKPOINT_BYTES)?;
         let fields = value
             .as_object()
-            .filter(|map| map.len() == 12)
+            .filter(|map| map.len() == 12 || (map.len() == 13 && map.contains_key("noun")))
             .ok_or(RuntimeError::InvalidRecord)?;
+        let noun = match fields.get("noun") {
+            None => None,
+            Some(Value::String(noun)) if is_noun(noun) => Some(noun.clone()),
+            Some(_) => return Err(RuntimeError::InvalidRecord),
+        };
         if fields.get("kind").and_then(Value::as_str) != Some("fal-sam-rle-v1") {
             return Err(RuntimeError::InvalidRecord);
         }
@@ -128,6 +152,7 @@ impl SegmentationCheckpoint {
             status_url: string("status_url")?,
             result_url: string("result_url")?,
             prompt,
+            noun,
             preparation_recipe,
             width_px: number("width_px")?,
             height_px: number("height_px")?,
@@ -181,6 +206,7 @@ pub(crate) struct PreparedSegmentation {
     base: String,
     model: String,
     prompt: SegmentationPrompt,
+    noun: Option<String>,
     preparation_recipe: SegmentationPreparation,
     digest: [u8; 32],
     pub(crate) width_px: u32,
@@ -226,7 +252,8 @@ impl PreparedSegmentation {
         {
             return Err(RuntimeError::InvalidConfiguration);
         }
-        if !(1..=32).contains(&input.maximum_masks) {
+        if !(1..=32).contains(&input.maximum_masks) || input.noun.is_some_and(|noun| !is_noun(noun))
+        {
             return Err(RuntimeError::InvalidRecord);
         }
         verify(input.source_pin, input.source)?;
@@ -258,7 +285,7 @@ impl PreparedSegmentation {
         }
         let body = serde_json::to_vec(&json!({
             "image_url": format!("data:image/jpeg;base64,{}", STANDARD.encode(jpeg)),
-            "prompt": input.prompt.key(),
+            "prompt": input.noun.unwrap_or(input.prompt.key()),
             "include_scores": true,
             "include_boxes": true,
             "return_multiple_masks": true,
@@ -311,6 +338,7 @@ impl PreparedSegmentation {
             base,
             model,
             prompt: input.prompt,
+            noun: input.noun.map(str::to_owned),
             preparation_recipe: input.preparation_recipe,
             digest: *input.source_pin.digest.as_bytes(),
             width_px,
@@ -372,6 +400,7 @@ impl PreparedSegmentation {
             status_url: field("status_url")?,
             result_url: field("response_url")?,
             prompt: self.prompt,
+            noun: self.noun.clone(),
             preparation_recipe: self.preparation_recipe,
             width_px: self.width_px,
             height_px: self.height_px,
@@ -386,6 +415,7 @@ impl PreparedSegmentation {
         if checkpoint.base != self.base
             || checkpoint.model != self.model
             || checkpoint.prompt != self.prompt
+            || checkpoint.noun != self.noun
             || checkpoint.preparation_recipe != self.preparation_recipe
             || checkpoint.width_px != self.width_px
             || checkpoint.height_px != self.height_px

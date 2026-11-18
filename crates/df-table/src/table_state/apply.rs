@@ -77,6 +77,7 @@ impl Facts {
                 slot,
             } => self.push_frame(*scene, machine, slot, at),
             TableEffect::HandOffPopped { scene } => self.pop_frame(*scene),
+            TableEffect::ActiveMachineCleared { scene } => self.clear_active(*scene),
         }
     }
 
@@ -405,6 +406,18 @@ impl Facts {
 
     /// Ends the active machine and resumes the machine on top of the stack with the slot it was
     /// suspended with.
+    /// Stops the active machine of `scene` and drops its hand-off stack, so the table's own
+    /// machine has the focus. A scene with no active machine is refused.
+    fn clear_active(&mut self, scene: SceneId) -> Result<(), EffectCause> {
+        let record = self.scene_mut(scene)?;
+        if record.active.is_none() {
+            return Err(EffectCause::NoActiveMachine);
+        }
+        record.active = None;
+        record.stack.clear();
+        Ok(())
+    }
+
     fn pop_frame(&mut self, scene: SceneId) -> Result<(), EffectCause> {
         let record = self.scene_mut(scene)?;
         let frame = record.stack.pop().ok_or(EffectCause::HandOffStackEmpty)?;

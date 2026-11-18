@@ -312,8 +312,19 @@ fn judge(request: &D20Request, face: u16, total: i16) -> Result<Judged, RollErro
 pub(super) fn resolve_d20(
     request: &D20Request,
     faces: &mut Faces<'_>,
+    archery: bool,
 ) -> Result<RollResult, RollError> {
     validate(request)?;
+    let ranged_attack = matches!(
+        request.test,
+        D20Test::Attack {
+            kind: AttackKind::Ranged,
+            ..
+        }
+    );
+    if archery && !ranged_attack {
+        return Err(RollError::StyleMismatch);
+    }
     let mut dice = Vec::with_capacity(dice_count(request));
     for _ in 0..dice_count(request) {
         let face = faces.take(DieSize::D20)?;
@@ -356,6 +367,12 @@ pub(super) fn resolve_d20(
         });
     }
     modifiers.extend(proficiency_modifier(request.proficiency));
+    if archery {
+        modifiers.push(Modifier {
+            label: ModifierLabel::Flat,
+            value: super::style::archery_bonus(archery, ranged_attack),
+        });
+    }
     let natural_total = i16::try_from(face).map_err(|_| RollError::FaceOutOfRange {
         sides: DieSize::D20.sides(),
         face,

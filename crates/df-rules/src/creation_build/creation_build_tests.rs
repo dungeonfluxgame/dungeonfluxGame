@@ -314,7 +314,7 @@ fn listing_ids_match_the_golden_list() {
         "human > human-skill [human-skill]: acrobatics animal-handling arcana deception history \
             insight investigation medicine nature perception performance persuasion religion \
             sleight-of-hand stealth survival",
-        "human > versatile [versatile]: tough",
+        "human > versatile [versatile]: alert magic-initiate skilled",
         "tiefling > fiendish-legacy [fiendish-legacy]: abyssal chthonic infernal",
         "tiefling > species-size [species-size]: medium small",
         "tiefling > species-spellcasting [species-spellcasting]: intelligence wisdom charisma",

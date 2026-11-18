@@ -139,6 +139,19 @@ impl PipelineTable {
         self.facts.apply(&scope, correlation, &effects).map(|_| ())
     }
 
+    /// Stops the active machine of `scene` (and its hand-off stack), as a committed effect, so the
+    /// table's own machine has the focus.
+    pub fn clear_scene_machine(
+        &mut self,
+        correlation: Correlation,
+        scene: SceneId,
+    ) -> Result<(), EffectError> {
+        let effects = [TableEffect::ActiveMachineCleared { scene }];
+        let scope = self.scope();
+        self.forget_hashes();
+        self.facts.apply(&scope, correlation, &effects).map(|_| ())
+    }
+
     /// Records that the seat's legal choices changed at `revision`, so an older view is checked
     /// again (C.0 ADMIT). The owner calls it when it commits a change to what a seat may do.
     pub fn stamp_choices_changed(&mut self, seat: SeatId, revision: SessionRevision) {

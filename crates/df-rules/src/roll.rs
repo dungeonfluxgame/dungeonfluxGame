@@ -26,6 +26,7 @@ mod result;
 mod roll_golden_tests;
 #[cfg(test)]
 mod roll_tests;
+mod style;
 
 pub use crate::influence::RollMode;
 pub use abilities::{Ability, Skill};
@@ -38,6 +39,10 @@ pub use expression::DiceRequest;
 pub use result::{
     AttackKind, Modifier, ModifierLabel, Natural, RollOutcome, RollResult, RollSubject, Target,
     TargetLabel,
+};
+pub use style::{
+    ARCHERY_ATTACK_BONUS, AttackStyle, GREAT_WEAPON_FIGHTING_FLOOR, RollStyle, archery_bonus,
+    great_weapon_face,
 };
 
 use serde::{Deserialize, Serialize};
@@ -74,11 +79,26 @@ impl RollRequest {
 
     /// Resolves the request from the faces drawn for its plan, one per die in plan order.
     pub fn resolve(&self, faces: &[u16]) -> Result<RollResult, RollError> {
+        self.resolve_styled(faces, RollStyle::default())
+    }
+
+    /// Resolves the request with the hero's Fighting Style (`style`): Archery's +2 on a ranged
+    /// attack roll (a `flat` modifier), Great Weapon Fighting's floor on damage dice (a 1 or 2
+    /// counts, and shows, as a 3). A style asked of a roll it cannot touch is `StyleMismatch`. A
+    /// style draws no die: the plan is `draw_plan`'s.
+    pub fn resolve_styled(&self, faces: &[u16], style: RollStyle) -> Result<RollResult, RollError> {
         let mut reader = Faces::new(faces);
         let result = match self {
-            Self::D20(request) => d20::resolve_d20(request, &mut reader)?,
-            Self::PassivePerception(request) => d20::resolve_passive(request)?,
-            Self::Dice(request) => expression::resolve_dice(request, &mut reader)?,
+            Self::D20(request) if !style.great_weapon_fighting => {
+                d20::resolve_d20(request, &mut reader, style.archery)?
+            }
+            Self::Dice(request) if !style.archery => {
+                expression::resolve_dice(request, &mut reader, style.great_weapon_fighting)?
+            }
+            Self::PassivePerception(request) if style == RollStyle::default() => {
+                d20::resolve_passive(request)?
+            }
+            _ => return Err(RollError::StyleMismatch),
         };
         reader.finish()?;
         Ok(result)
@@ -148,6 +168,9 @@ pub enum RollError {
     InvalidDiceModifier,
     /// Heroic Inspiration replaces a die that is not in the roll.
     InvalidReroll,
+    /// A Fighting Style asked of a roll it does not touch: Archery on anything but a ranged attack
+    /// roll, Great Weapon Fighting on anything but damage dice.
+    StyleMismatch,
     /// The faces ran out: this die has no face.
     MissingDraw { sides: u16 },
     /// A face that is not on a die of that many sides.
@@ -172,6 +195,7 @@ impl RollError {
             Self::InvalidDiceCount => "invalid_dice_count",
             Self::InvalidDiceModifier => "invalid_dice_modifier",
             Self::InvalidReroll => "invalid_reroll",
+            Self::StyleMismatch => "style_mismatch",
             Self::MissingDraw { .. } => "missing_draw",
             Self::FaceOutOfRange { .. } => "face_out_of_range",
             Self::UnusedDraws => "unused_draws",
@@ -209,6 +233,9 @@ impl fmt::Display for RollError {
             Self::InvalidDiceCount => formatter.write_str("the dice count is outside 1 to 100"),
             Self::InvalidDiceModifier => {
                 formatter.write_str("the flat modifier is outside -1000 to 1000")
+            }
+            Self::StyleMismatch => {
+                formatter.write_str("the fighting style does not touch this roll")
             }
             Self::InvalidReroll => {
                 formatter.write_str("Heroic Inspiration names a die that is not in the roll")

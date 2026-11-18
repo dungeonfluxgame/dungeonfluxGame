@@ -208,6 +208,12 @@ pub(crate) const MAXIMUM_ALTERNATIVES: usize = 10_000;
 /// down later (owner, 2026-11-02).
 pub(crate) const MAXIMUM_RECORDED_TURNS: usize = 1_000_000;
 
+// Creation.
+
+/// The most picks one seat's build draft holds. A build asks for a few dozen; deliberately huge so
+/// it never limits play, it only keeps a draft from growing without end.
+pub(crate) const MAXIMUM_DRAFT_PICKS: usize = 4_096;
+
 // The testkit fakes.
 
 /// The most events a `RecordingSink` keeps unless a test asks for fewer. Deliberately huge so it

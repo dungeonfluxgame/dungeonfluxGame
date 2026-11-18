@@ -38,6 +38,11 @@ const SKILLS: &[&str] = &[
 ];
 const SPELL_ABILITIES: &[&str] = &["intelligence", "wisdom", "charisma"];
 const SIZE_OPTIONS: &[&str] = &["medium", "small"];
+/// The Origin feats of SRD 5.2.1 (p. 87), as the Versatile trait offers them (p. 86).
+const ORIGIN_FEATS: &[&str] = &["alert", "magic-initiate", "savage-attacker", "skilled"];
+/// The Soldier background's Origin feat (SRD p. 83): not repeatable (p. 87), so the Soldier
+/// subset of `from_choices` refuses it as the Human's Versatile feat.
+pub(crate) const SOLDIER_FEAT: &str = "savage-attacker";
 const fn group(
     id: &'static str,
     label: &'static str,
@@ -46,8 +51,8 @@ const fn group(
     SpeciesChoiceGroup { id, label, options }
 }
 /// Spellcasting choices are retained, but their spells are explicitly not in play yet.
-/// Tough is the only currently implemented Human Origin feat; Soldier already grants
-/// nonrepeatable Savage Attacker (SRD p.87), so it cannot be selected a second time.
+/// Versatile offers the four Origin feats SRD 5.2.1 prints (p. 87); what each does in play is the
+/// caller's (`hero` marks what is not in play yet).
 pub fn choice_groups(species: HeroSpecies) -> Vec<SpeciesChoiceGroup> {
     use HeroSpecies::*;
     match species {
@@ -89,11 +94,7 @@ pub fn choice_groups(species: HeroSpecies) -> Vec<SpeciesChoiceGroup> {
         Human => vec![
             group("species-size", "Size", SIZE_OPTIONS),
             group("human-skill", "Skillful", SKILLS),
-            group(
-                "versatile",
-                "Versatile (implemented Origin feats)",
-                &["tough"],
-            ),
+            group("versatile", "Versatile (an Origin feat)", ORIGIN_FEATS),
         ],
         Tiefling => vec![
             group(
@@ -280,7 +281,6 @@ pub enum Ancestry {
 pub struct SpeciesOptions {
     pub ancestry: Option<Ancestry>,
     pub size: Option<SpeciesSize>,
-    pub tough: bool,
 }
 impl SpeciesOptions {
     /// Parses the species choice groups of a build; refuses a missing, repeated, foreign or
@@ -325,6 +325,18 @@ impl SpeciesOptions {
         {
             return Err(JourneyRuleError::InvalidChoice);
         }
+        if choice_value("versatile") == Some(SOLDIER_FEAT) {
+            return Err(JourneyRuleError::InvalidChoice);
+        }
+        Self::from_group_picks(species, choice_value)
+    }
+    /// The options the species' group picks name, read through `choice_value` (a group's id to its
+    /// pick). The picks must already be offered ones (`choice_groups`); a missing or unknown
+    /// lineage or ancestry is refused.
+    pub fn from_group_picks<'a>(
+        species: HeroSpecies,
+        choice_value: impl Fn(&str) -> Option<&'a str>,
+    ) -> Result<Self, JourneyRuleError> {
         let ancestry = match species {
             HeroSpecies::Dragonborn => Some(Ancestry::Draconic(
                 choice_value("draconic-ancestry")
@@ -363,7 +375,6 @@ impl SpeciesOptions {
                     SpeciesSize::Medium
                 }
             }),
-            tough: choice_value("versatile") == Some("tough"),
         })
     }
     /// Whether these options are exactly the ones `species` asks for.
@@ -383,7 +394,6 @@ impl SpeciesOptions {
                     None
                 )
         ) && self.size.is_some() == matches!(species, HeroSpecies::Human | HeroSpecies::Tiefling)
-            && self.tough == (species == HeroSpecies::Human)
     }
     /// SRD pp.84-86: Wood Elf speed, Drow sight and chosen Human/Tiefling size.
     pub fn combat_traits(self, species: HeroSpecies) -> SpeciesCombatTraits {
@@ -396,10 +406,6 @@ impl SpeciesOptions {
         }
         if self.ancestry == Some(Ancestry::Elven(ElvenLineage::Drow)) {
             traits.darkvision_ft = Some(120);
-        }
-        // SRD p.87 Tough: +2 maximum HP per character level.
-        if self.tough {
-            traits.hit_points_per_level += 2;
         }
         traits
     }
@@ -469,7 +475,10 @@ mod tests {
         assert_eq!(choice_groups(HeroSpecies::Dragonborn)[0].options.len(), 10);
         assert_eq!(choice_groups(HeroSpecies::Goliath)[0].options.len(), 6);
         assert_eq!(choice_groups(HeroSpecies::Human)[1].options.len(), 18);
-        assert_eq!(choice_groups(HeroSpecies::Human)[2].options, ["tough"]);
+        assert_eq!(
+            choice_groups(HeroSpecies::Human)[2].options,
+            ["alert", "magic-initiate", "savage-attacker", "skilled"]
+        );
         assert!(
             SpeciesOptions::from_choices(HeroSpecies::Dwarf, &[("draconic-ancestry", "red")])
                 .is_err()
@@ -538,7 +547,7 @@ mod tests {
         );
     }
     #[test]
-    fn srd_521_elven_lineage_sight_and_speed_and_human_toughness_are_not_cosmetic() {
+    fn srd_521_elven_lineage_sight_and_speed_are_not_cosmetic_and_versatile_offers_no_tough() {
         for (lineage, speed, sight) in [
             ("drow", 30, 120),
             ("high-elf", 30, 60),
@@ -564,7 +573,7 @@ mod tests {
             &[
                 ("species-size", "small"),
                 ("human-skill", "arcana"),
-                ("versatile", "tough"),
+                ("versatile", "alert"),
             ],
         )
         .unwrap();
@@ -572,7 +581,19 @@ mod tests {
             options
                 .combat_traits(HeroSpecies::Human)
                 .hit_points_per_level,
-            2
+            0
+        );
+        // Tough is not an Origin feat of SRD 5.2.1, so Versatile does not offer it.
+        assert!(
+            SpeciesOptions::from_choices(
+                HeroSpecies::Human,
+                &[
+                    ("species-size", "small"),
+                    ("human-skill", "arcana"),
+                    ("versatile", "tough")
+                ]
+            )
+            .is_err()
         );
         assert!(
             SpeciesOptions::from_choices(
@@ -591,7 +612,7 @@ mod tests {
                 &[
                     ("species-size", "small"),
                     ("human-skill", "athletics"),
-                    ("versatile", "tough")
+                    ("versatile", "alert")
                 ]
             )
             .is_err()

@@ -403,6 +403,7 @@ async fn sam_checkpoint_resume_is_get_only_confined_and_single_submit() {
             source: &bytes,
             source_pin: &pin,
             prompt: SegmentationPrompt::Person,
+            noun: None,
             preparation_recipe: SegmentationPreparation::ScenePlate,
             maximum_masks: 32,
             route: &route,
@@ -462,6 +463,71 @@ async fn sam_checkpoint_resume_is_get_only_confined_and_single_submit() {
         assert!(SegmentationCheckpoint::decode(&value.to_string()).is_err());
     }
     assert!(matches!(listener.accept(),Err(error)if error.kind()==std::io::ErrorKind::WouldBlock));
+}
+
+#[tokio::test]
+async fn a_named_noun_is_what_sam_looks_for_and_its_checkpoint_keeps_it() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let route = SegmentationRoute {
+        provider: SegmentationProvider::Fal,
+        account: crate::AccountHandle::new("sam-fixture").unwrap(),
+        model: crate::ModelName::new("fal-ai/sam-3/image-rle").unwrap(),
+        endpoint: crate::ApiEndpoint::new(&base).unwrap(),
+    };
+    let bytes = testing::png(4, 2, [20, 40, 60, 255]);
+    let pin = testing::pin(&bytes);
+    let limits = AnalysisPreparationLimits {
+        max_picture_bytes: 3 * 1024 * 1024,
+        max_request_bytes: 6 * 1024 * 1024,
+        ..Default::default()
+    };
+    let input = |noun| SegmentationInput {
+        source: &bytes,
+        source_pin: &pin,
+        prompt: SegmentationPrompt::Person,
+        noun,
+        preparation_recipe: SegmentationPreparation::ScenePlate,
+        maximum_masks: 4,
+        route: &route,
+        preparation: &limits,
+        max_decoded_bytes: MEMORY,
+        timeout: Duration::from_secs(3),
+        maximum_response_bytes: 4096,
+    };
+    // A noun with no words, too long or with a control character is refused before sending.
+    let long = "sign ".repeat(20);
+    for bad in ["  ", long.as_str(), "sign\nboard"] {
+        assert!(matches!(
+            PreparedSegmentation::prepare(input(Some(bad)), "synthetic-key"),
+            Err(RuntimeError::InvalidRecord)
+        ));
+    }
+    let mut prepared =
+        PreparedSegmentation::prepare(input(Some("hanging signboard")), "synthetic-key").unwrap();
+    let submit = json!({
+        "request_id": "request-1",
+        "status_url": format!("{base}/fal-ai/sam-3/requests/request-1/status"),
+        "response_url": format!("{base}/fal-ai/sam-3/requests/request-1")
+    });
+    let fixture = server(listener, vec![(202, submit.to_string().into_bytes())]);
+    let submitted = prepared.submit().await.unwrap();
+    let (_listener, requests) = fixture.join().unwrap();
+    let sent = String::from_utf8_lossy(&requests[0]);
+    assert!(sent.contains("\"prompt\":\"hanging signboard\""), "{sent}");
+    let checkpoint = prepared.checkpoint(&submitted).unwrap();
+    let encoded = checkpoint.encode();
+    let value: Value = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(value["noun"], json!("hanging signboard"));
+    assert_eq!(
+        SegmentationCheckpoint::decode(&encoded).unwrap(),
+        checkpoint
+    );
+    // A checkpoint of another noun is not this segmentation's.
+    let mut other = value.clone();
+    other["noun"] = json!("well");
+    let other = SegmentationCheckpoint::decode(&other.to_string()).unwrap();
+    assert!(prepared.resume(&other).await.is_err());
 }
 
 #[test]
@@ -657,6 +723,7 @@ fn tall_figure_recipe_refuses_unrepresentable_masks_before_any_supplier_send() {
                 source: &bytes,
                 source_pin: &pin,
                 prompt: SegmentationPrompt::Person,
+                noun: None,
                 preparation_recipe: recipe,
                 maximum_masks: 8,
                 route: &route,

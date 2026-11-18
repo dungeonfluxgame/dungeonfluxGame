@@ -329,6 +329,7 @@ fn prepare_paid(
                         source: &inputs.source,
                         source_pin: &spec.source,
                         prompt,
+                        noun: None,
                         preparation_recipe: spec.preparation,
                         maximum_masks: spec.maximum_masks,
                         route,

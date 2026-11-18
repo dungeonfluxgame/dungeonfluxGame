@@ -260,8 +260,8 @@ impl CombatantSpec {
         }
     }
 
-    /// The shared Fighter maximum (SRD 5.2.1 pp. 47, 84, 87) at `level`: the species' bonus per
-    /// level plus Tough's 2 when the profile's options carry it.
+    /// The shared Fighter maximum (SRD 5.2.1 pp. 47, 84) at `level`, with the species' bonus per
+    /// level.
     fn maximum_hit_points(&self, level: u8, species: HeroSpecies) -> u32 {
         crate::local_journey::maximum_hit_points(
             level,
@@ -352,11 +352,7 @@ impl CombatantSpec {
                         .ok_or(RuleError::InvalidBuild)?
                         .proficiency_bonus(),
                 )
-                + if ranged && weapon.ranged_weapon() && self.archery {
-                    2
-                } else {
-                    0
-                },
+                + crate::roll::archery_bonus(self.archery, ranged && weapon.ranged_weapon()),
             damage,
         ))
     }

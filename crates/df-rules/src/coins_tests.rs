@@ -1,6 +1,6 @@
 use crate::coins::{CoinError, Coins, Price, smallest_tender};
 use crate::local_journey::{SRD_521_BASELINE, selling_value_cp};
-use crate::srd_equipment_prices::{SRD_521_EQUIPMENT_PRICES, price_cp};
+use crate::srd_equipment_prices::{SRD_521_EQUIPMENT, price_cp};
 
 const VALUES: [u64; 5] = [1, 10, 50, 100, 1000];
 
@@ -110,6 +110,23 @@ fn from_copper_splits_into_the_fewest_coins() {
     assert_eq!(Coins::from_copper(60), purse(0, 1, 1, 0, 0));
     assert_eq!(Coins::from_copper(1999), purse(9, 4, 1, 9, 1));
     assert_eq!(Coins::from_copper(3750), purse(0, 0, 1, 7, 3));
+}
+
+#[test]
+fn a_price_is_quoted_exactly_in_the_largest_table_coin_that_makes_it_whole() {
+    use crate::coins::Denomination::{Cp, Gp, Sp};
+    let quoted = |copper| Price::from_copper(copper).quoted();
+    assert_eq!(quoted(3), (3, Cp), "an apple stays three copper");
+    assert_eq!(quoted(20), (2, Sp));
+    assert_eq!(quoted(150), (15, Sp));
+    assert_eq!(quoted(500), (5, Gp));
+    assert_eq!(quoted(105), (105, Cp));
+    assert_eq!(quoted(0), (0, Cp));
+    // Never rounded: the quote is worth the price exactly.
+    for copper in [1, 7, 10, 99, 100, 101, 1250, 150_000] {
+        let (amount, coin) = quoted(copper);
+        assert_eq!(amount * coin.copper(), copper);
+    }
 }
 
 #[test]
@@ -401,7 +418,7 @@ fn price_lookup_returns_none_for_unknown_and_unpriced_ids() {
         "",
         "dragon-hoard",
         "Chain-Mail",
-        "longsword",
+        "silvered-longsword",
         "gaming-set",
         "gold-piece",
     ] {
@@ -419,9 +436,9 @@ fn every_baseline_item_is_priced_except_the_two_without_a_single_srd_price() {
 
 #[test]
 fn the_price_table_has_no_duplicate_ids() {
-    for (index, entry) in SRD_521_EQUIPMENT_PRICES.iter().enumerate() {
+    for (index, entry) in SRD_521_EQUIPMENT.iter().enumerate() {
         assert!(
-            SRD_521_EQUIPMENT_PRICES[index + 1..]
+            SRD_521_EQUIPMENT[index + 1..]
                 .iter()
                 .all(|other| other.id != entry.id),
             "{}",
@@ -441,8 +458,10 @@ fn twenty_arrows_cost_one_gold_piece() {
 
 #[test]
 fn sale_value_is_consistent_with_selling_value_cp_for_every_priced_item() {
-    for entry in SRD_521_EQUIPMENT_PRICES {
-        let cost = entry.price.copper();
+    for entry in SRD_521_EQUIPMENT {
+        let Some(cost) = entry.cost.map(Price::copper) else {
+            continue;
+        };
         let cost_cp = u32::try_from(cost).expect("SRD prices fit in u32");
         assert_eq!(
             u64::from(selling_value_cp(cost_cp, false)),
@@ -513,4 +532,42 @@ fn coin_errors_read_in_plain_language() {
     );
     let big = CoinError::Overflow.to_string();
     assert!(big.contains("more than a purse can hold"), "{big}");
+}
+
+#[test]
+fn an_item_coin_is_worth_one_of_its_denomination() {
+    use crate::coins::Denomination;
+    let values: Vec<u64> = Denomination::ALL
+        .into_iter()
+        .map(Denomination::copper)
+        .collect();
+    assert_eq!(values, [1, 10, 50, 100, 1000]);
+    assert_eq!(Denomination::Sp.key(), "sp");
+}
+
+// Paying and exact change (the shop's till).
+
+#[test]
+fn paying_a_silver_price_with_gold_hands_one_gold_piece_and_owes_change() {
+    let payment = purse(0, 0, 0, 3, 0).pay(price(50)).expect("affordable");
+    assert_eq!(payment.handed, purse(0, 0, 0, 1, 0));
+    assert_eq!(payment.change_cp, 50);
+    let exact = purse(0, 5, 0, 3, 0).pay(price(50)).expect("affordable");
+    assert_eq!((exact.handed, exact.change_cp), (purse(0, 5, 0, 0, 0), 0));
+    assert_eq!(
+        purse(0, 2, 0, 0, 0).pay(price(50)),
+        Err(CoinError::Insufficient {
+            cost_cp: 50,
+            purse_cp: 20
+        })
+    );
+}
+
+#[test]
+fn exact_makes_an_amount_from_the_coins_held_or_answers_none() {
+    let till = purse(5, 9, 0, 4, 0);
+    assert_eq!(till.exact(price(95)), Ok(Some(purse(5, 9, 0, 0, 0))));
+    assert_eq!(till.exact(price(150)), Ok(Some(purse(0, 5, 0, 1, 0))));
+    assert_eq!(purse(0, 0, 0, 5, 0).exact(price(50)), Ok(None));
+    assert_eq!(till.exact(price(0)), Ok(Some(Coins::default())));
 }

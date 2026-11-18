@@ -57,7 +57,7 @@ impl ConversationOutcome {
 }
 
 /// The newest effect schema this engine writes and reads. Raised when an effect is added.
-pub(crate) const TABLE_EFFECT_SCHEMA_VERSION: u32 = 1;
+pub(crate) const TABLE_EFFECT_SCHEMA_VERSION: u32 = 2;
 
 listed_enum! {
     /// Every effect without its payload: the list tests walk and events name.
@@ -83,6 +83,7 @@ listed_enum! {
         ActiveSlotUpdated,
         HandOffPushed,
         HandOffPopped,
+        ActiveMachineCleared,
     }
 }
 
@@ -108,6 +109,7 @@ impl TableEffectKind {
             Self::ActiveSlotUpdated => "active_slot_updated",
             Self::HandOffPushed => "hand_off_pushed",
             Self::HandOffPopped => "hand_off_popped",
+            Self::ActiveMachineCleared => "active_machine_cleared",
         }
     }
 
@@ -133,6 +135,7 @@ impl TableEffectKind {
             | Self::ActiveSlotUpdated
             | Self::HandOffPushed
             | Self::HandOffPopped => 1,
+            Self::ActiveMachineCleared => 2,
         }
     }
 }
@@ -223,6 +226,11 @@ pub enum TableEffect {
     HandOffPopped {
         scene: SceneId,
     },
+    /// The active machine of `scene` stopped, with its hand-off stack: the table's own machine
+    /// has the focus again (a day that ended goes back to the lobby).
+    ActiveMachineCleared {
+        scene: SceneId,
+    },
 }
 
 impl TableEffect {
@@ -247,6 +255,7 @@ impl TableEffect {
             Self::ActiveSlotUpdated { .. } => TableEffectKind::ActiveSlotUpdated,
             Self::HandOffPushed { .. } => TableEffectKind::HandOffPushed,
             Self::HandOffPopped { .. } => TableEffectKind::HandOffPopped,
+            Self::ActiveMachineCleared { .. } => TableEffectKind::ActiveMachineCleared,
         }
     }
 }

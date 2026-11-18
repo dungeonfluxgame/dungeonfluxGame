@@ -493,8 +493,13 @@ fn a_dice_request_refuses_the_test_role_a_critical_on_healing_and_unreasonable_s
         }),
         Err(RollError::CriticalNeedsDamage)
     );
+    // Damage may be a flat amount on no dice (an Unarmed Strike); no other roll may.
+    assert_eq!(plan(damage(0, DieSize::D8, false)), Ok(Vec::new()));
     assert_eq!(
-        plan(damage(0, DieSize::D8, false)),
+        plan(DiceRequest {
+            role: DieRole::Healing,
+            ..damage(0, DieSize::D8, false)
+        }),
         Err(RollError::InvalidDiceCount)
     );
     assert_eq!(
@@ -585,4 +590,145 @@ fn every_kind_of_request_round_trips_through_json() {
     }));
     assert_round_trip(RollRequest::Dice(damage(2, DieSize::D100, true)));
     assert_round_trip(RollRequest::D20(check(attack(19), armor_class(14))));
+}
+
+fn ranged_attack() -> D20Request {
+    check(
+        D20Test::Attack {
+            ability: Ability::Dexterity,
+            kind: AttackKind::Ranged,
+            critical_from: 20,
+        },
+        armor_class(15),
+    )
+}
+
+#[test]
+fn archery_adds_two_to_a_ranged_attack_roll_and_can_turn_a_miss_to_a_hit() {
+    let request = RollRequest::D20(ranged_attack());
+    let plain = request.resolve(&[10]).expect("resolves");
+    let styled = request
+        .resolve_styled(
+            &[10],
+            RollStyle {
+                archery: true,
+                great_weapon_fighting: false,
+            },
+        )
+        .expect("resolves");
+    // 10 + Dexterity 3 + Proficiency 2 = 15 hits AC 15 either way; at 8 only Archery hits.
+    assert_eq!((plain.total, styled.total), (15, 17));
+    assert!(
+        styled
+            .modifiers
+            .iter()
+            .any(|modifier| modifier.label == ModifierLabel::Flat
+                && modifier.value == ARCHERY_ATTACK_BONUS)
+    );
+    let low = request.resolve(&[8]).expect("resolves");
+    let low_styled = request
+        .resolve_styled(&[8], RollStyle::of(Some(AttackStyle::Archery)))
+        .expect("resolves");
+    assert_eq!(low.outcome, RollOutcome::Miss);
+    assert_eq!(low_styled.outcome, RollOutcome::Hit);
+}
+
+#[test]
+fn archery_is_refused_on_a_melee_attack_or_a_check_and_draws_no_die() {
+    let melee = RollRequest::D20(check(
+        D20Test::Attack {
+            ability: Ability::Strength,
+            kind: AttackKind::Melee,
+            critical_from: 20,
+        },
+        armor_class(15),
+    ));
+    let archery = RollStyle::of(Some(AttackStyle::Archery));
+    assert_eq!(
+        melee.resolve_styled(&[10], archery),
+        Err(RollError::StyleMismatch)
+    );
+    let skill = RollRequest::D20(check(D20Test::SkillCheck(Skill::Athletics), dc(10)));
+    assert_eq!(
+        skill.resolve_styled(&[10], archery),
+        Err(RollError::StyleMismatch)
+    );
+    assert_eq!(
+        RollRequest::D20(ranged_attack()).draw_plan(),
+        Ok(vec![DieSize::D20])
+    );
+}
+
+#[test]
+fn great_weapon_fighting_counts_a_one_or_two_on_damage_dice_as_three() {
+    let greatsword = RollRequest::Dice(DiceRequest::damage(
+        DiceExpression {
+            count: 2,
+            die: DieSize::D6,
+            modifier: 3,
+        },
+        Ability::Strength,
+        false,
+    ));
+    let plain = greatsword.resolve(&[1, 2]).expect("resolves");
+    assert_eq!(plain.total, 6);
+    let styled = greatsword
+        .resolve_styled(
+            &[1, 2],
+            RollStyle::of(Some(AttackStyle::GreatWeaponFighting)),
+        )
+        .expect("resolves");
+    // 3 + 3 + 3: the review's Bran rolled 1 and 2 on his Greatsword.
+    assert_eq!(styled.total, 9);
+    assert_eq!(
+        styled.dice.iter().map(|die| die.face).collect::<Vec<_>>(),
+        [3, 3]
+    );
+    let high = greatsword
+        .resolve_styled(
+            &[5, 6],
+            RollStyle::of(Some(AttackStyle::GreatWeaponFighting)),
+        )
+        .expect("resolves");
+    assert_eq!(high.total, 14);
+    let critical = RollRequest::Dice(DiceRequest::damage(
+        DiceExpression {
+            count: 2,
+            die: DieSize::D6,
+            modifier: 3,
+        },
+        Ability::Strength,
+        true,
+    ));
+    let doubled = critical
+        .resolve_styled(
+            &[1, 1, 2, 6],
+            RollStyle::of(Some(AttackStyle::GreatWeaponFighting)),
+        )
+        .expect("resolves");
+    assert_eq!(doubled.total, 3 + 3 + 3 + 6 + 3);
+}
+
+#[test]
+fn great_weapon_fighting_is_refused_on_healing_dice_or_a_d20() {
+    let gwf = RollStyle::of(Some(AttackStyle::GreatWeaponFighting));
+    let healing = RollRequest::Dice(DiceRequest {
+        role: DieRole::Healing,
+        expression: DiceExpression {
+            count: 1,
+            die: DieSize::D10,
+            modifier: 1,
+        },
+        modifier_label: ModifierLabel::ClassLevel,
+        critical: false,
+        heroic_inspiration: None,
+    });
+    assert_eq!(
+        healing.resolve_styled(&[1], gwf),
+        Err(RollError::StyleMismatch)
+    );
+    assert_eq!(
+        RollRequest::D20(ranged_attack()).resolve_styled(&[10], gwf),
+        Err(RollError::StyleMismatch)
+    );
 }

@@ -45,6 +45,36 @@ impl fmt::Display for CoinError {
 
 impl std::error::Error for CoinError {}
 
+/// One of the five coins of the purse (SRD p.89): what an item that is money is worth one of.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Denomination {
+    Cp,
+    Sp,
+    Ep,
+    Gp,
+    Pp,
+}
+
+impl Denomination {
+    pub const ALL: [Self; 5] = [Self::Cp, Self::Sp, Self::Ep, Self::Gp, Self::Pp];
+
+    /// The copper value of one coin of this denomination.
+    pub const fn copper(self) -> u64 {
+        COPPER_VALUES[self as usize]
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Cp => "cp",
+            Self::Sp => "sp",
+            Self::Ep => "ep",
+            Self::Gp => "gp",
+            Self::Pp => "pp",
+        }
+    }
+}
+
 /// A price in copper pieces (cp). SRD p.89: 100 cp is 1 gp.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct Price {
@@ -60,6 +90,18 @@ impl Price {
     /// The price in copper pieces.
     pub const fn copper(self) -> u64 {
         self.copper
+    }
+
+    /// The price as the SRD's equipment tables write one (SRD 5.2.1 p.89 coin values; the tables
+    /// quote in gp, sp and cp): its exact value as a count of the largest of gold, silver and
+    /// copper that makes it whole. 3 cp is 3 cp, 20 cp is 2 sp, 150 cp is 15 sp, 500 cp is 5 gp;
+    /// nothing is rounded.
+    pub fn quoted(self) -> (u64, Denomination) {
+        let coin = [Denomination::Gp, Denomination::Sp]
+            .into_iter()
+            .find(|coin| self.copper >= coin.copper() && self.copper.is_multiple_of(coin.copper()))
+            .unwrap_or(Denomination::Cp);
+        (self.copper / coin.copper(), coin)
     }
 }
 
@@ -185,6 +227,24 @@ impl Coins {
     ///
     /// The copper left is always the copper held minus the cost, with nothing lost or invented.
     pub fn subtract(self, cost: Price) -> Result<Coins, CoinError> {
+        let payment = self.pay(cost)?;
+        let stock = self.stock();
+        let handed = payment.handed.stock();
+        let change = Coins::from_copper(payment.change_cp).stock();
+        let mut left = [0_u64; 5];
+        for (index, slot) in left.iter_mut().enumerate() {
+            let kept = stock[index]
+                .checked_sub(handed[index])
+                .ok_or(CoinError::Overflow)?;
+            *slot = kept.checked_add(change[index]).ok_or(CoinError::Overflow)?;
+        }
+        Self::from_stock(left)
+    }
+
+    /// Step 1 of the change rule of [`Coins::subtract`]: the coins this purse hands over for
+    /// `cost` (the smallest amount at or above it, in the fewest coins) and the copper owed back.
+    /// Fails with `Insufficient` or `Overflow`; the purse is not changed.
+    pub fn pay(self, cost: Price) -> Result<Payment, CoinError> {
         let owed_cp = cost.copper;
         let purse_cp = self.total_copper().ok_or(CoinError::Overflow)?;
         let insufficient = CoinError::Insufficient {
@@ -194,21 +254,46 @@ impl Coins {
         if owed_cp > purse_cp {
             return Err(insufficient);
         }
-        let stock = self.stock();
-        let tender = smallest_tender(&stock, COPPER_VALUES.len(), owed_cp)?.ok_or(insufficient)?;
+        let tender =
+            smallest_tender(&self.stock(), COPPER_VALUES.len(), owed_cp)?.ok_or(insufficient)?;
         let change_cp = tender
             .paid_cp
             .checked_sub(owed_cp)
             .ok_or(CoinError::Overflow)?;
-        let change = Coins::from_copper(change_cp).stock();
-        let mut left = [0_u64; 5];
-        for (index, slot) in left.iter_mut().enumerate() {
-            let kept = stock[index]
-                .checked_sub(tender.handed[index])
-                .ok_or(insufficient)?;
-            *slot = kept.checked_add(change[index]).ok_or(CoinError::Overflow)?;
+        Ok(Payment {
+            handed: Self::from_stock(tender.handed)?,
+            change_cp,
+        })
+    }
+
+    /// The coins of this purse that make exactly `amount`, in the fewest coins, or `None` when its
+    /// coins cannot make that amount (a shop's till giving change). The purse is not changed.
+    pub fn exact(self, amount: Price) -> Result<Option<Coins>, CoinError> {
+        match smallest_tender(&self.stock(), COPPER_VALUES.len(), amount.copper)? {
+            Some(tender) if tender.paid_cp == amount.copper => {
+                Self::from_stock(tender.handed).map(Some)
+            }
+            _ => Ok(None),
         }
-        Self::from_stock(left)
+    }
+
+    /// The count of `denomination` held.
+    pub const fn count(self, denomination: Denomination) -> u64 {
+        match denomination {
+            Denomination::Cp => self.cp,
+            Denomination::Sp => self.sp,
+            Denomination::Ep => self.ep,
+            Denomination::Gp => self.gp,
+            Denomination::Pp => self.pp,
+        }
+    }
+
+    /// The purse with `count` more of `denomination`. Fails with `Overflow`.
+    pub fn with_added(self, denomination: Denomination, count: u64) -> Result<Coins, CoinError> {
+        let mut stock = self.stock();
+        let slot = &mut stock[denomination as usize];
+        *slot = slot.checked_add(count).ok_or(CoinError::Overflow)?;
+        Self::from_stock(stock)
     }
 
     /// The counts in purse order: cp, sp, ep, gp, pp.
@@ -223,6 +308,14 @@ impl Coins {
         coins.total_copper().ok_or(CoinError::Overflow)?;
         Ok(coins)
     }
+}
+
+/// What paying a price comes to ([`Coins::pay`]): the coins handed over, and the copper the payee
+/// owes back as change (zero when the purse paid exactly).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Payment {
+    pub handed: Coins,
+    pub change_cp: u64,
 }
 
 /// The copper total of counts in purse order, or `None` if any part or the sum leaves u64.

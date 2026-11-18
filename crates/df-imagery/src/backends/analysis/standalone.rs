@@ -12,7 +12,7 @@ pub(crate) use chat::{
     PreparedStandaloneChat, StandaloneChatInput, interpret_chat, prepare_local_analysis,
 };
 pub(crate) use segmentation::{
-    PreparedSegmentation, SegmentationCheckpoint, SegmentationInput, parse_segmentation,
+    PreparedSegmentation, SegmentationCheckpoint, SegmentationInput, is_noun, parse_segmentation,
 };
 
 pub(crate) use photo::{

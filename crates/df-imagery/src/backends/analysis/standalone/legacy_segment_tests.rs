@@ -29,6 +29,7 @@ fn prepare(
             source: &source,
             source_pin: &pin,
             prompt: SegmentationPrompt::Person,
+            noun: None,
             preparation_recipe: SegmentationPreparation::ScenePlate,
             maximum_masks,
             route: &route,

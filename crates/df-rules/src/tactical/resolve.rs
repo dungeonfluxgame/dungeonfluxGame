@@ -1277,11 +1277,7 @@ fn modifiers(
     } else if usage.weapon == Weapon::UnarmedStrike {
         damage_modifier
             + 2
-            + if usage.weapon.ranged_weapon() && actor.spec.archery {
-                2
-            } else {
-                0
-            }
+            + crate::roll::archery_bonus(actor.spec.archery, usage.weapon.ranged_weapon())
     } else {
         match actor.spec.kind {
             CreatureKind::Goblin

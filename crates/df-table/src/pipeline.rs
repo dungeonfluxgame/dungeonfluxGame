@@ -405,6 +405,17 @@ impl<'a> Pipeline<'a> {
         )
     }
 
+    /// Rebuilds every seat's offers from the table as it stands, as a turn does after it runs: an
+    /// operator's change made outside a turn (a forced machine) leaves the buttons following it.
+    pub fn refresh_offers(&self, table: &mut PipelineTable) -> Result<(), PipelineLoadError> {
+        let snapshot = table.facts().snapshot();
+        offers::sync_offers(table, &snapshot, self.machine_surface.then_some(self.registry))
+            .map_err(|error| match error {
+                offers::OffersError::Attachments(error) => PipelineLoadError::Offers(error),
+                offers::OffersError::Machine(error) => PipelineLoadError::Surface(error),
+            })
+    }
+
     /// The names of the answers the pipeline offers (confirm, cancel, roll, and the ruling taps).
     pub fn choices(&self) -> &Choices {
         &self.choices

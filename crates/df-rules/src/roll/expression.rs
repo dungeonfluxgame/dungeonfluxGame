@@ -50,7 +50,14 @@ fn validate(request: &DiceRequest) -> Result<(), RollError> {
         return Err(RollError::CriticalNeedsDamage);
     }
     let expression = request.expression;
-    if !(1..=MAXIMUM_DICE_PER_EXPRESSION).contains(&expression.count) {
+    // Damage may be a flat amount on no dice, as an Unarmed Strike's is (1 + the Strength
+    // modifier, SRD 5.2.1 page 15); every other roll has at least one die.
+    let fewest = if request.role == DieRole::Damage {
+        0
+    } else {
+        1
+    };
+    if !(fewest..=MAXIMUM_DICE_PER_EXPRESSION).contains(&expression.count) {
         return Err(RollError::InvalidDiceCount);
     }
     if !(-MAXIMUM_FLAT_MODIFIER..=MAXIMUM_FLAT_MODIFIER).contains(&expression.modifier) {
@@ -113,8 +120,12 @@ fn sum_of(die: DieSize, dice: &[RolledDie]) -> i16 {
 pub(super) fn resolve_dice(
     request: &DiceRequest,
     faces: &mut Faces<'_>,
+    great_weapon_fighting: bool,
 ) -> Result<RollResult, RollError> {
     validate(request)?;
+    if great_weapon_fighting && request.role != DieRole::Damage {
+        return Err(RollError::StyleMismatch);
+    }
     let slots = expression_dice(request);
     let mut dice = Vec::with_capacity(slots.len());
     for (size, place) in &slots {
@@ -132,6 +143,11 @@ pub(super) fn resolve_dice(
             ..*replaced
         });
         replaced.face = replacement;
+    }
+    if great_weapon_fighting {
+        for die in &mut dice {
+            die.face = super::style::great_weapon_face(die.face);
+        }
     }
     let modifier = request.expression.modifier;
     let modifiers = if modifier == 0 {

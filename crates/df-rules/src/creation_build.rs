@@ -15,7 +15,7 @@ use crate::local_journey::{
     MAXIMUM_CHARACTER_NAME_CHARACTERS, SOLDIER_SKILLS, STANDARD_LANGUAGES, STYLE_OFFER, TIES_OFFER,
     valid_character_name, validate_character,
 };
-use crate::species::{SpeciesChoiceGroup, choice_groups, is_choice_group};
+use crate::species::{SOLDIER_FEAT, SpeciesChoiceGroup, choice_groups, is_choice_group};
 use serde::{Deserialize, Serialize};
 
 /// The fixed single-option picks, as (choice key, the one value, plain noun, SRD citation).
@@ -271,12 +271,14 @@ impl Group {
     }
 }
 
-/// A species choice group as a listing group. Soldier-granted skills are not offered again.
+/// A species choice group as a listing group. Soldier-granted skills and the Soldier's
+/// non-repeatable feat are not offered again.
 fn species_group(group: &SpeciesChoiceGroup) -> OptionGroup {
     let options = group
         .options
         .iter()
         .filter(|&&option| !(group.id == "human-skill" && SOLDIER_SKILLS.contains(&option)))
+        .filter(|&&option| !(group.id == "versatile" && option == SOLDIER_FEAT))
         .map(|&option| CreationOption {
             id: option.to_owned(),
             label: option_label(option),
@@ -291,7 +293,7 @@ fn species_group(group: &SpeciesChoiceGroup) -> OptionGroup {
 }
 
 /// The plain label for an option id: its override, else its hyphen-separated words capitalised.
-fn option_label(id: &str) -> String {
+pub(crate) fn option_label(id: &str) -> String {
     if let Some((_, label)) = LABEL_OVERRIDES.iter().find(|(key, _)| *key == id) {
         return (*label).to_owned();
     }
@@ -497,6 +499,19 @@ fn species_groups(collector: &mut Collector<'_>, species: HeroSpecies) {
                 format!("\"{key}\" does not belong to the chosen species."),
             );
         }
+    }
+    if let Some(feat) = collector
+        .value("versatile")
+        .filter(|feat| *feat == SOLDIER_FEAT)
+    {
+        collector.push(
+            JourneyRuleError::InvalidChoice,
+            Some("versatile"),
+            Some(feat),
+            "Savage Attacker is already granted by the Soldier background and is not repeatable \
+                (SRD pp. 83, 87)."
+                .to_owned(),
+        );
     }
     let skill = collector
         .value("human-skill")

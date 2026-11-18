@@ -3375,9 +3375,9 @@ fn srd_521_all_nine_species_reach_tactical_validation_and_keep_their_derived_pro
             vec![
                 ("species-size", "small"),
                 ("human-skill", "arcana"),
-                ("versatile", "tough"),
+                ("versatile", "alert"),
             ],
-            14,
+            12,
             30,
             Size::Small,
         ),
@@ -3412,22 +3412,22 @@ fn srd_521_all_nine_species_reach_tactical_validation_and_keep_their_derived_pro
     }
 }
 #[test]
-fn a_level_five_tough_human_matches_the_shared_maximum_hit_points() {
+fn a_level_five_human_matches_the_shared_maximum_hit_points() {
     let human = species_hero(
         1,
         "human",
         &[
             ("species-size", "small"),
             ("human-skill", "arcana"),
-            ("versatile", "tough"),
+            ("versatile", "alert"),
         ],
         Cell(1, 1),
     );
     let leveled = human.at_fighter_level(5).unwrap();
-    // SRD 5.2.1 p. 87: Tough adds 2 per level on top of the Fighter's d10 and fixed 6.
+    // SRD 5.2.1 p. 47: the Fighter's d10 and fixed 6; a Human has no per-level bonus.
     assert_eq!(
         u32::from(leveled.hit_points),
-        crate::local_journey::maximum_hit_points(5, 10, leveled.abilities[2], 2)
+        crate::local_journey::maximum_hit_points(5, 10, leveled.abilities[2], 0)
     );
     assert_eq!(leveled.fighter_level().map(|level| level.level()), Some(5));
 }
@@ -3793,7 +3793,7 @@ fn srd_521_dodge_retains_dexterity_save_advantage_when_breath_source_is_unseen()
                 &[
                     ("species-size", "medium"),
                     ("human-skill", "arcana"),
-                    ("versatile", "tough"),
+                    ("versatile", "alert"),
                 ],
                 Cell(2, 1),
             ),

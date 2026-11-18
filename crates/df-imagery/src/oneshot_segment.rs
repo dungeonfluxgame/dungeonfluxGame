@@ -91,6 +91,10 @@ pub struct SegmentRequest {
     pub source: Vec<u8>,
     /// The one noun the supplier looks for.
     pub prompt: SegmentationPrompt,
+    /// Words to look for in place of the prompt's own word (a thing a player named, up to 64
+    /// characters), when given: fal's SAM takes any noun phrase. Forge's segmentation takes only
+    /// the prompt's word, so it refuses them.
+    pub noun: Option<String>,
     /// 1 to `MAXIMUM_MASKS`.
     pub maximum_masks: u32,
 }
@@ -318,6 +322,7 @@ fn prepare(
             source: &request.source,
             source_pin: &pin,
             prompt: request.prompt,
+            noun: request.noun.as_deref(),
             preparation_recipe: SegmentationPreparation::ScenePlate,
             maximum_masks: request.maximum_masks,
             route,
@@ -334,6 +339,12 @@ fn prepare(
         RuntimeError::UnsupportedCapability => SegmentError::unsent(SegmentCause::Configuration),
         other => SegmentError::from_runtime(&other, SendState::Unsent),
     })
+}
+
+/// Whether `noun` can be looked for in place of a prompt's own word ([`SegmentRequest::noun`]):
+/// some words, at most 64 characters, no control characters.
+pub fn is_noun(noun: &str) -> bool {
+    crate::backends::analysis::standalone::is_noun(noun)
 }
 
 /// The SHA-256 of a picture's bytes as lowercase hex: the identity a layout is bound to.
@@ -522,6 +533,7 @@ mod tests {
         SegmentRequest {
             source,
             prompt: SegmentationPrompt::Person,
+            noun: None,
             maximum_masks,
         }
     }

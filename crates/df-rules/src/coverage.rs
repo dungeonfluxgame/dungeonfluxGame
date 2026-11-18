@@ -379,8 +379,9 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "Soldier with Savage Attacker (once per turn); Human Versatile offers implemented \
-            Tough (+2 HP per level). No other background or Origin feat is admitted.",
+        note: "Soldier with Savage Attacker (once per turn); Human Versatile offers the four SRD \
+            Origin feats (Alert, Magic Initiate, Savage Attacker, Skilled). The hero build \
+            (`hero`) offers the four SRD backgrounds and marks what is not in play yet.",
         evidence: &[(STATE, "savage_attacker"), (AUDIT, "F-SAVAGE-ATTACKER")],
         browser_scripts: &["play-t03-create.mjs"],
     },
@@ -394,7 +395,7 @@ pub const ROWS: &[Row] = &[
         display: Partial,
         note: "Nine SRD species Fighter/Soldier builds with source choices, size/speed/Darkvision \
             (Drow 120, Wood Elf 35), ancestry/legacy resistances, Dwarven Toughness, Halfling \
-            Luck/Nimbleness, Human Skillful/Tough, Dragonborn Breath Weapon, Goliath \
+            Luck/Nimbleness, Human Skillful/Versatile, Dragonborn Breath Weapon, Goliath \
             Fire/Frost/Hill/Stone/Storm and Orc endurance rules. Live offers/actions/durable \
             species uses require boundary integration. Not in play yet: lineage/legacy spells, \
             Thaumaturgy, condition-save advantages, Heroic Inspiration, Trance, Stonecunning, \

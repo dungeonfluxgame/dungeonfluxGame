@@ -5,7 +5,7 @@ fn srd_p47_p84_p87_maximum_hit_points_by_level_constitution_and_species_bonus() 
     assert_eq!(maximum_hit_points(1, 10, 14, 1), 13);
     // Level 5 adds the fixed 6 per further level and the per-level terms five times.
     assert_eq!(maximum_hit_points(5, 10, 14, 1), 10 + 24 + 3 * 5);
-    // Human Tough adds 2 per level; a CON 20 hero is bounded by CON 20, not by the Dwarf row.
+    // A bonus of 2 adds 2 per level; a CON 20 hero is bounded by CON 20, not by the Dwarf row.
     assert_eq!(maximum_hit_points(1, 10, 20, 2), 17);
     assert_eq!(maximum_hit_points(1, 10, 20, 0), 15);
     // The progression and the creation rules agree with the one function.
