@@ -14,6 +14,23 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-11-17T18:30:04-05:00 to 2026-11-18T00:30:04-05:00
+
+Range: ef6f88cbe159e152e789c05dd8439d167be91410..0076ed6a
+
+- 9729fc03 - build: fast dev compiles (rust-lld, line-table debug info, no job cap) and the affected-tests helper
+- 569f631f - rules and creation: hero building, spells not in play, SRD prices and coins, unarmed strikes, creation in df-table, imagery noun search
+- 49db7d72 - explore free roam: Jev intents for every phone line, approach and running, doors and going inside, poses, honest deals with change, people from the painting, a cleanup pass
+- 0076ed6a - phone client: taps queued across link drops, typed text kept on redraw, stale roll line cleared, hero build pages and looks
+
+## 2026-11-15T18:44:02-05:00 to 2026-11-16T00:44:02-05:00
+
+Range: a1c1a372ed8561a79f9b3111edec81c7b38371a6..ef6f88cbe159e152e789c05dd8439d167be91410 (the bookkeeping commit 2fb1ce1a is carried here)
+
+- 2fb1ce1a - CHANGELOG: record the final gauntlet commits
+- 20598324 - phone: player listener, seats and joining, and the phone kit in the concept-art style
+- ef6f88cb - phone: clickable demo with working tabs, and tab switching on the live phone
+
 ## 2026-11-10T15:52:29-05:00 to 2026-11-10T21:30:00-05:00
 
 Range: 6daa741190cb62251fd541a566633536647165ac..a1c1a372ed8561a79f9b3111edec81c7b38371a6 (the bookkeeping commit b7558d1e is carried here)
